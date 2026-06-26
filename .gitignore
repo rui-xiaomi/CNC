@@ -1,0 +1,19 @@
+## .NET / VS
+bin/
+obj/
+.vs/
+*.user
+*.suo
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+
+## Logs / secrets
+logs/
+*.log
+appsettings.*.local.json
+secrets.local.json
+
+## OS
+Thumbs.db
+.DS_Store

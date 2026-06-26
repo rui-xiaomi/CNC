@@ -1,0 +1,566 @@
+-- =============================================================
+-- CNC 自动化上下料客户端 — 数据库建库与初始化脚本 (MySQL 8.x)
+-- 依据：docs/客户端开发文档.md、docs/测试机信号表.md
+-- 约束：客户端仅经 IP/TCP 与 PLC 通信；机台双加工位；料架可一架两用 + 电极槽位追踪
+-- 字符集 utf8mb4，存储引擎 InnoDB
+-- 执行：mysql -u<user> -p < cnc_schema.sql
+-- =============================================================
+
+CREATE DATABASE IF NOT EXISTS cnc_auto
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_general_ci;
+USE cnc_auto;
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- 按依赖逆序清理，便于重复执行
+DROP TABLE IF EXISTS MAS_AUTO_ALARM_EVENT;
+DROP TABLE IF EXISTS MAS_AUTO_DEVICE_LOG;
+DROP TABLE IF EXISTS MAS_AUTO_WORK_RECORD;
+DROP TABLE IF EXISTS MAS_AUTO_AGV_TASK;
+DROP TABLE IF EXISTS MAS_AUTO_PLC_POINT;
+DROP TABLE IF EXISTS MAS_AUTO_FRAME_SLOT;
+DROP TABLE IF EXISTS MAS_AUTO_FRAME_BIND;
+DROP TABLE IF EXISTS MAS_AUTO_FRAME;
+DROP TABLE IF EXISTS MAS_AUTO_EQUIMENT_WORKDATA;
+DROP TABLE IF EXISTS MAS_AUTO_EQUIMENT_REPORT;
+DROP TABLE IF EXISTS MAS_AUTO_EQUIMENT_CONDITION;
+DROP TABLE IF EXISTS MAS_AUTO_EQUIMENT_POSITION;
+DROP TABLE IF EXISTS MAS_AUTO_WORKLINE_EQUIMENT;
+DROP TABLE IF EXISTS MAS_AUTO_WORKLINE_CRAFTWORK;
+DROP TABLE IF EXISTS MAS_AUTO_WORKLINE_AGV;
+DROP TABLE IF EXISTS MAS_AUTO_WORKLINE_PLC;
+DROP TABLE IF EXISTS MAS_AUTO_WORKLINECONFIGS;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- =============================================================
+-- 一、配置类
+-- =============================================================
+
+-- 1. 线体主表
+CREATE TABLE MAS_AUTO_WORKLINECONFIGS (
+  ID1                   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  WORKMACHINE_LINE      VARCHAR(50)  NOT NULL COMMENT '自动线名称',
+  WORKLINE_CODE         VARCHAR(15)  NOT NULL COMMENT '线体编码（唯一）',
+  WORKLINE_COMPUTER     VARCHAR(20)  NULL COMMENT '线体所在电脑名称',
+  WORKLINE_COMPUTER_IP  VARCHAR(20)  NULL COMMENT '线体电脑IP',
+  WORKLINE_COMPUTER_PORT INT         NULL COMMENT '线体电脑端口',
+  PLAN_WORKNUM          BIGINT       NULL COMMENT '计划加工总数',
+  SCAN_STATE            CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否配置扫码枪 1=有 0=无',
+  PLC_ID                BIGINT       NOT NULL DEFAULT 0 COMMENT '关联PLC配置组 0=无',
+  AGV_ID                BIGINT       NOT NULL DEFAULT 0 COMMENT '关联AGV配置 0=无',
+  MATERIALCODE          VARCHAR(30)  NULL COMMENT '加工物料编码',
+  PRODUCTID             BIGINT       NULL COMMENT '产品信息ID',
+  STATE                 CHAR(1)      NOT NULL DEFAULT '0' COMMENT '0=启用 1=禁用',
+  AUTHOR                VARCHAR(15)  NULL COMMENT '创建人',
+  UPDATETIME            DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_workline_code (WORKLINE_CODE)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='线体主表';
+
+-- 2. 线体PLC配置（核心：客户端经此连接 PLC）
+-- 每台机台对应一台独立 PLC（一机一 PLC，IP 各不相同）。一行 = 一台 PLC。
+CREATE TABLE MAS_AUTO_WORKLINE_PLC (
+  ID1                    BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  PLC_ID                 BIGINT       NOT NULL COMMENT 'PLC 业务编号（机台/点位以此关联，唯一）',
+  PLC_NAME               VARCHAR(50)  NULL COMMENT 'PLC 名称，如 内长宽PLC',
+  PLC_CONNECT_TYPE       VARCHAR(50)  NOT NULL DEFAULT '客户端' COMMENT '连接类型 客户端/服务端',
+  PLC_COMPUTER_IP        VARCHAR(20)  NOT NULL COMMENT 'PLC设备IP（每台不同）',
+  PLC_COMPUTER_PORT      INT          NULL DEFAULT 502 COMMENT 'PLC设备端口（Modbus TCP 默认502）',
+  PLC_READ_WAY           VARCHAR(20)  NULL DEFAULT 'ModbusTCP' COMMENT '通信方式 ModbusTCP/OPC',
+  PLC_ORIGINATION_VALUE  VARCHAR(20)  NULL COMMENT '数据起始地址',
+  PLC_ORIGINATION_LENGTH BIGINT       NULL COMMENT '取值数据长度',
+  PLC_FUNCTION           BIGINT       NULL COMMENT '功能说明',
+  STATE                  CHAR(1)      NOT NULL DEFAULT '0' COMMENT '0=启用 1=禁用',
+  AUTHOR                 VARCHAR(15)  NULL,
+  UPDATETIME             DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_plc_id (PLC_ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='PLC配置（一机一PLC，IP各异）';
+
+-- 3. 线体AGV配置（仅连通性测试使用，口令加密存储）
+CREATE TABLE MAS_AUTO_WORKLINE_AGV (
+  ID1                   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  AGV_ID                BIGINT       NOT NULL DEFAULT 0 COMMENT '关联线体表 AGV_ID',
+  AGV_NAME              VARCHAR(50)  NOT NULL COMMENT 'AGV名称',
+  AGV_CORRESPOND_WAY    VARCHAR(50)  NOT NULL COMMENT '通信方式 HTTP/Socket',
+  AGV_COMPUTER_IP       VARCHAR(20)  NOT NULL COMMENT 'AGV控制系统IP',
+  AGV_COMPUTER_PORT     INT          NULL COMMENT 'AGV控制系统端口',
+  AGV_COMPUTER_USRNAME  VARCHAR(20)  NULL COMMENT '用户名',
+  AGV_COMPUTER_PASSWORD VARCHAR(100) NULL COMMENT '密码（加密存储）',
+  AGV_CORRESPOND_JSON   VARCHAR(500) NULL COMMENT '任务下发模板JSON',
+  AGV_READ_JSON         VARCHAR(200) NULL COMMENT '状态读取模板JSON',
+  STATE                 CHAR(1)      NOT NULL DEFAULT '0',
+  AUTHOR                VARCHAR(15)  NULL,
+  UPDATETIME            DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  KEY idx_agv_group (AGV_ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='线体AGV配置';
+
+-- 4. 工序表
+CREATE TABLE MAS_AUTO_WORKLINE_CRAFTWORK (
+  ID1            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  WORKLINE_ID    BIGINT       NOT NULL COMMENT '关联线体 ID1',
+  CRAFTWORK_NO   VARCHAR(50)  NOT NULL COMMENT '工序编号',
+  CRAFTWORK_NAME VARCHAR(50)  NOT NULL COMMENT '工序名称',
+  SF_QUALITY     CHAR(1)      NOT NULL DEFAULT '0' COMMENT '1=品质检测 0=加工',
+  SF_AUTO_SEND   CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否自动发送 0/1',
+  SF_COST_STAT   CHAR(1)      NULL DEFAULT '0' COMMENT '是否参与报工 0/1',
+  COLOR          VARCHAR(20)  NULL COMMENT '界面颜色标识',
+  CRAFTWORK_NO2  VARCHAR(25)  NULL COMMENT '工艺代码（对接MES）',
+  CRAFTWORK_NODE BIGINT       NULL DEFAULT 0 COMMENT '工序排序（决定先后）',
+  CRAFTWORK_PRIOR BIGINT      NULL DEFAULT 0 COMMENT '同序优先级',
+  STATE          CHAR(1)      NOT NULL DEFAULT '0',
+  AUTHOR         VARCHAR(15)  NULL,
+  UPDATETIME     DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  KEY idx_craft_line (WORKLINE_ID),
+  CONSTRAINT fk_craft_line FOREIGN KEY (WORKLINE_ID) REFERENCES MAS_AUTO_WORKLINECONFIGS (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工序表';
+
+-- 5. 机台表
+-- 注：CARFTWORK_ID 为沿用既有 schema 的拼写（实为 CRAFTWORK）；
+--     EQUIMENT_* 程式上传/直连相关字段保留但本期不实现；
+--     UPMATERIEL_ID/DOWNMATERIEL_ID/STATE_ID 为旧式单挂法，已被 FRAME_BIND/PLC_POINT 取代，置 legacy。
+CREATE TABLE MAS_AUTO_WORKLINE_EQUIMENT (
+  ID1                          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  CARFTWORK_ID                 BIGINT       NOT NULL COMMENT '关联工序 ID1（拼写沿用旧schema）',
+  PLC_ID                       BIGINT       NULL COMMENT '该机台对应的独立PLC（关联 PLC.PLC_ID，一机一PLC）',
+  EQUIMENT_NO                  VARCHAR(50)  NOT NULL COMMENT '机台编号',
+  EQUIMENT_NAME                VARCHAR(50)  NOT NULL COMMENT '机台名称',
+  EQUIMENT_CODE                VARCHAR(20)  NOT NULL COMMENT '机台编码',
+  EQUIMENT_TYPE                VARCHAR(20)  NOT NULL COMMENT '机台类型 检测/加工',
+  EQUIMENT_TYPE_NAME           VARCHAR(20)  NOT NULL COMMENT '具体机型',
+  EQUIMENT_WORK_TYPE           VARCHAR(20)  NOT NULL COMMENT '加工类型 钢料/电极/产品',
+  EQUIMENT_TXT_STATE           CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否需辅助信息 0/1',
+  EQUIMENT_PROGRAM_STATE       CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否需程式 0/1（本期不实现上传）',
+  EQUIMENT_UPLOAD_TYPE         VARCHAR(20)  NULL COMMENT '[本期不实现]程式上传模式',
+  EQUIMENT_COMPUTER_IP         VARCHAR(20)  NULL COMMENT '[本期不实现]程式上传目标IP',
+  EQUIMENT_COMPUTER_PORT       INT          NULL COMMENT '[本期不实现]程式上传端口',
+  EQUIMENT_COMPUTER_USRNAME    VARCHAR(20)  NULL COMMENT '[本期不实现]用户名',
+  EQUIMENT_COMPUTER_PASSWORD   VARCHAR(100) NULL COMMENT '[本期不实现]密码',
+  EQUIMENT_WORK_SET_ID         BIGINT       NULL COMMENT '[legacy]加工位配置ID，改用 POSITION.EQUIMENT_ID',
+  EQUIMENT_WORK_REPORT_ID      BIGINT       NULL COMMENT '[本期不实现]报告采集配置ID',
+  EQUIMENT_WORK_UPMATERIEL_ID  BIGINT       NULL COMMENT '[legacy]旧上料架ID，改用 FRAME_BIND',
+  EQUIMENT_WORK_DOWNMATERIEL_ID BIGINT      NULL COMMENT '[legacy]旧下料架ID，改用 FRAME_BIND',
+  EQUIMENT_STATE               VARCHAR(20)  NULL COMMENT '当前状态缓存（由PLC信号合成）',
+  EQUIMENT_STATE_ID            BIGINT       NULL COMMENT '[legacy]旧状态读取配置ID，改用 PLC_POINT',
+  EQUIMENT_WORK_WRITE          CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否写加工数据 0/1（本期不实现）',
+  EQUIMENT_WORK_WRITE_ID       BIGINT       NULL COMMENT '[本期不实现]加工数据写入配置ID',
+  STATE                        CHAR(1)      NOT NULL DEFAULT '0',
+  AUTHOR                       VARCHAR(15)  NULL,
+  UPDATETIME                   DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  KEY idx_eq_craft (CARFTWORK_ID),
+  KEY idx_eq_plc (PLC_ID),
+  CONSTRAINT fk_eq_craft FOREIGN KEY (CARFTWORK_ID) REFERENCES MAS_AUTO_WORKLINE_CRAFTWORK (ID1),
+  CONSTRAINT fk_eq_plc FOREIGN KEY (PLC_ID) REFERENCES MAS_AUTO_WORKLINE_PLC (PLC_ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='机台表';
+
+-- 6. 加工位表（每机台2个，独立并行）
+CREATE TABLE MAS_AUTO_EQUIMENT_POSITION (
+  ID1                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  EQUIMENT_ID        BIGINT       NOT NULL COMMENT '关联机台 ID1（已规范为数值）',
+  POSITION_NAME      VARCHAR(50)  NOT NULL COMMENT '加工位名称 工位1/工位2',
+  POSITION_CODE      VARCHAR(20)  NOT NULL COMMENT '加工位编码',
+  POSITION_WORK_STATE CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=空闲可用 1=加工中 2=故障',
+  POSITION_WORK_INFO1 VARCHAR(20) NULL COMMENT '扩展信息1（如当前工件码）',
+  POSITION_WORK_INFO2 VARCHAR(20) NULL,
+  POSITION_WORK_INFO3 VARCHAR(20) NULL,
+  POSITION_WORK_INFO4 VARCHAR(20) NULL,
+  POSITION_WORK_REBARKS VARCHAR(200) NULL COMMENT '状态说明',
+  STATE              CHAR(1)      NOT NULL DEFAULT '0',
+  AUTHOR             VARCHAR(15)  NULL,
+  UPDATETIME         DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  KEY idx_pos_eq (EQUIMENT_ID),
+  CONSTRAINT fk_pos_eq FOREIGN KEY (EQUIMENT_ID) REFERENCES MAS_AUTO_WORKLINE_EQUIMENT (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='机台加工位表';
+
+-- 6b. 机台标准状态字典
+-- 说明：机台实时状态由 PLC 信号合成（见 PLC_POINT），本表仅作"标准状态码 → 名称/判定说明"字典，
+--       供状态机与界面展示统一取值，不再承载原直连机台的 IP/端口/协议字段。
+CREATE TABLE MAS_AUTO_EQUIMENT_CONDITION (
+  ID1            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  CONDITION_CODE VARCHAR(30)  NOT NULL COMMENT '标准状态码 WAIT_LOAD/PROCESSING/DONE_OK...',
+  CONDITION_NAME VARCHAR(50)  NOT NULL COMMENT '状态名称 等待上料/检测中...',
+  CONDITION_DESC VARCHAR(200) NULL COMMENT '判定说明（由哪些信号合成）',
+  SORT_NO        INT          NOT NULL DEFAULT 0 COMMENT '展示排序',
+  STATE          CHAR(1)      NOT NULL DEFAULT '0' COMMENT '0=启用 1=禁用',
+  AUTHOR         VARCHAR(15)  NULL,
+  UPDATETIME     DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_condition_code (CONDITION_CODE)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='机台标准状态字典';
+
+-- =============================================================
+-- 二、信号与点位映射（信号表的可配置落地）
+-- =============================================================
+
+-- 7. PLC 点位映射表
+CREATE TABLE MAS_AUTO_PLC_POINT (
+  ID1           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  PLC_ID        BIGINT       NOT NULL COMMENT '关联线体PLC配置组',
+  EQUIMENT_ID   BIGINT       NOT NULL COMMENT '关联机台',
+  POSITION_ID   BIGINT       NULL COMMENT '加工位；机台级信号(门/安全)留空',
+  SIGNAL_KEY    VARCHAR(30)  NOT NULL COMMENT 'DOOR/MACHINE_SAFE/POS_HAS_MAT/POS_ALLOW_LOAD/POS_OK/POS_NG/POS_TEST_START',
+  RW            CHAR(1)      NOT NULL COMMENT '0=读 1=写',
+  REGISTER_ADDR VARCHAR(20)  NOT NULL COMMENT '寄存器地址 如 D1006（读写主键依据）',
+  IO_ADDR       VARCHAR(20)  NULL COMMENT 'IO位 如 I0.3（仅展示）',
+  ON_VALUE      INT          NOT NULL DEFAULT 1 COMMENT 'ON/启动值',
+  OFF_VALUE     INT          NOT NULL DEFAULT 2 COMMENT 'OFF/关闭值',
+  DATA_LEN      INT          NOT NULL DEFAULT 1 COMMENT '数据长度',
+  REMARK        VARCHAR(200) NULL,
+  STATE         CHAR(1)      NOT NULL DEFAULT '0',
+  UPDATETIME    DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_point (EQUIMENT_ID, POSITION_ID, SIGNAL_KEY),
+  KEY idx_point_plc (PLC_ID),
+  CONSTRAINT fk_point_plc FOREIGN KEY (PLC_ID) REFERENCES MAS_AUTO_WORKLINE_PLC (PLC_ID),
+  CONSTRAINT fk_point_eq FOREIGN KEY (EQUIMENT_ID) REFERENCES MAS_AUTO_WORKLINE_EQUIMENT (ID1),
+  CONSTRAINT fk_point_pos FOREIGN KEY (POSITION_ID) REFERENCES MAS_AUTO_EQUIMENT_POSITION (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='机台/加工位信号→PLC寄存器映射';
+
+-- =============================================================
+-- 三、料架（主表 + 绑定 + 槽位/电极追踪）
+-- =============================================================
+
+-- 8. 料架主表
+CREATE TABLE MAS_AUTO_FRAME (
+  ID1                 BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  FRAME_NAME          VARCHAR(50)  NOT NULL COMMENT '料架名称 如 3号料架',
+  FRAME_CODE          VARCHAR(50)  NOT NULL COMMENT '料架机器码',
+  FRAME_IDENTIFY_CODE VARCHAR(50)  NOT NULL COMMENT '唯一识别码（AGV/扫码用）',
+  LAYER_TOTAL         INT          NOT NULL DEFAULT 1 COMMENT '层数，如 2 层',
+  SLOTS_PER_LAYER     INT          NOT NULL DEFAULT 0 COMMENT '每层槽位数，如 5',
+  SLOT_TOTAL          INT          NOT NULL DEFAULT 0 COMMENT '槽位总数 = 层数×每层数',
+  FRAME_SET_INFO      VARCHAR(50)  NULL COMMENT '位置坐标等',
+  STATE               CHAR(1)      NOT NULL DEFAULT '0' COMMENT '0=启用 1=禁用',
+  AUTHOR              VARCHAR(15)  NULL,
+  UPDATETIME          DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_frame_identify (FRAME_IDENTIFY_CODE)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架主表';
+
+-- 9. 料架-机台绑定（一架可多绑，实现共享：既是A机下料架又是B机上料架）
+CREATE TABLE MAS_AUTO_FRAME_BIND (
+  ID1         BIGINT  NOT NULL AUTO_INCREMENT COMMENT '主键',
+  FRAME_ID    BIGINT  NOT NULL COMMENT '关联料架 ID1',
+  EQUIMENT_ID BIGINT  NOT NULL COMMENT '关联机台 ID1',
+  FRAME_ROLE  CHAR(1) NOT NULL COMMENT '0=该机台上料架 1=该机台下料架',
+  STATE       CHAR(1) NOT NULL DEFAULT '0',
+  AUTHOR      VARCHAR(15) NULL,
+  UPDATETIME  DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_bind (FRAME_ID, EQUIMENT_ID, FRAME_ROLE),
+  KEY idx_bind_eq (EQUIMENT_ID),
+  CONSTRAINT fk_bind_frame FOREIGN KEY (FRAME_ID) REFERENCES MAS_AUTO_FRAME (ID1),
+  CONSTRAINT fk_bind_eq FOREIGN KEY (EQUIMENT_ID) REFERENCES MAS_AUTO_WORKLINE_EQUIMENT (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架-机台绑定';
+
+-- 10. 料架槽位表（电极位置追踪：电极ID↔料架↔槽位）
+CREATE TABLE MAS_AUTO_FRAME_SLOT (
+  ID1          BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  FRAME_ID     BIGINT      NOT NULL COMMENT '关联料架 ID1',
+  SLOT_NO      INT         NOT NULL COMMENT '料架内全局槽号 1..N（稳定主显号）',
+  LAYER_NO     INT         NOT NULL DEFAULT 1 COMMENT '层号，从1起',
+  POS_IN_LAYER INT         NOT NULL DEFAULT 1 COMMENT '层内位号，从1起（如 2层3位）',
+  SLOT_STATE   CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=空 1=占用 2=锁定/不可用',
+  ELECTRODE_ID VARCHAR(50) NULL COMMENT '电极ID 如 A；空表示无电极（初始可不放满）',
+  BIND_TIME    DATETIME    NULL COMMENT '电极存入时间',
+  REMARK       VARCHAR(200) NULL,
+  UPDATETIME   DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  UNIQUE KEY uk_frame_slot (FRAME_ID, SLOT_NO),
+  UNIQUE KEY uk_frame_layer_pos (FRAME_ID, LAYER_NO, POS_IN_LAYER),
+  KEY idx_slot_electrode (ELECTRODE_ID),
+  CONSTRAINT fk_slot_frame FOREIGN KEY (FRAME_ID) REFERENCES MAS_AUTO_FRAME (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架槽位与电极绑定（层+层内位）';
+
+-- =============================================================
+-- 四、运行记录类
+-- =============================================================
+
+-- 11. 加工/检测记录
+CREATE TABLE MAS_AUTO_WORK_RECORD (
+  ID1             BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  WORKLINE_ID     BIGINT      NOT NULL COMMENT '关联线体',
+  CRAFTWORK_ID    BIGINT      NOT NULL COMMENT '关联工序',
+  EQUIMENT_ID     BIGINT      NOT NULL COMMENT '关联机台',
+  POSITION_CODE   VARCHAR(20) NOT NULL COMMENT '加工位编码',
+  MATERIALCODE    VARCHAR(30) NULL COMMENT '物料编码',
+  ELECTRODE_ID    VARCHAR(50) NULL COMMENT '电极ID（如适用）',
+  UPLOAD_TIME     DATETIME    NULL COMMENT '上料时间',
+  WORK_START_TIME DATETIME    NULL COMMENT '检测开始时间',
+  WORK_END_TIME   DATETIME    NULL COMMENT '检测完成时间',
+  DOWNLOAD_TIME   DATETIME    NULL COMMENT '下料时间',
+  WORK_RESULT     CHAR(1)     NOT NULL DEFAULT '0' COMMENT '检测结果 0=OK 1=NG 2=异常',
+  REPORT_PATH     VARCHAR(200) NULL COMMENT '报告路径（本期一般为空）',
+  DATA_WRITE_STATE CHAR(1)    NOT NULL DEFAULT '0' COMMENT '数据写入状态 0=未写 1=成功 2=失败',
+  REMARK          VARCHAR(500) NULL,
+  AUTHOR          VARCHAR(15) NULL COMMENT '操作人/系统',
+  UPDATETIME      DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  KEY idx_rec_line (WORKLINE_ID),
+  KEY idx_rec_eq (EQUIMENT_ID),
+  KEY idx_rec_electrode (ELECTRODE_ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='加工/检测记录';
+
+-- 12. AGV 任务记录
+CREATE TABLE MAS_AUTO_AGV_TASK (
+  ID1             BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  WORKLINE_ID     BIGINT      NOT NULL COMMENT '关联线体',
+  TASK_TYPE       CHAR(1)     NOT NULL COMMENT '0=上料 1=下料 2=转序',
+  TASK_STATUS     CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=等待 1=执行中 2=完成 3=失败',
+  FROM_FRAME_CODE VARCHAR(50) NOT NULL COMMENT '取料位标识码',
+  TO_FRAME_CODE   VARCHAR(50) NOT NULL COMMENT '放料位标识码',
+  EQUIMENT_ID     BIGINT      NULL COMMENT '关联机台',
+  CRAFTWORK_ID    BIGINT      NULL COMMENT '关联工序',
+  SEND_TIME       DATETIME    NOT NULL COMMENT '下发时间',
+  FINISH_TIME     DATETIME    NULL COMMENT '完成时间',
+  ERROR_MSG       VARCHAR(500) NULL COMMENT '失败原因',
+  AUTHOR          VARCHAR(15) NULL,
+  UPDATETIME      DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1),
+  KEY idx_agv_line (WORKLINE_ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AGV任务记录';
+
+-- 13. 设备通信流水（PLC/AGV/扫码枪）
+CREATE TABLE MAS_AUTO_DEVICE_LOG (
+  ID1           BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  DEVICE_TYPE   VARCHAR(20) NOT NULL COMMENT 'PLC/AGV/SCAN',
+  DEVICE_ID     BIGINT      NULL COMMENT '设备配置ID',
+  ACTION        VARCHAR(20) NOT NULL COMMENT 'READ/WRITE/CONNECT/HEARTBEAT',
+  REGISTER_ADDR VARCHAR(20) NULL COMMENT '寄存器地址（PLC）',
+  REQUEST_DATA  VARCHAR(500) NULL COMMENT '请求',
+  RESPONSE_DATA VARCHAR(500) NULL COMMENT '响应',
+  RESULT        CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=成功 1=失败',
+  COST_MS       INT         NULL COMMENT '耗时毫秒',
+  ERROR_MSG     VARCHAR(500) NULL,
+  AUTHOR        VARCHAR(15) NULL,
+  CREATE_TIME   DATETIME    NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发生时间',
+  PRIMARY KEY (ID1),
+  KEY idx_log_type_time (DEVICE_TYPE, CREATE_TIME)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备通信流水';
+
+-- 14. 告警事件
+CREATE TABLE MAS_AUTO_ALARM_EVENT (
+  ID1         BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  WORKLINE_ID BIGINT      NULL COMMENT '关联线体',
+  EQUIMENT_ID BIGINT      NULL COMMENT '关联机台',
+  POSITION_ID BIGINT      NULL COMMENT '关联加工位',
+  ALARM_TYPE  VARCHAR(30) NOT NULL COMMENT '告警类型 PLC_OFFLINE/READ_TIMEOUT/UNSAFE/POS_STUCK/FRAME_FULL...',
+  ALARM_LEVEL CHAR(1)     NOT NULL DEFAULT '1' COMMENT '1=提示 2=警告 3=严重',
+  ALARM_MSG   VARCHAR(500) NOT NULL COMMENT '告警内容',
+  ALARM_STATE CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=未处理 1=已确认 2=已恢复',
+  HANDLER     VARCHAR(15) NULL COMMENT '处理人',
+  HANDLE_TIME DATETIME    NULL COMMENT '处理时间',
+  CREATE_TIME DATETIME    NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发生时间',
+  PRIMARY KEY (ID1),
+  KEY idx_alarm_state (ALARM_STATE),
+  KEY idx_alarm_line (WORKLINE_ID)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='告警事件';
+
+-- =============================================================
+-- 五、保留结构但本期不实现（需与机台直接通信）
+-- =============================================================
+
+-- 15. 报告采集配置（保留，不实现）
+CREATE TABLE MAS_AUTO_EQUIMENT_REPORT (
+  ID1                    BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  REPORT_ID              BIGINT      NOT NULL COMMENT '关联机台 EQUIMENT_WORK_REPORT_ID',
+  REPORT_NAME            VARCHAR(50) NOT NULL COMMENT '报告配置名称',
+  REPORT_WORK_STATE      VARCHAR(20) NOT NULL COMMENT '触发采集的状态值',
+  REPORT_UPLOAD_TYPE     VARCHAR(20) NOT NULL COMMENT '采集连接方式 FTP/SMB/HTTP',
+  REPORT_COMPUTER_IP     VARCHAR(20) NOT NULL COMMENT '报告来源IP',
+  REPORT_COMPUTER_PORT   INT         NULL,
+  REPORT_COMPUTER_USRNAME VARCHAR(20) NULL,
+  REPORT_COMPUTER_PASSWORD VARCHAR(100) NULL,
+  REPORT_UPLOAD_NAME_JSON VARCHAR(100) NOT NULL COMMENT '命名模板JSON',
+  REPORT_WORK_INFO       VARCHAR(20) NULL,
+  REPORT_WORK_REBARKS    VARCHAR(200) NULL,
+  STATE                  CHAR(1)     NOT NULL DEFAULT '0',
+  AUTHOR                 VARCHAR(15) NULL,
+  UPDATETIME             DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='[本期不实现]报告采集配置';
+
+-- 16. 加工数据写入配置（保留，不实现）
+CREATE TABLE MAS_AUTO_EQUIMENT_WORKDATA (
+  ID1                BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  WORKDATA_ID        BIGINT      NOT NULL COMMENT '关联机台 EQUIMENT_WORK_WRITE_ID',
+  WORKDATA_WRITE_WAY CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=完成后 1=实时',
+  WORKDATA_WRITE_JSON VARCHAR(200) NOT NULL COMMENT '字段映射模板JSON',
+  WORKDATA_WRITE_TYPE VARCHAR(20) NOT NULL COMMENT '目标类型 MySQL/Oracle/SQLServer',
+  WORKDATA_WRITE_CONNECT VARCHAR(200) NULL COMMENT '连接字符串',
+  WORKDATA_VALUES    VARCHAR(20) NULL,
+  WORKDATA_REBARKS   VARCHAR(200) NULL,
+  STATE              CHAR(1)     NOT NULL DEFAULT '0',
+  AUTHOR             VARCHAR(15) NULL,
+  UPDATETIME         DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (ID1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='[本期不实现]加工数据写入配置';
+
+-- =============================================================
+-- 六、初始化数据（示例：1线体 → 1检测工序 → 3机台，每机台2加工位）
+--     点位地址取自 docs/测试机信号表.md（现场实际可用数据）
+-- =============================================================
+
+-- 线体（PLC_ID 仅作"启用PLC"标记；实际连接为一机一PLC，见机台 PLC_ID）
+INSERT INTO MAS_AUTO_WORKLINECONFIGS
+  (ID1, WORKMACHINE_LINE, WORKLINE_CODE, SCAN_STATE, PLC_ID, AGV_ID, MATERIALCODE, STATE, AUTHOR)
+VALUES
+  (1, 'CNC检测自动化线', 'LINE01', '0', 1, 0, 'MAT-DEMO', '0', 'system');
+
+-- PLC：三台机台各一台独立 PLC，IP 各不相同（示例IP，按现场替换）
+INSERT INTO MAS_AUTO_WORKLINE_PLC
+  (PLC_ID, PLC_NAME, PLC_CONNECT_TYPE, PLC_COMPUTER_IP, PLC_COMPUTER_PORT, PLC_READ_WAY, STATE, AUTHOR)
+VALUES
+  (1, '内长宽PLC', '客户端', '192.168.1.11', 502, 'ModbusTCP', '0', 'system'),
+  (2, '平面度PLC', '客户端', '192.168.1.12', 502, 'ModbusTCP', '0', 'system'),
+  (3, 'A基准PLC',  '客户端', '192.168.1.13', 502, 'ModbusTCP', '0', 'system');
+
+-- 工序（检测）
+INSERT INTO MAS_AUTO_WORKLINE_CRAFTWORK
+  (ID1, WORKLINE_ID, CRAFTWORK_NO, CRAFTWORK_NAME, SF_QUALITY, SF_AUTO_SEND, SF_COST_STAT, CRAFTWORK_NODE, CRAFTWORK_PRIOR, STATE, AUTHOR)
+VALUES
+  (1, 1, 'CW01', '检测', '1', '1', '1', 1, 0, '0', 'system');
+
+-- 机台（3台：内长宽 / 平面度 / A基准），各绑定自己的独立 PLC（PLC_ID 1/2/3）
+INSERT INTO MAS_AUTO_WORKLINE_EQUIMENT
+  (ID1, CARFTWORK_ID, PLC_ID, EQUIMENT_NO, EQUIMENT_NAME, EQUIMENT_CODE, EQUIMENT_TYPE, EQUIMENT_TYPE_NAME, EQUIMENT_WORK_TYPE, STATE, AUTHOR)
+VALUES
+  (1, 1, 1, 'EQ01', '内长宽', 'M-NCK', '检测', '内长宽测试机', '产品', '0', 'system'),
+  (2, 1, 2, 'EQ02', '平面度', 'M-PMD', '检测', '平面度测试机', '产品', '0', 'system'),
+  (3, 1, 3, 'EQ03', 'A基准', 'M-ABASE', '检测', 'A基准测试机', '产品', '0', 'system');
+
+-- 加工位（每机台2个）
+INSERT INTO MAS_AUTO_EQUIMENT_POSITION
+  (ID1, EQUIMENT_ID, POSITION_NAME, POSITION_CODE, POSITION_WORK_STATE, STATE, AUTHOR)
+VALUES
+  (1, 1, '工位1', 'EQ01-P1', '0', '0', 'system'),
+  (2, 1, '工位2', 'EQ01-P2', '0', '0', 'system'),
+  (3, 2, '工位1', 'EQ02-P1', '0', '0', 'system'),
+  (4, 2, '工位2', 'EQ02-P2', '0', '0', 'system'),
+  (5, 3, '工位1', 'EQ03-P1', '0', '0', 'system'),
+  (6, 3, '工位2', 'EQ03-P2', '0', '0', 'system');
+
+-- 机台标准状态字典
+INSERT INTO MAS_AUTO_EQUIMENT_CONDITION
+  (CONDITION_CODE, CONDITION_NAME, CONDITION_DESC, SORT_NO, STATE, AUTHOR) VALUES
+  ('OFFLINE',    '离线',     'PLC 连接断开/心跳失败',                         1, '0', 'system'),
+  ('WAIT_LOAD',  '等待上料', 'POS_ALLOW_LOAD=ON 且 POS_HAS_MAT=OFF',         2, '0', 'system'),
+  ('LOADED',     '已上料',   'POS_HAS_MAT=ON，未写测试启动',                  3, '0', 'system'),
+  ('PROCESSING', '检测中',   '已写 POS_TEST_START 且未出 OK/NG',              4, '0', 'system'),
+  ('DONE_OK',    '检测OK',   'POS_OK=ON',                                    5, '0', 'system'),
+  ('DONE_NG',    '检测NG',   'POS_NG=ON',                                    6, '0', 'system'),
+  ('UNLOADED',   '已下料',   'POS_HAS_MAT=OFF（下料完成）',                   7, '0', 'system'),
+  ('ALARM',      '报警',     'MACHINE_SAFE=OFF 或 DOOR=ON 或通信异常',        8, '0', 'system');
+
+-- PLC 点位映射（取自测试机信号表；读 ON=1/OFF=2，写 启动=1/关闭=2）
+-- 机台级信号（门开关 DOOR、机台安全 MACHINE_SAFE）POSITION_ID 留空
+-- ---- 内长宽 (EQUIMENT_ID=1, 工位1=POS1, 工位2=POS2) ----
+INSERT INTO MAS_AUTO_PLC_POINT
+  (PLC_ID, EQUIMENT_ID, POSITION_ID, SIGNAL_KEY, RW, REGISTER_ADDR, IO_ADDR) VALUES
+  (1, 1, NULL, 'DOOR',           '0', 'D1000', 'I0.0'),
+  (1, 1, NULL, 'MACHINE_SAFE',   '0', 'D1002', 'I0.1'),
+  (1, 1, 1,    'POS_HAS_MAT',    '0', 'D1004', 'I0.2'),
+  (1, 1, 1,    'POS_ALLOW_LOAD', '0', 'D1006', 'I0.3'),
+  (1, 1, 1,    'POS_OK',         '0', 'D1008', 'I0.4'),
+  (1, 1, 1,    'POS_NG',         '0', 'D1010', 'I0.5'),
+  (1, 1, 2,    'POS_HAS_MAT',    '0', 'D1012', 'I0.6'),
+  (1, 1, 2,    'POS_ALLOW_LOAD', '0', 'D1014', 'I0.7'),
+  (1, 1, 2,    'POS_OK',         '0', 'D1016', 'I1.0'),
+  (1, 1, 2,    'POS_NG',         '0', 'D1018', 'I1.1'),
+  (1, 1, 1,    'POS_TEST_START', '1', 'D1100', 'Q0.0'),
+  (1, 1, 2,    'POS_TEST_START', '1', 'D1102', 'Q0.1');
+-- ---- 平面度 (EQUIMENT_ID=2, 工位1=POS3, 工位2=POS4) ----
+INSERT INTO MAS_AUTO_PLC_POINT
+  (PLC_ID, EQUIMENT_ID, POSITION_ID, SIGNAL_KEY, RW, REGISTER_ADDR, IO_ADDR) VALUES
+  (2, 2,NULL, 'DOOR',           '0', 'D1200', 'I2.4'),
+  (2, 2,NULL, 'MACHINE_SAFE',   '0', 'D1202', 'I2.5'),
+  (2, 2,3,    'POS_HAS_MAT',    '0', 'D1204', 'I2.6'),
+  (2, 2,3,    'POS_ALLOW_LOAD', '0', 'D1206', 'I2.7'),
+  (2, 2,3,    'POS_OK',         '0', 'D1208', 'I3.0'),
+  (2, 2,3,    'POS_NG',         '0', 'D1210', 'I3.1'),
+  (2, 2,4,    'POS_HAS_MAT',    '0', 'D1212', 'I3.2'),
+  (2, 2,4,    'POS_ALLOW_LOAD', '0', 'D1214', 'I3.3'),
+  (2, 2,4,    'POS_OK',         '0', 'D1216', 'I3.4'),
+  (2, 2,4,    'POS_NG',         '0', 'D1218', 'I3.5'),
+  (2, 2,3,    'POS_TEST_START', '1', 'D1300', 'Q0.4'),
+  (2, 2,4,    'POS_TEST_START', '1', 'D1302', 'Q0.5');
+-- ---- A基准 (EQUIMENT_ID=3, 工位1=POS5, 工位2=POS6) ----
+INSERT INTO MAS_AUTO_PLC_POINT
+  (PLC_ID, EQUIMENT_ID, POSITION_ID, SIGNAL_KEY, RW, REGISTER_ADDR, IO_ADDR) VALUES
+  (3, 3,NULL, 'DOOR',           '0', 'D1400', 'I1.2'),
+  (3, 3,NULL, 'MACHINE_SAFE',   '0', 'D1402', 'I1.3'),
+  (3, 3,5,    'POS_HAS_MAT',    '0', 'D1404', 'I1.4'),
+  (3, 3,5,    'POS_ALLOW_LOAD', '0', 'D1406', 'I1.5'),
+  (3, 3,5,    'POS_OK',         '0', 'D1408', 'I1.6'),
+  (3, 3,5,    'POS_NG',         '0', 'D1410', 'I1.7'),
+  (3, 3,6,    'POS_HAS_MAT',    '0', 'D1412', 'I2.0'),
+  (3, 3,6,    'POS_ALLOW_LOAD', '0', 'D1414', 'I2.1'),
+  (3, 3,6,    'POS_OK',         '0', 'D1416', 'I2.2'),
+  (3, 3,6,    'POS_NG',         '0', 'D1418', 'I2.3'),
+  (3, 3,5,    'POS_TEST_START', '1', 'D1500', 'Q0.2'),
+  (3, 3,6,    'POS_TEST_START', '1', 'D1502', 'Q0.3');
+
+-- 料架：3个（上料总架 2层×5 / 中转架 1层×4 / 下料总架 2层×4）
+INSERT INTO MAS_AUTO_FRAME
+  (ID1, FRAME_NAME, FRAME_CODE, FRAME_IDENTIFY_CODE, LAYER_TOTAL, SLOTS_PER_LAYER, SLOT_TOTAL, STATE, AUTHOR) VALUES
+  (1, '上料总架', 'FR-IN',  'FR-IN-01',  2, 5, 10, '0', 'system'),
+  (2, '中转架',   'FR-MID', 'FR-MID-01', 1, 4, 4,  '0', 'system'),
+  (3, '下料总架', 'FR-OUT', 'FR-OUT-01', 2, 4, 8,  '0', 'system');
+
+-- 料架绑定：演示「一架两用」——中转架(ID=2)既是内长宽(EQ1)的下料架，又是A基准(EQ3)的上料架
+INSERT INTO MAS_AUTO_FRAME_BIND
+  (FRAME_ID, EQUIMENT_ID, FRAME_ROLE, STATE, AUTHOR) VALUES
+  (1, 1, '0', '0', 'system'),   -- 上料总架 → 内长宽 上料架
+  (2, 1, '1', '0', 'system'),   -- 中转架   → 内长宽 下料架
+  (2, 3, '0', '0', 'system'),   -- 中转架   → A基准  上料架  （同一料架两用）
+  (3, 3, '1', '0', 'system');   -- 下料总架 → A基准  下料架
+
+-- 槽位预建：料架的物理槽位在建档时即按 层×每层数 全部预建（空槽 SLOT_STATE='0'）。
+-- 初始入库时只占用其中一部分——演示「初始料架不放满」。
+
+-- 上料总架(ID=1)：2层×5=10槽，初始入库 6 个电极（E01..E06），其余 4 槽为空
+INSERT INTO MAS_AUTO_FRAME_SLOT
+  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_TIME) VALUES
+  (1, 1, 1, 1, '1', 'E01', NOW()),
+  (1, 2, 1, 2, '1', 'E02', NOW()),
+  (1, 3, 1, 3, '1', 'E03', NOW()),
+  (1, 4, 1, 4, '1', 'E04', NOW()),
+  (1, 5, 1, 5, '1', 'E05', NOW()),
+  (1, 6, 2, 1, '1', 'E06', NOW()),
+  (1, 7, 2, 2, '0', NULL,  NULL),
+  (1, 8, 2, 3, '0', NULL,  NULL),
+  (1, 9, 2, 4, '0', NULL,  NULL),
+  (1, 10,2, 5, '0', NULL,  NULL);
+
+-- 中转架(ID=2)：1层×4=4槽，4号位放入电极 'A'（保留反查演示）
+INSERT INTO MAS_AUTO_FRAME_SLOT
+  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_TIME, REMARK) VALUES
+  (2, 1, 1, 1, '0', NULL, NULL, NULL),
+  (2, 2, 1, 2, '0', NULL, NULL, NULL),
+  (2, 3, 1, 3, '0', NULL, NULL, NULL),
+  (2, 4, 1, 4, '1', 'A',  NOW(), '电极A当前位置：中转架 1层4位');
+
+-- =============================================================
+-- 七、常用查询示例
+-- =============================================================
+-- 反查电极当前所在料架与槽位（含层/层内位）：
+--   SELECT f.FRAME_NAME, s.SLOT_NO, s.LAYER_NO, s.POS_IN_LAYER
+--   FROM MAS_AUTO_FRAME_SLOT s JOIN MAS_AUTO_FRAME f ON f.ID1 = s.FRAME_ID
+--   WHERE s.ELECTRODE_ID = 'A' AND s.SLOT_STATE = '1';
+--
+-- 查某料架空闲槽位数（初始可不放满）：
+--   SELECT COUNT(*) FROM MAS_AUTO_FRAME_SLOT WHERE FRAME_ID = 1 AND SLOT_STATE = '0';
+--
+-- 查某加工位的全部 PLC 点位：
+--   SELECT SIGNAL_KEY, RW, REGISTER_ADDR, ON_VALUE, OFF_VALUE
+--   FROM MAS_AUTO_PLC_POINT WHERE EQUIMENT_ID = 1 AND (POSITION_ID = 1 OR POSITION_ID IS NULL);
+--
+-- 查某料架被哪些机台以何种角色共享：
+--   SELECT b.EQUIMENT_ID, b.FRAME_ROLE FROM MAS_AUTO_FRAME_BIND b WHERE b.FRAME_ID = 2;
+-- =============================================================

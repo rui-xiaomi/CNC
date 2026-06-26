@@ -1,0 +1,13 @@
+<Application x:Class="CncLoader.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/Tokens.xaml"/>
+                <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/Styles.xaml"/>
+                <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/PageTemplates.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

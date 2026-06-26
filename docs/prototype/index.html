@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNC 自动化上下料客户端 — 原型</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Saira+Semi+Condensed:wght@500;600;700&display=swap');
+/* ============ 设计令牌（计量仪表盘方向：冷钢 + 仪器外框 + 校准刻度）============ */
+:root{
+  --chrome:#191D22; --chrome-2:#232A31; --chrome-fg:#BFC6CE; --chrome-fg-dim:#828B95;
+  --bg:#E8EBEE; --surface:#FFFFFF; --surface-2:#E9ECEF; --border:#CBD1D8; --border-2:#E1E5E9;
+  --fg:#15181C; --fg-muted:#586069;
+  --accent:#135C96; --accent-d:#0e486f;
+  --ok:#16A34A; --run:#1F6FEB; --warn:#C2710C; --alarm:#D62828; --idle:#6B7280;
+  --radius:3px;
+  --mono:"JetBrains Mono","Cascadia Mono",Consolas,"Courier New",monospace;
+  --sans:"Inter","Segoe UI",system-ui,sans-serif;
+  --cond:"Saira Semi Condensed","Segoe UI",sans-serif;
+}
+/* 标牌/标签层用窄体 Saira（签名识别度） */
+.titlebar .name,.nav-group,.panel-h .t,.mach-h .nm,.statusbar h1,thead th,.kpi .lbl{
+  font-family:var(--cond);letter-spacing:.3px}
+/* 校准刻度母题：计量量具标尺，仅用于监控治具卡（全局唯一张力点） */
+.ticks{height:7px;background:#FAFBFC;border-bottom:1px solid var(--border-2);
+  background-image:repeating-linear-gradient(90deg,var(--border) 0 1px,transparent 1px 11px)}
+.ticks.tall{background-image:repeating-linear-gradient(90deg,var(--fg-muted) 0 1px,transparent 1px 55px),repeating-linear-gradient(90deg,var(--border) 0 1px,transparent 1px 11px)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--sans);font-size:13px;color:var(--fg);background:#0d0f12;
+  -webkit-font-smoothing:antialiased}
+button{font-family:inherit;font-size:inherit;cursor:pointer}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ============ 窗口 chrome ============ */
+.app{display:flex;flex-direction:column;height:100vh;max-width:1440px;margin:0 auto;
+  background:var(--bg);box-shadow:0 0 0 1px #000}
+.titlebar{height:38px;background:var(--chrome);display:flex;align-items:center;
+  gap:14px;padding:0 6px 0 14px;color:var(--chrome-fg);flex:none;user-select:none}
+.titlebar .name{font-weight:600;font-size:13px;letter-spacing:.2px;color:#fff}
+.titlebar .name span{color:var(--chrome-fg-dim);font-weight:400;margin-left:8px}
+.tb-sel{margin-left:6px;display:flex;align-items:center;gap:6px;background:var(--chrome-2);
+  border:1px solid #333a42;border-radius:var(--radius);padding:3px 8px;color:var(--chrome-fg);font-size:12px}
+.tb-spacer{flex:1}
+.tb-stat{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--chrome-fg)}
+.tb-stat .mono{color:#fff}
+.win-btns{display:flex;gap:2px;margin-left:8px}
+.win-btns button{width:34px;height:30px;background:transparent;border:0;color:var(--chrome-fg);
+  display:grid;place-items:center;border-radius:var(--radius)}
+.win-btns button:hover{background:#333a42}
+.win-btns button.close:hover{background:var(--alarm);color:#fff}
+
+/* ============ 主体 ============ */
+.body{flex:1;display:flex;min-height:0}
+.nav{width:172px;background:var(--chrome);flex:none;padding:6px 0;overflow:auto;
+  border-right:1px solid #000}
+.nav-group{color:var(--chrome-fg-dim);font-size:11px;font-weight:600;letter-spacing:.5px;
+  padding:10px 14px 4px;text-transform:uppercase}
+.nav a{display:flex;align-items:center;gap:9px;height:32px;padding:0 14px;color:var(--chrome-fg);
+  text-decoration:none;font-size:13px;border-left:3px solid transparent}
+.nav a:hover{background:var(--chrome-2)}
+.nav a.active{background:var(--chrome-2);border-left-color:var(--accent);color:#fff}
+.nav a svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6}
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.statusbar{height:40px;background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:18px;padding:0 16px;flex:none}
+.statusbar h1{font-size:15px;font-weight:600}
+.sb-spacer{flex:1}
+.sb-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-muted)}
+.content{flex:1;overflow:auto;padding:14px 16px}
+.page{display:none}
+.page.active{display:block}
+
+/* ============ 通用组件 ============ */
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.dot.sq{border-radius:1px}
+.dot.hollow{background:transparent!important;border:2px solid var(--idle)}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 8px;
+  border-radius:2px;border:1px solid var(--border);background:var(--surface);white-space:nowrap}
+.badge .mono{font-size:11px}
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
+.kpi .lbl{font-size:12px;color:var(--fg-muted)}
+.kpi .val{font-family:var(--mono);font-size:28px;font-weight:600;line-height:1.1;margin-top:4px}
+.kpi .sub{font-size:11px;color:var(--fg-muted);margin-top:2px}
+
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px}
+.panel-h{height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;
+  border-bottom:1px solid var(--border);background:#FAFBFC}
+.panel-h .t{font-weight:600;font-size:13px}
+.panel-h .spacer{flex:1}
+.panel-b{padding:12px}
+.panel-b.flush{padding:0}
+
+.btn{height:28px;padding:0 12px;border-radius:var(--radius);border:1px solid var(--accent);
+  background:var(--accent);color:#fff;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:var(--accent-d);border-color:var(--accent-d)}
+.btn.ghost{background:var(--surface);color:var(--fg);border-color:var(--border)}
+.btn.ghost:hover{background:var(--surface-2)}
+.btn.danger{background:var(--surface);color:var(--alarm);border-color:var(--alarm)}
+.btn.danger:hover{background:#FDECEC}
+.btn.sm{height:24px;padding:0 9px;font-size:12px}
+.btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-weight:600;
+  font-size:12px;color:var(--fg-muted);padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td{padding:6px 10px;border-bottom:1px solid var(--border-2);height:32px}
+tbody tr:hover{background:#F0F4FA}
+td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.row-sel{background:#E8F1FB!important}
+
+.form-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.form-row label{width:92px;flex:none;text-align:right;color:var(--fg-muted);font-size:12px}
+.form-row label .req{color:var(--alarm)}
+.inp,select.inp{height:28px;border:1px solid var(--border);border-radius:var(--radius);
+  padding:0 9px;font-family:inherit;font-size:13px;color:var(--fg);background:var(--surface);min-width:0;flex:1}
+.inp:focus,select.inp:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+.inp.mono{font-family:var(--mono)}
+
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+
+/* 机台监控卡 */
+.mach{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
+.mach-h{height:34px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--border);background:#FAFBFC}
+.mach-h .nm{font-weight:600}
+.mach-h .ind{display:flex;gap:10px;margin-left:auto;font-size:11px;color:var(--fg-muted)}
+.mach-h .ind span{display:flex;align-items:center;gap:4px}
+.pos{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border-2)}
+.pos:last-child{border-bottom:0}
+.pos .pn{width:46px;color:var(--fg-muted);font-size:12px}
+.pos .meta{margin-left:auto;text-align:right}
+.pos .meta .k{font-size:11px;color:var(--fg-muted)}
+.pos .meta .v{font-family:var(--mono);font-size:12px}
+
+/* 告警 */
+.alarm-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border-2)}
+.alarm-item .lvl{width:3px;height:30px;border-radius:2px;flex:none}
+.alarm-item .tm{font-family:var(--mono);font-size:11px;color:var(--fg-muted);width:62px;flex:none}
+.alarm-item .ms{flex:1;font-size:12px}
+
+/* 槽位网格 */
+.slots{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}
+.slot{border:1px solid var(--border);border-radius:var(--radius);padding:8px 6px;text-align:center;background:var(--surface)}
+.slot .no{font-size:11px;color:var(--fg-muted)}
+.slot .eid{font-family:var(--mono);font-weight:600;font-size:15px;margin-top:3px}
+.slot.empty .eid{color:var(--idle);font-weight:400}
+.slot.occ{border-color:var(--ok);background:#F1FBF4}
+.slot.hi{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent);background:#E8F1FB}
+
+.hint{font-size:12px;color:var(--fg-muted);padding:8px 12px;background:#FAFBFC;border:1px solid var(--border);border-radius:var(--radius)}
+.tag{font-size:11px;padding:1px 6px;border-radius:2px;background:var(--surface-2);color:var(--fg-muted)}
+.role-up{color:var(--run);border-color:var(--run)}
+.role-down{color:var(--warn);border-color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="name">CNC 自动化上下料客户端<span>v1.0</span></div>
+    <div class="tb-sel">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      线体：CNC检测自动化线 (LINE01)
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-stat"><span class="dot" style="background:var(--ok)"></span>PLC <span class="mono">3/3</span> 在线（一机一PLC）</div>
+    <div class="tb-stat">心跳 <span class="mono" id="hb">001482</span></div>
+    <div class="win-btns">
+      <button title="最小化"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14"/></svg></button>
+      <button title="最大化"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="14" height="14"/></svg></button>
+      <button class="close" title="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- 侧栏（扁平，非树形） -->
+    <nav class="nav" id="nav">
+      <div class="nav-group">运行</div>
+      <a data-p="dash" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>监控看板</a>
+      <div class="nav-group">配置</div>
+      <a data-p="line"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>线体管理</a>
+      <a data-p="craft"><svg viewBox="0 0 24 24"><path d="M4 6h16v4H4zM4 14h10v4H4z"/></svg>工序管理</a>
+      <a data-p="eq"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M9 9h6v6H9z"/></svg>机台管理</a>
+      <div class="nav-group">设备</div>
+      <a data-p="plc"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="M7 10v4M11 10v4M15 10v4"/></svg>PLC 管理</a>
+      <a data-p="agv"><svg viewBox="0 0 24 24"><rect x="3" y="9" width="14" height="7" rx="1"/><circle cx="7" cy="18" r="1.6"/><circle cx="14" cy="18" r="1.6"/><path d="M17 11h3l1 3"/></svg>AGV 管理</a>
+      <a data-p="scan"><svg viewBox="0 0 24 24"><path d="M4 7V5h3M20 7V5h-3M4 17v2h3M20 17v2h-3M7 12h10"/></svg>扫码枪管理</a>
+      <div class="nav-group">物流</div>
+      <a data-p="frame"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>料架管理</a>
+    </nav>
+
+    <div class="main">
+      <div class="statusbar">
+        <h1 id="ptitle">监控看板</h1>
+        <div class="sb-spacer"></div>
+        <div class="sb-item"><span class="dot" style="background:var(--ok)"></span>PLC ModbusTCP</div>
+        <div class="sb-item"><span class="dot" style="background:var(--alarm)"></span>未处理告警 <strong class="mono" style="color:var(--alarm)">2</strong></div>
+        <div class="sb-item mono" id="clock">2026-06-26 14:032:18</div>
+      </div>
+
+      <div class="content">
+
+        <!-- ===== 监控看板 ===== -->
+        <section class="page active" id="p-dash">
+          <div class="kpi-row">
+            <div class="kpi"><div class="lbl">运行机台</div><div class="val" style="color:var(--run)">3<span style="font-size:16px;color:var(--fg-muted)"> / 3</span></div><div class="sub">6 加工位 · 4 运行 2 待料</div></div>
+            <div class="kpi"><div class="lbl">当班 OK</div><div class="val" style="color:var(--ok)">1268</div><div class="sub">合格率 98.3%</div></div>
+            <div class="kpi"><div class="lbl">当班 NG</div><div class="val" style="color:var(--alarm)">22</div><div class="sub">较上班 -5</div></div>
+            <div class="kpi"><div class="lbl">未处理告警</div><div class="val" style="color:var(--warn)">2</div><div class="sub">最近 14:30:55</div></div>
+          </div>
+
+          <div class="two-col">
+            <div>
+              <!-- 三台机台 × 双加工位 -->
+              <div class="mach" style="margin-bottom:14px">
+                <div class="mach-h"><span class="nm">内长宽</span><span class="badge mono">EQ01</span>
+                  <div class="ind"><span><span class="dot" style="background:var(--ok)"></span>门 闭</span><span><span class="dot" style="background:var(--ok)"></span>安全</span></div></div>
+                <div class="ticks tall"></div>
+                <div class="pos"><span class="pn">工位1</span><span class="badge"><span class="dot" style="background:var(--run)"></span>检测中</span>
+                  <div class="meta"><span class="k">工件</span> <span class="v">WF-2207</span> &nbsp; <span class="k">计数</span> <span class="v">214</span></div></div>
+                <div class="pos"><span class="pn">工位2</span><span class="badge"><span class="dot" style="background:var(--warn)"></span>等待上料</span>
+                  <div class="meta"><span class="k">允许上料</span> <span class="v" style="color:var(--ok)">ON</span> &nbsp; <span class="k">计数</span> <span class="v">209</span></div></div>
+              </div>
+              <div class="mach" style="margin-bottom:14px">
+                <div class="mach-h"><span class="nm">平面度</span><span class="badge mono">EQ02</span>
+                  <div class="ind"><span><span class="dot" style="background:var(--ok)"></span>门 闭</span><span><span class="dot" style="background:var(--ok)"></span>安全</span></div></div>
+                <div class="ticks tall"></div>
+                <div class="pos"><span class="pn">工位1</span><span class="badge"><span class="dot" style="background:var(--run)"></span>检测中</span>
+                  <div class="meta"><span class="k">工件</span> <span class="v">WF-2205</span> &nbsp; <span class="k">计数</span> <span class="v">198</span></div></div>
+                <div class="pos"><span class="pn">工位2</span><span class="badge"><span class="dot" style="background:var(--ok)"></span>检测 OK</span>
+                  <div class="meta"><span class="k">结果</span> <span class="v" style="color:var(--ok)">OK</span> &nbsp; <span class="k">计数</span> <span class="v">201</span></div></div>
+              </div>
+              <div class="mach">
+                <div class="mach-h"><span class="nm">A基准</span><span class="badge mono">EQ03</span>
+                  <div class="ind"><span><span class="dot" style="background:var(--alarm)"></span>门 开</span><span><span class="dot" style="background:var(--warn)"></span>安全</span></div></div>
+                <div class="ticks tall"></div>
+                <div class="pos"><span class="pn">工位1</span><span class="badge"><span class="dot sq" style="background:var(--alarm)"></span>报警</span>
+                  <div class="meta"><span class="k">原因</span> <span class="v" style="color:var(--alarm)">门未闭合</span></div></div>
+                <div class="pos"><span class="pn">工位2</span><span class="badge"><span class="dot" style="background:var(--alarm)"></span>检测 NG</span>
+                  <div class="meta"><span class="k">结果</span> <span class="v" style="color:var(--alarm)">NG</span> &nbsp; <span class="k">计数</span> <span class="v">187</span></div></div>
+              </div>
+            </div>
+
+            <!-- 告警面板 -->
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">实时告警</span><span class="badge" style="color:var(--alarm);border-color:var(--alarm)">2 未处理</span><div class="spacer"></div><button class="btn ghost sm">全部确认</button></div>
+              <div class="panel-b flush">
+                <div class="alarm-item"><div class="lvl" style="background:var(--alarm)"></div><div class="tm">14:30:55</div><div class="ms"><strong>A基准 / 工位1</strong> 门未闭合（DOOR=ON），已暂停该机台调度</div><button class="btn ghost sm">确认</button></div>
+                <div class="alarm-item"><div class="lvl" style="background:var(--warn)"></div><div class="tm">14:28:10</div><div class="ms"><strong>A基准 / 工位2</strong> 检测 NG，工件已转下料架记录</div><button class="btn ghost sm">确认</button></div>
+                <div class="alarm-item" style="opacity:.55"><div class="lvl" style="background:var(--idle)"></div><div class="tm">14:05:31</div><div class="ms"><strong>内长宽 / 工位2</strong> 上料架补料完成（已恢复）</div><span class="tag">已恢复</span></div>
+                <div class="alarm-item" style="opacity:.55"><div class="lvl" style="background:var(--idle)"></div><div class="tm">13:51:02</div><div class="ms">PLC 读取超时 1 次，重试成功</div><span class="tag">已恢复</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== 线体管理 ===== -->
+        <section class="page" id="p-line">
+          <div class="two-col" style="grid-template-columns:1.4fr 1fr">
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">线体列表</span><div class="spacer"></div><button class="btn sm"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增线体</button></div>
+              <div class="panel-b flush">
+                <table>
+                  <thead><tr><th>编码</th><th>名称</th><th>扫码枪</th><th>PLC</th><th>AGV</th><th>状态</th></tr></thead>
+                  <tbody>
+                    <tr class="row-sel"><td class="mono">LINE01</td><td>CNC检测自动化线</td><td>否</td><td class="mono">PLC-1</td><td>无</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>启用</span></td></tr>
+                    <tr><td class="mono">LINE02</td><td>电极加工线</td><td>是</td><td class="mono">PLC-2</td><td class="mono">AGV-1</td><td><span class="badge"><span class="dot hollow"></span>禁用</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">编辑 · LINE01</span></div>
+              <div class="panel-b">
+                <div class="form-row"><label>线体名称<span class="req">*</span></label><input class="inp" value="CNC检测自动化线"></div>
+                <div class="form-row"><label>线体编码<span class="req">*</span></label><input class="inp mono" value="LINE01"></div>
+                <div class="form-row"><label>所在电脑</label><input class="inp" value="LINE-PC-01"></div>
+                <div class="form-row"><label>电脑 IP</label><input class="inp mono" value="192.168.1.20"></div>
+                <div class="form-row"><label>计划数量</label><input class="inp mono" value="2000"></div>
+                <div class="form-row"><label>扫码枪</label><select class="inp"><option>否</option><option>是</option></select></div>
+                <div class="form-row"><label>关联 PLC</label><select class="inp"><option>PLC-1 (192.168.1.10)</option></select></div>
+                <div class="form-row"><label>关联 AGV</label><select class="inp"><option>无</option></select></div>
+                <div class="form-row"><label></label><div style="flex:1;display:flex;gap:8px"><button class="btn">保存</button><button class="btn ghost">取消</button></div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== 工序管理 ===== -->
+        <section class="page" id="p-craft">
+          <div class="panel">
+            <div class="panel-h"><span class="t">工序列表</span>
+              <select class="inp sm" style="height:24px;max-width:200px;margin-left:8px"><option>线体：CNC检测自动化线</option></select>
+              <div class="spacer"></div><button class="btn sm"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增工序</button></div>
+            <div class="panel-b flush">
+              <table>
+                <thead><tr><th class="num">排序</th><th>编号</th><th>名称</th><th>类型</th><th>所属线体</th><th>自动发送</th><th>优先级</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr><td class="num">1</td><td class="mono">CW01</td><td>检测</td><td><span class="badge"><span class="dot" style="background:var(--accent)"></span>品质检测</span></td><td>CNC检测自动化线</td><td>是</td><td class="num">0</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>启用</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel" style="max-width:520px">
+            <div class="panel-h"><span class="t">编辑 · CW01</span></div>
+            <div class="panel-b">
+              <div class="form-row"><label>所属线体<span class="req">*</span></label><select class="inp"><option>CNC检测自动化线 (LINE01)</option></select></div>
+              <div class="form-row"><label>工序名称<span class="req">*</span></label><input class="inp" value="检测"></div>
+              <div class="form-row"><label>工序类型</label><select class="inp"><option>品质检测</option><option>加工</option></select></div>
+              <div class="form-row"><label>工序排序</label><input class="inp mono" value="1"></div>
+              <div class="form-row"><label>同序优先级</label><input class="inp mono" value="0"></div>
+              <div class="form-row"><label>自动发送</label><select class="inp"><option>是</option><option>否</option></select></div>
+              <div class="form-row"><label></label><div style="flex:1;display:flex;gap:8px"><button class="btn">保存</button><button class="btn ghost">取消</button></div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== 机台管理 ===== -->
+        <section class="page" id="p-eq">
+          <div class="panel">
+            <div class="panel-h"><span class="t">机台列表</span>
+              <select class="inp sm" style="height:24px;max-width:200px;margin-left:8px"><option>工序：检测 (CW01)</option></select>
+              <div class="spacer"></div><button class="btn sm"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增机台</button></div>
+            <div class="panel-b flush">
+              <table>
+                <thead><tr><th>编号</th><th>名称</th><th>编码</th><th>类型</th><th>所属工序</th><th>所属 PLC</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr class="row-sel"><td class="mono">EQ01</td><td>内长宽</td><td class="mono">M-NCK</td><td>检测</td><td>检测</td><td class="mono">内长宽PLC · .11</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>启用</span></td></tr>
+                  <tr><td class="mono">EQ02</td><td>平面度</td><td class="mono">M-PMD</td><td>检测</td><td>检测</td><td class="mono">平面度PLC · .12</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>启用</span></td></tr>
+                  <tr><td class="mono">EQ03</td><td>A基准</td><td class="mono">M-ABASE</td><td>检测</td><td>检测</td><td class="mono">A基准PLC · .13</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>启用</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="two-col">
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">加工位（自动 2 位）· EQ01</span></div>
+              <div class="panel-b flush"><table>
+                <thead><tr><th>名称</th><th>编码</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr><td>工位1</td><td class="mono">EQ01-P1</td><td><span class="badge"><span class="dot" style="background:var(--idle)"></span>空闲可用</span></td></tr>
+                  <tr><td>工位2</td><td class="mono">EQ01-P2</td><td><span class="badge"><span class="dot" style="background:var(--idle)"></span>空闲可用</span></td></tr>
+                </tbody></table></div>
+            </div>
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">关联料架</span><div class="spacer"></div><button class="btn ghost sm">配置</button></div>
+              <div class="panel-b">
+                <div class="form-row"><label>上料架</label><span class="badge role-up"><span class="dot" style="background:var(--run)"></span>上料总架 (FR-IN-01)</span></div>
+                <div class="form-row"><label>下料架</label><span class="badge role-down"><span class="dot" style="background:var(--warn)"></span>中转架 (FR-MID-01)</span></div>
+                <div class="hint" style="margin-top:6px">机台新增时自动建 2 个加工位；点位映射在 PLC 管理页维护。</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== PLC 管理 ===== -->
+        <section class="page" id="p-plc">
+          <div class="panel">
+            <div class="panel-h"><span class="t">PLC 列表（一机一 PLC，IP 各异）</span><div class="spacer"></div>
+              <span class="badge" style="color:var(--ok);border-color:var(--ok)"><span class="dot" style="background:var(--ok)"></span>3 / 3 在线</span>
+              <button class="btn ghost sm" style="margin-left:8px">全部连接</button>
+              <button class="btn sm" style="margin-left:6px"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增 PLC</button></div>
+            <div class="panel-b flush"><table>
+              <thead><tr><th>PLC</th><th>对应机台</th><th>IP</th><th class="num">端口</th><th>协议</th><th>状态</th><th class="num">心跳</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr class="row-sel"><td>内长宽PLC</td><td>内长宽 (EQ01)</td><td class="mono">192.168.1.11</td><td class="num">502</td><td>ModbusTCP</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>已连接</span></td><td class="num">001482</td><td><button class="btn ghost sm">断开</button></td></tr>
+                <tr><td>平面度PLC</td><td>平面度 (EQ02)</td><td class="mono">192.168.1.12</td><td class="num">502</td><td>ModbusTCP</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>已连接</span></td><td class="num">001479</td><td><button class="btn ghost sm">断开</button></td></tr>
+                <tr><td>A基准PLC</td><td>A基准 (EQ03)</td><td class="mono">192.168.1.13</td><td class="num">502</td><td>ModbusTCP</td><td><span class="badge"><span class="dot" style="background:var(--ok)"></span>已连接</span></td><td class="num">001481</td><td><button class="btn ghost sm">断开</button></td></tr>
+              </tbody></table></div>
+          </div>
+
+          <div class="two-col" style="grid-template-columns:1.5fr 1fr">
+            <!-- 读 -->
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">读操作 · 点位实时值</span>
+                <select class="inp sm" style="height:24px;max-width:180px;margin-left:8px"><option>内长宽 (EQ01) · PLC .11</option><option>平面度 (EQ02) · PLC .12</option><option>A基准 (EQ03) · PLC .13</option></select>
+                <div class="spacer"></div><button class="btn ghost sm">单次读</button><button class="btn sm" style="margin-left:6px">轮询中</button></div>
+              <div class="panel-b flush" style="max-height:330px;overflow:auto"><table>
+                <thead><tr><th>信号</th><th>加工位</th><th>寄存器</th><th class="num">原始</th><th>语义</th></tr></thead>
+                <tbody>
+                  <tr><td>门开关</td><td>—</td><td class="mono">D1000</td><td class="num">2</td><td><span style="color:var(--ok)">闭合 OFF</span></td></tr>
+                  <tr><td>机台安全</td><td>—</td><td class="mono">D1002</td><td class="num">1</td><td><span style="color:var(--ok)">安全 ON</span></td></tr>
+                  <tr><td>有料</td><td>工位1</td><td class="mono">D1004</td><td class="num">1</td><td><span style="color:var(--ok)">有料 ON</span></td></tr>
+                  <tr><td>允许上料</td><td>工位1</td><td class="mono">D1006</td><td class="num">2</td><td style="color:var(--fg-muted)">OFF</td></tr>
+                  <tr><td>检测 OK</td><td>工位1</td><td class="mono">D1008</td><td class="num">2</td><td style="color:var(--fg-muted)">OFF</td></tr>
+                  <tr><td>检测 NG</td><td>工位1</td><td class="mono">D1010</td><td class="num">2</td><td style="color:var(--fg-muted)">OFF</td></tr>
+                  <tr><td>有料</td><td>工位2</td><td class="mono">D1012</td><td class="num">2</td><td style="color:var(--fg-muted)">OFF</td></tr>
+                  <tr><td>允许上料</td><td>工位2</td><td class="mono">D1014</td><td class="num">1</td><td><span style="color:var(--ok)">允许 ON</span></td></tr>
+                  <tr><td>检测 OK</td><td>工位2</td><td class="mono">D1016</td><td class="num">2</td><td style="color:var(--fg-muted)">OFF</td></tr>
+                  <tr><td>检测 NG</td><td>工位2</td><td class="mono">D1018</td><td class="num">2</td><td style="color:var(--fg-muted)">OFF</td></tr>
+                </tbody></table></div>
+            </div>
+            <!-- 写 -->
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">写操作 · 测试启动</span></div>
+              <div class="panel-b">
+                <div class="form-row"><label>机台</label><select class="inp"><option>内长宽 (EQ01)</option></select></div>
+                <div class="form-row"><label>信号</label><select class="inp"><option>工位1 测试启动 (D1100)</option><option>工位2 测试启动 (D1102)</option></select></div>
+                <div class="form-row"><label>写入值</label><select class="inp mono"><option>1 = 启动</option><option>2 = 关闭</option></select></div>
+                <div class="form-row"><label></label><div style="flex:1;display:flex;gap:8px">
+                  <button class="btn danger"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>下发（需确认）</button>
+                  <button class="btn ghost">回读校验</button></div></div>
+                <div class="hint" style="margin-top:4px">写 PLC 会驱动真实机台动作，下发前二次确认并记录操作人与流水。</div>
+                <div style="margin-top:12px">
+                  <div style="font-size:12px;color:var(--fg-muted);margin-bottom:6px">操作流水</div>
+                  <div class="mono" style="font-size:11px;line-height:1.9;color:var(--fg-muted);background:#1E2329;color:#C7CDD4;padding:8px 10px;border-radius:3px">
+                    14:31:02 W D1100=1 OK 回读=1<br>14:29:48 W D1102=2 OK 回读=2<br>14:27:15 R D1008 =2 12ms<br>14:26:50 W D1100=2 OK
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== AGV 管理（仅测试） ===== -->
+        <section class="page" id="p-agv">
+          <div class="panel" style="max-width:680px">
+            <div class="panel-h"><span class="t">AGV 连通性测试</span><span class="tag" style="margin-left:6px">仅测试，不纳入调度</span></div>
+            <div class="panel-b">
+              <div class="form-row"><label>名称</label><input class="inp" value="AGV-1"></div>
+              <div class="form-row"><label>通信方式</label><select class="inp"><option>HTTP REST</option><option>Socket</option></select></div>
+              <div class="form-row"><label>地址</label><input class="inp mono" value="http://192.168.1.30:8080"></div>
+              <div class="form-row"><label>用户名</label><input class="inp" value="agv_user"></div>
+              <div class="form-row"><label>密码</label><input class="inp" type="password" value="******"></div>
+              <div class="form-row"><label></label><div style="flex:1"><button class="btn"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg>测试连接</button></div></div>
+            </div>
+            <div class="panel-h" style="border-top:1px solid var(--border)"><span class="t">测试结果</span><span class="badge" style="margin-left:8px;color:var(--ok);border-color:var(--ok)"><span class="dot" style="background:var(--ok)"></span>连通 86ms</span></div>
+            <div class="panel-b"><div class="mono" style="font-size:11px;background:#1E2329;color:#C7CDD4;padding:10px;border-radius:3px;line-height:1.8">
+              &gt; GET /api/agv/status<br>&lt; 200 OK 86ms<br>&lt; {"agv":"AGV-1","state":"idle","battery":78}</div></div>
+          </div>
+        </section>
+
+        <!-- ===== 扫码枪管理（仅测试） ===== -->
+        <section class="page" id="p-scan">
+          <div class="panel" style="max-width:680px">
+            <div class="panel-h"><span class="t">扫码枪连通性测试</span><span class="tag" style="margin-left:6px">仅测试，不纳入来料校验</span></div>
+            <div class="panel-b">
+              <div class="form-row"><label>模式</label><select class="inp"><option>TCP 服务端（被动接收）</option><option>TCP 客户端（主动连）</option></select></div>
+              <div class="form-row"><label>监听端口</label><input class="inp mono" value="9100"></div>
+              <div class="form-row"><label></label><div style="flex:1;display:flex;gap:8px"><button class="btn">开始监听</button><button class="btn ghost">停止</button></div></div>
+            </div>
+            <div class="panel-h" style="border-top:1px solid var(--border)"><span class="t">连接 / 最近扫码</span><span class="badge" style="margin-left:8px;color:var(--ok);border-color:var(--ok)"><span class="dot" style="background:var(--ok)"></span>已连接 1</span></div>
+            <div class="panel-b flush"><table>
+              <thead><tr><th>时间</th><th>来源</th><th>扫码内容</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">14:31:40</td><td class="mono">192.168.1.41</td><td class="mono">WF-2207-A12</td></tr>
+                <tr><td class="mono">14:30:11</td><td class="mono">192.168.1.41</td><td class="mono">WF-2206-A12</td></tr>
+              </tbody></table></div>
+          </div>
+        </section>
+
+        <!-- ===== 料架管理 ===== -->
+        <section class="page" id="p-frame">
+          <div class="two-col" style="grid-template-columns:1fr 1fr">
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">料架列表</span><div class="spacer"></div><button class="btn sm"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新增</button></div>
+              <div class="panel-b flush"><table>
+                <thead><tr><th>名称</th><th>识别码</th><th class="num">布局</th><th class="num">槽位</th><th class="num">占用</th></tr></thead>
+                <tbody>
+                  <tr class="row-sel"><td>上料总架</td><td class="mono">FR-IN-01</td><td class="num">2×5</td><td class="num">10</td><td class="num">6</td></tr>
+                  <tr><td>中转架</td><td class="mono">FR-MID-01</td><td class="num">1×4</td><td class="num">4</td><td class="num">1</td></tr>
+                  <tr><td>下料总架</td><td class="mono">FR-OUT-01</td><td class="num">2×4</td><td class="num">8</td><td class="num">0</td></tr>
+                </tbody></table></div>
+            </div>
+            <div class="panel" style="margin:0">
+              <div class="panel-h"><span class="t">绑定关系 · 中转架（一架两用）</span></div>
+              <div class="panel-b flush"><table>
+                <thead><tr><th>机台</th><th>角色</th></tr></thead>
+                <tbody>
+                  <tr><td>内长宽 (EQ01)</td><td><span class="badge role-down"><span class="dot" style="background:var(--warn)"></span>下料架</span></td></tr>
+                  <tr><td>A基准 (EQ03)</td><td><span class="badge role-up"><span class="dot" style="background:var(--run)"></span>上料架</span></td></tr>
+                </tbody></table>
+                <div class="hint" style="margin:10px 12px">同一料架同时作为内长宽的下料架与 A基准的上料架，实现工序间中转。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-h"><span class="t">槽位与电极追踪 · 上料总架（2 层 × 5，初始入库 6 / 10）</span>
+              <div class="spacer"></div>
+              <span style="color:var(--fg-muted);font-size:12px">电极反查</span>
+              <input class="inp mono sm" id="eq-find" style="height:24px;width:90px;margin-left:6px" placeholder="电极ID" value="E03">
+              <button class="btn sm" style="margin-left:6px" onclick="findElectrode()">查询</button></div>
+            <div class="panel-b">
+              <div id="slots" style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="tag" style="width:40px;text-align:center">1 层</span>
+                  <div class="slots" style="grid-template-columns:repeat(5,1fr);flex:1">
+                    <div class="slot occ" data-eid="E01"><div class="no">1层1位</div><div class="eid">E01</div></div>
+                    <div class="slot occ" data-eid="E02"><div class="no">1层2位</div><div class="eid">E02</div></div>
+                    <div class="slot occ" data-eid="E03"><div class="no">1层3位</div><div class="eid">E03</div></div>
+                    <div class="slot occ" data-eid="E04"><div class="no">1层4位</div><div class="eid">E04</div></div>
+                    <div class="slot occ" data-eid="E05"><div class="no">1层5位</div><div class="eid">E05</div></div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="tag" style="width:40px;text-align:center">2 层</span>
+                  <div class="slots" style="grid-template-columns:repeat(5,1fr);flex:1">
+                    <div class="slot occ" data-eid="E06"><div class="no">2层1位</div><div class="eid">E06</div></div>
+                    <div class="slot empty" data-eid=""><div class="no">2层2位</div><div class="eid">空</div></div>
+                    <div class="slot empty" data-eid=""><div class="no">2层3位</div><div class="eid">空</div></div>
+                    <div class="slot empty" data-eid=""><div class="no">2层4位</div><div class="eid">空</div></div>
+                    <div class="slot empty" data-eid=""><div class="no">2层5位</div><div class="eid">空</div></div>
+                  </div>
+                </div>
+              </div>
+              <div class="hint" id="find-result" style="margin-top:12px">电极 <strong class="mono">E03</strong> 当前位置：<strong>上料总架 · 1 层 3 位</strong>　·　初始入库 6 个，空 4 槽（允许不放满）</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// 扁平导航切换（非树形）
+const titles={dash:'监控看板',line:'线体管理',craft:'工序管理',eq:'机台管理',plc:'PLC 管理',agv:'AGV 管理',scan:'扫码枪管理',frame:'料架管理'};
+document.querySelectorAll('#nav a').forEach(a=>{
+  a.addEventListener('click',()=>{
+    document.querySelectorAll('#nav a').forEach(x=>x.classList.remove('active'));
+    a.classList.add('active');
+    const p=a.dataset.p;
+    document.querySelectorAll('.page').forEach(s=>s.classList.remove('active'));
+    document.getElementById('p-'+p).classList.add('active');
+    document.getElementById('ptitle').textContent=titles[p];
+  });
+});
+// 电极反查高亮
+function findElectrode(){
+  const id=document.getElementById('eq-find').value.trim().toUpperCase();
+  let hit=null;
+  document.querySelectorAll('#slots .slot').forEach(s=>{
+    s.classList.remove('hi');
+    if(id && s.dataset.eid.toUpperCase()===id){s.classList.add('hi');hit=s.querySelector('.no').textContent;}
+  });
+  const r=document.getElementById('find-result');
+  r.innerHTML = hit ? ('电极 <strong class="mono">'+id+'</strong> 当前位置：<strong>上料总架 · '+hit.replace(/\s/g,'')+'</strong>')
+                    : ('未找到电极 <strong class="mono">'+(id||'(空)')+'</strong>（可能未入库或已取出）');
+}
+// 心跳 + 时钟
+let hb=1482;
+setInterval(()=>{document.getElementById('hb').textContent=String(++hb).padStart(6,'0');},1000);
+setInterval(()=>{const d=new Date();const p=n=>String(n).padStart(2,'0');
+  document.getElementById('clock').textContent=`2026-06-26 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;},1000);
+</script>
+</body>
+</html>

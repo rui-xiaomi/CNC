@@ -1,0 +1,62 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{5F7F071C-075F-40EB-9D90-08496C48E831}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CncLoader.App", "src\CncLoader.App\CncLoader.App.csproj", "{0C529E0C-23C6-48BD-9CB2-1260E87F7605}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CncLoader.UI", "src\CncLoader.UI\CncLoader.UI.csproj", "{ECF294D7-D356-4A6B-A455-1D32D7B92570}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CncLoader.Core", "src\CncLoader.Core\CncLoader.Core.csproj", "{360F055C-8F93-44F2-A84E-89EC66BB9F2E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CncLoader.Communication", "src\CncLoader.Communication\CncLoader.Communication.csproj", "{4A5E707E-0CB1-4E8B-97C5-8678E08ECAE8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CncLoader.Data", "src\CncLoader.Data\CncLoader.Data.csproj", "{57B736F2-5818-4051-84CF-D0CDF43D9B60}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CncLoader.Common", "src\CncLoader.Common\CncLoader.Common.csproj", "{88E53684-E001-466E-BF4A-4EAA59179B33}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0C529E0C-23C6-48BD-9CB2-1260E87F7605}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C529E0C-23C6-48BD-9CB2-1260E87F7605}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C529E0C-23C6-48BD-9CB2-1260E87F7605}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C529E0C-23C6-48BD-9CB2-1260E87F7605}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ECF294D7-D356-4A6B-A455-1D32D7B92570}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ECF294D7-D356-4A6B-A455-1D32D7B92570}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ECF294D7-D356-4A6B-A455-1D32D7B92570}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ECF294D7-D356-4A6B-A455-1D32D7B92570}.Release|Any CPU.Build.0 = Release|Any CPU
+		{360F055C-8F93-44F2-A84E-89EC66BB9F2E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{360F055C-8F93-44F2-A84E-89EC66BB9F2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{360F055C-8F93-44F2-A84E-89EC66BB9F2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{360F055C-8F93-44F2-A84E-89EC66BB9F2E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4A5E707E-0CB1-4E8B-97C5-8678E08ECAE8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4A5E707E-0CB1-4E8B-97C5-8678E08ECAE8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4A5E707E-0CB1-4E8B-97C5-8678E08ECAE8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4A5E707E-0CB1-4E8B-97C5-8678E08ECAE8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{57B736F2-5818-4051-84CF-D0CDF43D9B60}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{57B736F2-5818-4051-84CF-D0CDF43D9B60}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{57B736F2-5818-4051-84CF-D0CDF43D9B60}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{57B736F2-5818-4051-84CF-D0CDF43D9B60}.Release|Any CPU.Build.0 = Release|Any CPU
+		{88E53684-E001-466E-BF4A-4EAA59179B33}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{88E53684-E001-466E-BF4A-4EAA59179B33}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{88E53684-E001-466E-BF4A-4EAA59179B33}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{88E53684-E001-466E-BF4A-4EAA59179B33}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{0C529E0C-23C6-48BD-9CB2-1260E87F7605} = {5F7F071C-075F-40EB-9D90-08496C48E831}
+		{ECF294D7-D356-4A6B-A455-1D32D7B92570} = {5F7F071C-075F-40EB-9D90-08496C48E831}
+		{360F055C-8F93-44F2-A84E-89EC66BB9F2E} = {5F7F071C-075F-40EB-9D90-08496C48E831}
+		{4A5E707E-0CB1-4E8B-97C5-8678E08ECAE8} = {5F7F071C-075F-40EB-9D90-08496C48E831}
+		{57B736F2-5818-4051-84CF-D0CDF43D9B60} = {5F7F071C-075F-40EB-9D90-08496C48E831}
+		{88E53684-E001-466E-BF4A-4EAA59179B33} = {5F7F071C-075F-40EB-9D90-08496C48E831}
+	EndGlobalSection
+EndGlobal
