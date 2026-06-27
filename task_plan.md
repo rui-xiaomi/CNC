@@ -26,7 +26,7 @@
 
 ## Phases
 
-### Phase 1 — 基础架构搭建　Status: 待用户确认（全部验收项通过）
+### Phase 1 — 基础架构搭建　Status: 已确认
 完成后**必须暂停演示等用户确认**。
 - [x] 1.1 建 sln + 6 工程，配置 TFM/UseWPF，加 NuGet 依赖，构建通过（0 警告 0 错误）
 - [x] 1.2 Common：appsettings+AppOptions、Serilog、ISecretProtector(DPAPI)、ICurrentUser、连接串工厂
@@ -46,8 +46,23 @@
 6. 内置模拟器可启动，NModbusPlcClient 连上并读到一个 D 寄存器
 7. 日志文件生成；敏感配置密文存储
 
-### Phase 2 — PLC 管理模块（优先）　Status: pending
+### Phase 2 — PLC 管理模块（优先）　Status: 待用户确认（全部验收项通过）
 连接管理 / 在线离线检测 / 读操作界面 / 写操作界面(危险二次确认+先落流水) / 点位映射维护 / 通信日志+告警 / 多 PLC 切换。借中枢与模拟器自测。
+
+- [x] 2.1 Core：IPlcCatalogService/IPlcConnectionService/IPlcOperationService/IPlcPointManagementService/IDeviceLogStore/IAlarmEventService + 信号表模板
+- [x] 2.2 Data：PlcCatalogService/PlcPointManagementService/DeviceLogStore(落库)/AlarmEventService
+- [x] 2.3 Communication：PlcConnectionService/PlcOperationService(写先落流水)/CompositeDeviceLogger/PlcEndpointResolver
+- [x] 2.4 UI：PlcViewModel 全功能 + 页面模板（PLC列表/读面板/写面板/点位映射/告警/流水）
+- [x] 2.5 Phase 2 验收：构建✓ 启动✓ 3PLC在线✓ 读点位✓ 写二次确认+流水✓ 点位导入/删除✓ 告警落库✓
+
+#### Phase 2 验收清单
+1. dotnet build 全解决方案通过（0 警告 0 错误）
+2. PLC 管理页：3 台 PLC 列表、连接状态灯、逐台/全部建链断开
+3. 读面板：选机台 → 单次读/周期轮询 → 原始值+语义值（ON 绿 OFF 灰）
+4. 写面板：选测试启动信号 → 二次确认 → 先落 MAS_AUTO_DEVICE_LOG → 下发 → 回读校验
+5. 点位映射：列表展示、信号表批量导入、软删除
+6. 通信流水实时展示；通信失败写入 MAS_AUTO_ALARM_EVENT
+7. 多 PLC 切换（机台下拉/列表选中联动）
 
 ### Phase 3 — 配置管理模块　Status: pending
 线体/工序/机台/加工位/料架管理页（独立页面、下拉建层级、非树），含一架两用绑定与电极分层槽位追踪+反查。
