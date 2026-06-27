@@ -217,7 +217,7 @@
 
                     <!-- 写操作 -->
                     <TabItem Header="写操作">
-                        <Grid Margin="14">
+                        <Grid Margin="14" VerticalAlignment="Top">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="1*" MinWidth="320"/>
                                 <ColumnDefinition Width="1*"/>
@@ -256,10 +256,10 @@
                                                Style="{StaticResource MutedText}" TextWrapping="Wrap"/>
                                 </Border>
                             </StackPanel>
-                            <DockPanel Grid.Column="1">
+                            <DockPanel Grid.Column="1" VerticalAlignment="Top">
                                 <TextBlock DockPanel.Dock="Top" Text="操作流水" Style="{StaticResource MutedText}" Margin="0,0,0,6"/>
                                 <Border Background="{StaticResource TermBrush}" BorderBrush="{StaticResource BorderBrush}"
-                                        BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8" Height="200">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <ItemsControl ItemsSource="{Binding LogLines}">
                                             <ItemsControl.ItemTemplate>
@@ -298,7 +298,7 @@
         <Grid Margin="2">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
@@ -344,7 +344,7 @@
                     </Grid>
                     <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
                     <DataGrid ItemsSource="{Binding PointRows}" SelectedItem="{Binding SelectedPoint}"
-                              Style="{StaticResource DataGridCompact}"
+                              Style="{StaticResource DataGridCompact}" RowHeight="30" MaxHeight="360"
                               IsReadOnly="False" CanUserAddRows="False">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="50" IsReadOnly="True">

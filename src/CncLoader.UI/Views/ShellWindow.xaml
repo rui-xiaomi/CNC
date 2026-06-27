@@ -49,7 +49,7 @@
                               Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"
                               Data="M9,0 V2 M9,16 V18 M0,9 H2 M16,9 H18"/>
                     </Grid>
-                    <TextBlock Text="CNC 自动化上下料客户端" Foreground="White"
+                    <TextBlock Text="CNC 自动化上下料客户端" Foreground="{StaticResource ChromeFgBrush}"
                                FontFamily="{StaticResource FontCond}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <TextBlock Text="v1.0" Foreground="{StaticResource ChromeFgDimBrush}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
@@ -63,8 +63,9 @@
                     </StackPanel>
                 </Border>
 
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
-                    <Ellipse Width="8" Height="8" Margin="0,0,6,0">
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center">
                         <Ellipse.Style>
                             <Style TargetType="Ellipse">
                                 <Setter Property="Fill" Value="{StaticResource AlarmBrush}"/>
@@ -76,9 +77,12 @@
                             </Style>
                         </Ellipse.Style>
                     </Ellipse>
-                    <TextBlock Text="{Binding PlcStatusText}" Foreground="White" FontFamily="{StaticResource FontMono}" FontSize="12" VerticalAlignment="Center"/>
-                    <TextBlock Text="心跳" Foreground="{StaticResource ChromeFgBrush}" FontSize="12" Margin="14,0,4,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding HeartbeatText}" Foreground="White" FontFamily="{StaticResource FontMono}" FontSize="12" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding PlcStatusText}" Foreground="{StaticResource ChromeFgBrush}" FontFamily="{StaticResource FontMono}" FontSize="12" VerticalAlignment="Center"/>
+                    <TextBlock Text="在线" Foreground="{StaticResource ChromeFgDimBrush}" FontSize="12" Margin="4,0,0,0" VerticalAlignment="Center"/>
+
+                    <Rectangle Width="8" Height="8" Margin="16,0,5,0" Fill="{StaticResource AlarmBrush}" RadiusX="1" RadiusY="1" VerticalAlignment="Center"/>
+                    <TextBlock Text="告警" Foreground="{StaticResource ChromeFgBrush}" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <TextBlock Text="{Binding UnhandledAlarms}" Foreground="{StaticResource AlarmBrush}" FontFamily="{StaticResource FontMono}" FontSize="12" VerticalAlignment="Center"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="4" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
@@ -143,6 +147,9 @@
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" Margin="0,0,6,0"/>
                                 <TextBlock Text="PLC ModbusTCP" Style="{StaticResource MutedText}" Margin="0,0,18,0"/>
+                                <TextBlock Text="心跳" Style="{StaticResource MutedText}" Margin="0,0,4,0"/>
+                                <TextBlock Text="{Binding HeartbeatText}" FontFamily="{StaticResource FontMono}" FontSize="12"
+                                           Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Center" Margin="0,0,18,0"/>
                                 <TextBlock Text="{Binding Clock}" FontFamily="{StaticResource FontMono}" FontSize="12"
                                            Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Center"/>
                             </StackPanel>
