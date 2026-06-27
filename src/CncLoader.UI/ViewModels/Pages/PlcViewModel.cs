@@ -7,6 +7,7 @@ using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
+using CncLoader.UI.Views.Dialogs;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -177,14 +178,101 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         StatusMessage = "全部已断开";
     }
 
-    /// <summary>
-    /// 原型保留的"新增 PLC"按钮。完整 CRUD 表单将随机台管理页（Phase 3）一并实现。
-    /// </summary>
+    /// <summary>新增 PLC：弹出对话框，PlcId 取建议值，保存后刷新列表。</summary>
     [RelayCommand]
-    private void AddPlc()
+    private async Task AddPlcAsync()
     {
-        HandyControl.Controls.Growl.Info(
-            "PLC 配置 CRUD（新增/编辑/删除）将随机台管理页在 Phase 3 一并实现。\n当前可在 cnc_schema.sql 种子数据或直接修改 MAS_AUTO_WORKLINE_PLC 表。");
+        try
+        {
+            var suggestedId = await _catalog.SuggestNextPlcIdAsync();
+            var equipments = await _catalog.GetEquipmentsAsync();
+            var dlg = new PlcEditDialog(suggestedId, equipments) { Owner = Application.Current?.MainWindow };
+            if (dlg.ShowDialog() != true || dlg.Result is null) return;
+
+            await _catalog.SaveAsync(dlg.Result, _user.Name);
+            if (dlg.Result.BoundEquipmentId is not null)
+                await _catalog.BindEquipmentAsync(dlg.Result.PlcId, dlg.Result.BoundEquipmentId, _user.Name);
+            HandyControl.Controls.Growl.Success($"PLC {dlg.Result.Name} 已新增。");
+            StatusMessage = $"PLC {dlg.Result.Name} 已新增";
+            await ReloadAllAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"新增失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>编辑 PLC：PlcId 只读，保存后若在线则断开（避免配置与连接不同步）。</summary>
+    [RelayCommand]
+    private async Task EditPlcAsync(PlcRowVm? row)
+    {
+        if (row is null) return;
+        try
+        {
+            var edit = await _catalog.GetByIdAsync(row.PlcId);
+            if (edit is null)
+            {
+                HandyControl.Controls.Growl.Warning("该 PLC 不存在或已删除。");
+                await ReloadAllAsync();
+                return;
+            }
+            var suggestedId = await _catalog.SuggestNextPlcIdAsync();
+            // 查 PLC 当前被哪台机台引用（一机一 PLC，业务链机台→PLC）；机台下拉含"未绑定"，可在 PLC 侧反向改机台绑定
+            var equipments = await _catalog.GetEquipmentsAsync();
+            var bound = equipments.FirstOrDefault(e => e.PlcId == row.PlcId);
+            var dlg = new PlcEditDialog(edit, suggestedId, equipments, bound?.Id) { Owner = Application.Current?.MainWindow };
+            if (dlg.ShowDialog() != true || dlg.Result is null) return;
+
+            if (_connections.IsConnected(row.PlcId))
+            {
+                await _connections.DisconnectAsync(row.PlcId);
+                StatusMessage = "配置已变更，已断开连接，请重新连接。";
+            }
+            await _catalog.SaveAsync(dlg.Result, _user.Name);
+            await _catalog.BindEquipmentAsync(row.PlcId, dlg.Result.BoundEquipmentId, _user.Name);
+            HandyControl.Controls.Growl.Success($"PLC {dlg.Result.Name} 已更新。");
+            await ReloadAllAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"更新失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>删除 PLC：先做引用校验，可删则二次确认后软删（State='1'）。</summary>
+    [RelayCommand]
+    private async Task DeletePlcAsync(PlcRowVm? row)
+    {
+        if (row is null) return;
+        try
+        {
+            var check = await _catalog.CheckDeleteAsync(row.PlcId);
+            if (!check.CanDelete)
+            {
+                HandyControl.Controls.Growl.Warning(check.Message);
+                StatusMessage = check.Message;
+                return;
+            }
+            var msg = $"确认删除 PLC {row.Name}（PlcId={row.PlcId}）？\n删除后不可在列表中显示（软删，可在 DB 恢复）。";
+            if (HandyControl.Controls.MessageBox.Show(msg, "删除 PLC 二次确认",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
+
+            if (_connections.IsConnected(row.PlcId))
+                await _connections.DisconnectAsync(row.PlcId);
+
+            await _catalog.DeleteAsync(row.PlcId, _user.Name);
+            HandyControl.Controls.Growl.Success($"PLC {row.Name} 已删除。");
+            StatusMessage = $"PLC {row.Name} 已删除";
+            await ReloadAllAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+        }
     }
 
     [RelayCommand]

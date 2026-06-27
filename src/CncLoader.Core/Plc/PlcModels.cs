@@ -14,13 +14,28 @@ public sealed record PlcListItem(
     PlcLinkState LinkState,
     bool IsConnected);
 
-/// <summary>保存 PLC 配置。</summary>
+/// <summary>保存 PLC 配置。PlcId=0 表示新增（由调用方填入建议值或用户值后保存）。</summary>
 public sealed record PlcEditModel(
     long PlcId,
     string Name,
     string Ip,
     int Port,
-    string Protocol = "ModbusTCP");
+    string Protocol = "ModbusTCP")
+{
+    /// <summary>是否为新增模式（PlcId=0 视为新增，需唯一性校验与建议值）。</summary>
+    public bool IsNew => PlcId == 0;
+
+    /// <summary>对应机台 ID（一机一 PLC，反向绑定：把该机台的 PLC_ID 设为本 PLC）。
+    /// null 或 0 表示不绑定；保存后由 BindEquipmentAsync 落库。</summary>
+    public long? BoundEquipmentId { get; set; }
+}
+
+/// <summary>删除 PLC 前的引用校验结果。</summary>
+public sealed record PlcDeleteCheckResult(
+    bool CanDelete,
+    int EquipmentRefs,
+    int PointRefs,
+    string Message);
 
 /// <summary>
 /// 点位映射行（含 DB 主键，供维护界面）。
