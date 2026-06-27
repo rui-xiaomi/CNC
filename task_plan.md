@@ -64,8 +64,23 @@
 6. 通信流水实时展示；通信失败写入 MAS_AUTO_ALARM_EVENT
 7. 多 PLC 切换（机台下拉/列表选中联动）
 
-### Phase 3 — 配置管理模块　Status: pending
+### Phase 3 — 配置管理模块　Status: 待用户确认（按原型一比一开发完成）
 线体/工序/机台/加工位/料架管理页（独立页面、下拉建层级、非树），含一架两用绑定与电极分层槽位追踪+反查。
+
+- [x] 3.1 Core：ConfigModels（线体/工序/机台/料架 DTO）+ IWorkLineService/ICraftworkService/IEquipmentConfigService/IFrameService
+- [x] 3.2 Data：WorkLineService/CraftworkService（读+保存）、EquipmentConfigService（列表+加工位+关联料架）、FrameService（料架+绑定+分层槽位）；DI 注册
+- [x] 3.3 UI：WorkLine/Craftwork/Equipment/Frame 全功能 VM（列表/编辑/保存/级联过滤下拉/电极反查高亮）
+- [x] 3.4 UI：PageTemplates 按 prototype 一比一还原四页 DataTemplate（移除占位）+ 4 个展示转换器
+- [x] 3.5 Phase 3 验收：构建 0 警告 0 错误✓ 启动✓ DB 实连读种子（线体1/工序1/机台3/加工位6/料架3）✓ 四页 UIAutomation 截图核对与原型一致✓
+
+#### Phase 3 验收清单
+1. dotnet build 全解决方案 0 警告 0 错误
+2. 线体管理：列表 + 右编辑表单（名称/编码/电脑/IP/计划数/扫码枪/关联PLC），保存回写 MAS_AUTO_WORKLINECONFIGS
+3. 工序管理：列表按线体过滤 + 编辑表单，保存回写 MAS_AUTO_WORKLINE_CRAFTWORK
+4. 机台管理：列表按工序过滤 + 加工位（自动 2 位）+ 关联料架（上/下料架，一架两用）
+5. 料架管理：料架列表 + 绑定关系（一架两用）+ 分层槽位电极追踪 + 电极反查高亮
+6. 全部页读真实种子数据；线体/工序保存走 Growl + 状态条反馈
+7. 机台新增（模态对话框，保存自动建 2 加工位+绑PLC）/料架新增（预建层×每层槽位）/关联料架配置（写 MAS_AUTO_FRAME_BIND）均真写库——已实测：eq3→4(EQ04+工位1/2)、frame3→4(测试料架 2×5 预建10槽)，验证后已清理测试行还原种子
 
 ### Phase 4 — 核心上下料流程　Status: pending
 加工位级状态机、双工位并行调度、信号合成状态、电极槽位流转、加工记录。

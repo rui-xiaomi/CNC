@@ -19,6 +19,10 @@
     <conv:ResourceKeyToBrushConverter x:Key="BrushConv"/>
     <conv:BoolToOnOffConverter x:Key="PollConv"/>
     <conv:SemanticColorConverter x:Key="SemConv"/>
+    <conv:BoolToYesNoConverter x:Key="YesNoConv"/>
+    <conv:BoolToEnabledTextConverter x:Key="EnabledConv"/>
+    <conv:BoolToStatusBrushConverter x:Key="StatusBrushConv"/>
+    <conv:UploadRoleBrushConverter x:Key="RoleBrushConv"/>
 
     <!-- ===== 通用占位模板 ===== -->
     <DataTemplate x:Key="PlaceholderTemplate">
@@ -36,23 +40,544 @@
         </Grid>
     </DataTemplate>
 
-    <DataTemplate DataType="{x:Type p:WorkLineViewModel}">
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type p:CraftworkViewModel}">
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type p:EquipmentViewModel}">
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
-    </DataTemplate>
     <DataTemplate DataType="{x:Type p:AgvViewModel}">
         <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
     </DataTemplate>
     <DataTemplate DataType="{x:Type p:ScanViewModel}">
         <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
     </DataTemplate>
+
+    <!-- 启用/禁用 状态徽标（线体/工序/机台 列表共用） -->
+    <DataTemplate x:Key="EnabledBadge">
+        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
+                Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                         Fill="{Binding Enabled, Converter={StaticResource StatusBrushConv}}"/>
+                <TextBlock Text="{Binding Enabled, Converter={StaticResource EnabledConv}}" FontSize="12"/>
+            </StackPanel>
+        </Border>
+    </DataTemplate>
+
+    <!-- ============================================================
+         线体管理（左列表 + 右编辑表单，按原型一比一）
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type p:WorkLineViewModel}">
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.4*"/>
+                    <ColumnDefinition Width="1*" MinWidth="320"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 线体列表 -->
+                <Border Grid.Column="0" Style="{StaticResource Panel}" Margin="0,0,14,0" VerticalAlignment="Top">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                            <TextBlock Text="线体列表" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                            <Button Content="+ 新增线体" Style="{StaticResource PrimaryButton}" Padding="10,0"
+                                    Height="24" FontSize="12" HorizontalAlignment="Right" Margin="12,0"
+                                    Command="{Binding NewLineCommand}"/>
+                        </Grid>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <DataGrid ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}"
+                                  Style="{StaticResource DataGridCompact}" RowHeight="34" MaxHeight="320">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="编码" Binding="{Binding Code}" Width="100">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="扫码枪" Binding="{Binding ScanEnabled, Converter={StaticResource YesNoConv}}" Width="64"/>
+                                <DataGridTextColumn Header="PLC" Binding="{Binding PlcText}" Width="80">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="AGV" Binding="{Binding AgvText}" Width="70"/>
+                                <DataGridTemplateColumn Header="状态" Width="110" CellTemplate="{StaticResource EnabledBadge}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </Border>
+
+                <!-- 编辑表单 -->
+                <Border Grid.Column="1" Style="{StaticResource Panel}" VerticalAlignment="Top">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                            <TextBlock Text="{Binding EditTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                        </Grid>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <StackPanel Margin="14">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="线体名称" Style="{StaticResource MutedText}" VerticalAlignment="Center"/><TextBlock Text="*" Foreground="{StaticResource AlarmBrush}" Margin="2,0,0,0"/></StackPanel>
+                                <TextBox Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="线体编码" Style="{StaticResource MutedText}" VerticalAlignment="Center"/><TextBlock Text="*" Foreground="{StaticResource AlarmBrush}" Margin="2,0,0,0"/></StackPanel>
+                                <TextBox Grid.Column="1" Text="{Binding EditCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="所在电脑" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" Text="{Binding EditComputer, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="电脑 IP" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" Text="{Binding EditComputerIp, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="计划数量" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" Text="{Binding EditPlanNum, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="扫码枪" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding ScanOptions}" SelectedItem="{Binding SelectedScan}" Style="{StaticResource FormCombo}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="关联 PLC" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding PlcOptions}" SelectedItem="{Binding SelectedPlcOption}" DisplayMemberPath="DisplayName" Style="{StaticResource FormCombo}"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="84,0,0,0">
+                                <Button Content="保存" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"/>
+                                <Button Content="取消" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding CancelCommand}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="1" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+    <!-- ============================================================
+         工序管理（列表[按线体过滤] + 编辑表单，按原型一比一）
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type p:CraftworkViewModel}">
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- 工序列表 -->
+            <Border Grid.Row="0" Style="{StaticResource Panel}" Margin="0,0,0,14">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="工序列表" Style="{StaticResource PanelTitle}"/>
+                            <ComboBox ItemsSource="{Binding LineFilters}" SelectedItem="{Binding SelectedLineFilter}"
+                                      DisplayMemberPath="DisplayName" Style="{StaticResource FormCombo}"
+                                      Width="200" Height="26" FontSize="12" Margin="8,0,0,0"/>
+                        </StackPanel>
+                        <Button Content="+ 新增工序" Style="{StaticResource PrimaryButton}" Padding="10,0"
+                                Height="24" FontSize="12" HorizontalAlignment="Right" Margin="12,0"
+                                Command="{Binding NewCraftCommand}"/>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <DataGrid ItemsSource="{Binding Crafts}" SelectedItem="{Binding SelectedCraft}"
+                              Style="{StaticResource DataGridCompact}" RowHeight="34" MaxHeight="260">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="排序" Binding="{Binding Sort}" Width="56">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="HorizontalAlignment" Value="Right"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="编号" Binding="{Binding No}" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="110"/>
+                            <DataGridTemplateColumn Header="类型" Width="140">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
+                                                Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse Width="8" Height="8" Margin="0,0,6,0" Fill="{StaticResource AccentBrush}"/>
+                                                <TextBlock Text="{Binding TypeText}" FontSize="12"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="所属线体" Binding="{Binding LineName}" Width="*"/>
+                            <DataGridTextColumn Header="自动发送" Binding="{Binding AutoSend, Converter={StaticResource YesNoConv}}" Width="80"/>
+                            <DataGridTextColumn Header="优先级" Binding="{Binding Prior}" Width="64">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="HorizontalAlignment" Value="Right"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTemplateColumn Header="状态" Width="110" CellTemplate="{StaticResource EnabledBadge}"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Border>
+
+            <!-- 编辑表单 -->
+            <Border Grid.Row="1" Style="{StaticResource Panel}" MaxWidth="540" HorizontalAlignment="Left">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <TextBlock Text="{Binding EditTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <StackPanel Margin="14">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal"><TextBlock Text="所属线体" Style="{StaticResource MutedText}" VerticalAlignment="Center"/><TextBlock Text="*" Foreground="{StaticResource AlarmBrush}" Margin="2,0,0,0"/></StackPanel>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding LineOptions}" SelectedItem="{Binding SelectedEditLine}" DisplayMemberPath="DisplayName" Style="{StaticResource FormCombo}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal"><TextBlock Text="工序名称" Style="{StaticResource MutedText}" VerticalAlignment="Center"/><TextBlock Text="*" Foreground="{StaticResource AlarmBrush}" Margin="2,0,0,0"/></StackPanel>
+                            <TextBox Grid.Column="1" Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="工序类型" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding TypeOptions}" SelectedItem="{Binding SelectedType}" Style="{StaticResource FormCombo}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="工序排序" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding EditSort, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="同序优先级" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding EditPrior, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="自动发送" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding YesNoOptions}" SelectedItem="{Binding SelectedAutoSend}" Style="{StaticResource FormCombo}"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="84,0,0,0">
+                            <Button Content="保存" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"/>
+                            <Button Content="取消" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding CancelCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="3" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+    <!-- ============================================================
+         机台管理（列表[按工序过滤] + 加工位 + 关联料架，按原型一比一）
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type p:EquipmentViewModel}">
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- 机台列表 -->
+            <Border Grid.Row="0" Style="{StaticResource Panel}" Margin="0,0,0,14">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="机台列表" Style="{StaticResource PanelTitle}"/>
+                            <ComboBox ItemsSource="{Binding CraftFilters}" SelectedItem="{Binding SelectedCraftFilter}"
+                                      DisplayMemberPath="DisplayName" Style="{StaticResource FormCombo}"
+                                      Width="200" Height="26" FontSize="12" Margin="8,0,0,0"/>
+                        </StackPanel>
+                        <Button Content="+ 新增机台" Style="{StaticResource PrimaryButton}" Padding="10,0"
+                                Height="24" FontSize="12" HorizontalAlignment="Right" Margin="12,0"
+                                Command="{Binding AddEquipmentCommand}"/>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <DataGrid ItemsSource="{Binding Equipments}" SelectedItem="{Binding SelectedEquipment}"
+                              Style="{StaticResource DataGridCompact}" RowHeight="34" MaxHeight="220">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="编号" Binding="{Binding No}" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="100"/>
+                            <DataGridTextColumn Header="编码" Binding="{Binding Code}" Width="90">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="类型" Binding="{Binding TypeText}" Width="80"/>
+                            <DataGridTextColumn Header="所属工序" Binding="{Binding CraftName}" Width="100"/>
+                            <DataGridTextColumn Header="所属 PLC" Binding="{Binding PlcText}" Width="*">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTemplateColumn Header="状态" Width="110" CellTemplate="{StaticResource EnabledBadge}"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Border>
+
+            <!-- 加工位 + 关联料架 -->
+            <Grid Grid.Row="1" VerticalAlignment="Top">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource Panel}" Margin="0,0,7,0" VerticalAlignment="Top">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                            <TextBlock Text="{Binding PositionsTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                        </Grid>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <DataGrid ItemsSource="{Binding Positions}" Style="{StaticResource DataGridCompact}"
+                                  RowHeight="32" IsHitTestVisible="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="编码" Binding="{Binding Code}" Width="120">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTemplateColumn Header="状态" Width="140">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
+                                                    Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0" Stroke="{StaticResource IdleBrush}" StrokeThickness="1.5"/>
+                                                    <TextBlock Text="{Binding StateText}" FontSize="12"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </Border>
+
+                <Border Grid.Column="1" Style="{StaticResource Panel}" Margin="7,0,0,0" VerticalAlignment="Top">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                            <TextBlock Text="关联料架" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                            <Button Content="配置" Style="{StaticResource GhostButton}" Padding="10,0" Height="24"
+                                    FontSize="12" HorizontalAlignment="Right" Margin="12,0"
+                                    Command="{Binding ConfigureFrameCommand}"/>
+                        </Grid>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <StackPanel Margin="14">
+                            <ItemsControl ItemsSource="{Binding FrameBindings}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="64"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding RoleText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <Border Grid.Column="1" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
+                                                    Padding="8,2" HorizontalAlignment="Left">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                             Fill="{Binding IsUpload, Converter={StaticResource RoleBrushConv}}"/>
+                                                    <TextBlock Text="{Binding FrameDisplay}" FontSize="12"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Border Margin="0,6,0,0" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                <TextBlock Text="机台新增时自动建 2 个加工位；点位映射在 PLC 管理页的「点位映射」tab 维护。"
+                                           Style="{StaticResource MutedText}" TextWrapping="Wrap"/>
+                            </Border>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="2" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+    <!-- ============================================================
+         料架管理（列表 + 绑定关系 + 槽位电极分层追踪 + 电极反查，按原型一比一）
+         ============================================================ -->
     <DataTemplate DataType="{x:Type p:FrameViewModel}">
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 列表 + 绑定关系 -->
+            <Grid Grid.Row="0" Margin="0,0,0,14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource Panel}" Margin="0,0,7,0" VerticalAlignment="Top">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                            <TextBlock Text="料架列表" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                            <Button Content="+ 新增" Style="{StaticResource PrimaryButton}" Padding="10,0" Height="24"
+                                    FontSize="12" HorizontalAlignment="Right" Margin="12,0" Command="{Binding AddFrameCommand}"/>
+                        </Grid>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <DataGrid ItemsSource="{Binding Frames}" SelectedItem="{Binding SelectedFrame}"
+                                  Style="{StaticResource DataGridCompact}" RowHeight="34" MaxHeight="200">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="识别码" Binding="{Binding IdentifyCode}" Width="110">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="布局" Binding="{Binding LayoutText}" Width="64">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="HorizontalAlignment" Value="Right"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="槽位" Binding="{Binding SlotTotal}" Width="56">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="HorizontalAlignment" Value="Right"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="占用" Binding="{Binding Occupied}" Width="56">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="HorizontalAlignment" Value="Right"/></Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </Border>
+
+                <Border Grid.Column="1" Style="{StaticResource Panel}" Margin="7,0,0,0" VerticalAlignment="Top">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                            <TextBlock Text="{Binding BindingsTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                        </Grid>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <DataGrid ItemsSource="{Binding Bindings}" Style="{StaticResource DataGridCompact}"
+                                  RowHeight="34" IsHitTestVisible="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="机台" Binding="{Binding EquipmentDisplay}" Width="*"/>
+                                <DataGridTemplateColumn Header="角色" Width="130">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
+                                                    Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                                             Fill="{Binding IsUpload, Converter={StaticResource RoleBrushConv}}"/>
+                                                    <TextBlock Text="{Binding RoleText}" FontSize="12"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <!-- 槽位与电极追踪 + 反查 -->
+            <Border Grid.Row="1" Style="{StaticResource Panel}" VerticalAlignment="Top">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <TextBlock Text="{Binding SlotsTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="电极反查" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Text="{Binding ElectrodeQuery, UpdateSourceTrigger=PropertyChanged}" Width="100"
+                                     Height="26" FontSize="12" FontFamily="{StaticResource FontMono}" Margin="6,0,0,0"
+                                     VerticalContentAlignment="Center"/>
+                            <Button Content="查询" Style="{StaticResource PrimaryButton}" Padding="12,0" Height="26"
+                                    FontSize="12" Margin="6,0,0,0" Command="{Binding FindElectrodeCommand}"/>
+                        </StackPanel>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <StackPanel Margin="14">
+                        <ItemsControl ItemsSource="{Binding Layers}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <Border Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                                                BorderThickness="1" CornerRadius="4" Width="46" Height="46" Margin="0,0,8,0">
+                                            <TextBlock Text="{Binding LayerLabel}" Style="{StaticResource MutedText}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
+                                        </Border>
+                                        <ItemsControl ItemsSource="{Binding Slots}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border x:Name="slot" Width="78" Height="46" Margin="0,0,8,0" CornerRadius="4"
+                                                            BorderThickness="1" Background="{StaticResource SurfaceBrush}"
+                                                            BorderBrush="{StaticResource BorderBrush}">
+                                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                            <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{StaticResource FgMutedBrush}"
+                                                                       HorizontalAlignment="Center"/>
+                                                            <TextBlock x:Name="eid" Text="{Binding ElectrodeText}" FontFamily="{StaticResource FontMono}"
+                                                                       FontSize="13" HorizontalAlignment="Center" Foreground="{StaticResource FgBrush}"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding Occupied}" Value="True">
+                                                            <Setter TargetName="slot" Property="Background" Value="{StaticResource Surface2Brush}"/>
+                                                            <Setter TargetName="slot" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                                            <Setter TargetName="eid" Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Occupied}" Value="False">
+                                                            <Setter TargetName="eid" Property="Foreground" Value="{StaticResource FgMutedBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                                            <Setter TargetName="slot" Property="BorderBrush" Value="{StaticResource WarnBrush}"/>
+                                                            <Setter TargetName="slot" Property="BorderThickness" Value="2"/>
+                                                            <Setter TargetName="eid" Property="Foreground" Value="{StaticResource WarnBrush}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Border Margin="0,2,0,0" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1" CornerRadius="6" Padding="10,8">
+                            <TextBlock Text="{Binding FindResult}" Style="{StaticResource BodyText}" TextWrapping="Wrap"/>
+                        </Border>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </Grid>
     </DataTemplate>
 
     <!-- ============================================================

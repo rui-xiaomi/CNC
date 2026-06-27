@@ -1,30 +1,12 @@
 namespace CncLoader.UI.ViewModels.Pages;
 
-// Phase 1：8 个页面 ViewModel 占位。导航/路由/标题联动可用；具体功能在后续阶段实现。
-// PLC 管理为 Phase 2 优先模块。
+// 仍为占位的页面 ViewModel（监控看板为静态骨架；AGV/扫码枪 为 Phase 5）。
+// 线体/工序/机台/料架 的全功能 ViewModel 见各自独立文件。
 
 public sealed class DashboardViewModel : PageViewModelBase
 {
     public override string Key => "dash";
     public override string Title => "监控看板";
-}
-
-public sealed class WorkLineViewModel : PageViewModelBase
-{
-    public override string Key => "line";
-    public override string Title => "线体管理";
-}
-
-public sealed class CraftworkViewModel : PageViewModelBase
-{
-    public override string Key => "craft";
-    public override string Title => "工序管理";
-}
-
-public sealed class EquipmentViewModel : PageViewModelBase
-{
-    public override string Key => "eq";
-    public override string Title => "机台管理";
 }
 
 public sealed class AgvViewModel : PageViewModelBase
@@ -37,10 +19,4 @@ public sealed class ScanViewModel : PageViewModelBase
 {
     public override string Key => "scan";
     public override string Title => "扫码枪管理";
-}
-
-public sealed class FrameViewModel : PageViewModelBase
-{
-    public override string Key => "frame";
-    public override string Title => "料架管理";
 }

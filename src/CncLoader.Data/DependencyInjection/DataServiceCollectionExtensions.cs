@@ -29,6 +29,13 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<IDeviceLogStore, DeviceLogStore>();
         services.AddSingleton<IAlarmEventService, AlarmEventService>();
         services.AddSingleton<IPlcPointManagementService, PlcPointManagementService>();
+
+        // Phase 3 配置管理：线体/工序/机台/料架
+        services.AddSingleton<IWorkLineService, WorkLineService>();
+        services.AddSingleton<ICraftworkService, CraftworkService>();
+        services.AddSingleton<IEquipmentConfigService, EquipmentConfigService>();
+        services.AddSingleton<IFrameService, FrameService>();
+
         services.AddSingleton<IPlcCatalogService>(sp => new PlcCatalogService(
             sp.GetRequiredService<IDbContextFactory<CncDbContext>>(),
             () => sp.GetRequiredService<IPlcConnectionService>()));
