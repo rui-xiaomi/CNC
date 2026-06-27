@@ -23,6 +23,7 @@
     <conv:BoolToEnabledTextConverter x:Key="EnabledConv"/>
     <conv:BoolToStatusBrushConverter x:Key="StatusBrushConv"/>
     <conv:UploadRoleBrushConverter x:Key="RoleBrushConv"/>
+    <conv:InverseBoolConverter x:Key="InverseConv"/>
 
     <!-- ===== 通用占位模板 ===== -->
     <DataTemplate x:Key="PlaceholderTemplate">
@@ -40,11 +41,185 @@
         </Grid>
     </DataTemplate>
 
+    <!-- ============================================================
+         AGV 管理（连通性测试，仅测试，按原型一比一）
+         ============================================================ -->
     <DataTemplate DataType="{x:Type p:AgvViewModel}">
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="700" HorizontalAlignment="Left" VerticalAlignment="Top">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="AGV 连通性测试" Style="{StaticResource PanelTitle}"/>
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="2"
+                                    Padding="6,1" Margin="8,0,0,0" Background="{StaticResource SurfaceBrush}">
+                                <TextBlock Text="仅测试，不纳入调度" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+
+                    <!-- 表单 -->
+                    <StackPanel DockPanel.Dock="Top" Margin="14,12,14,8">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="名称" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="通信方式" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding CommWayOptions}" SelectedItem="{Binding SelectedCommWay}"
+                                      Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="地址" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="84,0,0,0">
+                            <Button Content="测试连接" Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding TestConnectionCommand}"
+                                    IsEnabled="{Binding IsTesting, Converter={StaticResource InverseConv}}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- 测试结果 -->
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="测试结果" Style="{StaticResource PanelTitle}"/>
+                            <Border BorderBrush="{Binding ResultBadgeBrushKey, Converter={StaticResource BrushConv}}"
+                                    BorderThickness="1" CornerRadius="2" Padding="6,1" Margin="8,0,0,0"
+                                    Background="{StaticResource SurfaceBrush}">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                             Fill="{Binding ResultBadgeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                    <TextBlock Text="{Binding ResultBadgeText}" FontSize="12"
+                                               Foreground="{Binding ResultBadgeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Background="{StaticResource TermBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
+                            Padding="10,8" Height="160">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding TerminalLines}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontFamily="{StaticResource FontMono}"
+                                                   FontSize="11" Foreground="#C7CDD4" LineHeight="18"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="1" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
     </DataTemplate>
+
+    <!-- ============================================================
+         扫码枪管理（连通性监听，仅测试，按原型一比一）
+         ============================================================ -->
     <DataTemplate DataType="{x:Type p:ScanViewModel}">
-        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlaceholderTemplate}"/>
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="700" HorizontalAlignment="Left" VerticalAlignment="Top">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="扫码枪连通性测试" Style="{StaticResource PanelTitle}"/>
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="2"
+                                    Padding="6,1" Margin="8,0,0,0" Background="{StaticResource SurfaceBrush}">
+                                <TextBlock Text="仅测试，不纳入来料校验" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+
+                    <!-- 表单 -->
+                    <StackPanel DockPanel.Dock="Top" Margin="14,12,14,12">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="模式" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding ModeOptions}" SelectedItem="{Binding SelectedMode}"
+                                      Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="监听端口" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="84,0,0,0">
+                            <Button Content="开始监听" Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding StartListenCommand}" IsEnabled="{Binding CanStart}"/>
+                            <Button Content="停止" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                    Command="{Binding StopListenCommand}" IsEnabled="{Binding CanStop}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- 连接 / 最近扫码 -->
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="连接 / 最近扫码" Style="{StaticResource PanelTitle}"/>
+                            <Border BorderBrush="{Binding StatusBadgeBrushKey, Converter={StaticResource BrushConv}}"
+                                    BorderThickness="1" CornerRadius="2" Padding="6,1" Margin="8,0,0,0"
+                                    Background="{StaticResource SurfaceBrush}">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                             Fill="{Binding StatusBadgeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                    <TextBlock Text="{Binding StatusBadgeText}" FontSize="12"
+                                               Foreground="{Binding StatusBadgeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                    <DataGrid DockPanel.Dock="Top" ItemsSource="{Binding ScanRows}"
+                              Style="{StaticResource DataGridCompact}" RowHeight="28" MaxHeight="220"
+                              IsHitTestVisible="False" Margin="0">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="100">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="来源" Binding="{Binding Source}" Width="160">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="扫码内容" Binding="{Binding Content}" Width="*">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="1" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
     </DataTemplate>
 
     <!-- 启用/禁用 状态徽标（线体/工序/机台 列表共用） -->

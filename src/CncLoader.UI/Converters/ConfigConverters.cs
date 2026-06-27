@@ -40,3 +40,11 @@ public sealed class UploadRoleBrushConverter : IValueConverter
     }
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
+
+/// <summary>bool 取反（用于 IsEnabled 绑定 IsTesting 等）。</summary>
+public sealed class InverseBoolConverter : IValueConverter
+{
+    public static readonly InverseBoolConverter Instance = new();
+    public object Convert(object? value, Type t, object? p, CultureInfo c) => value is not true;
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => value is not true;
+}

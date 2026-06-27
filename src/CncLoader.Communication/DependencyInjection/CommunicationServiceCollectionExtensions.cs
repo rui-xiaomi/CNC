@@ -1,4 +1,5 @@
 using CncLoader.Common.Configuration;
+using CncLoader.Communication.ExternalDevices;
 using CncLoader.Communication.Logging;
 using CncLoader.Communication.Plc;
 using CncLoader.Communication.Polling;
@@ -33,6 +34,10 @@ public static class CommunicationServiceCollectionExtensions
         services.AddSingleton<IPlcEndpointResolver, PlcEndpointResolver>();
         services.AddSingleton<IPlcConnectionService, PlcConnectionService>();
         services.AddSingleton<IPlcOperationService, PlcOperationService>();
+
+        // Phase 5 外设测试：AGV 连通性 + 扫码枪监听（仅测试，不纳入调度/来料校验）
+        services.AddSingleton<IAgvTestService, AgvTestService>();
+        services.AddSingleton<IScanListenerService, ScanListenerService>();
 
         services.AddSingleton(sp =>
         {

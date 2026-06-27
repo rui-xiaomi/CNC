@@ -118,6 +118,40 @@
 - 验证：`dotnet build` 0 警告 0 错误；SQL 等价 UpdateAsync（EQ02 改名/编码/PLC_ID=1）→ 仅名称/编码/类型/PLC 更新、EQUIMENT_NO 不变 ✓；还原种子 EQ01/02/03 → PLC1/2/3 ✓。
 - 待用户人工确认 UI：机台列表点"编辑" → 弹编辑对话框预填现值、编号只读、可改名称/编码/类型/工序/PLC → 保存回写。
 
+### Session 12 — 2026-06-27 Phase 5 外设测试页（AGV / 扫码枪）按原型一比一还原（代码）— 暂停等用户确认
+- 起因：用户要求优先开始 Phase 5 开发，客户端页面与原型一比一还原。
+- Core: 新建 `IExternalDeviceTestService.cs` — `IAgvTestService.TestConnectionAsync(AgvTestConfig)→AgvTestResult`；`IScanListenerService`（IsListening/ConnectedCount/Start/Stop/ScanReceived 事件/GetRecent）+ DTO `AgvTestConfig/AgvTestResult/ScanRecord/AgvCommWay(HttpRest,Socket)`。
+- Communication: 新建 `ExternalDevices/AgvTestService.cs`（HTTP REST GET，可选 Basic Auth，5s 超时；Socket 模式 TCP 连一次解析 host:port）；`ExternalDevices/ScanListenerService.cs`（TcpListener 监听端口，按 CR/LF 拆行，维护 ConcurrentQueue 最近 50 条 + 连接计数 + 事件）。`AddCncCommunication` 注册两服务单例。
+- UI: `AgvViewModel`/`ScanViewModel` 从 `PageViewModels.cs` 拆为独立文件并实现全功能。Agv：表单 5 字段 + TestConnectionCommand + TerminalLines 终端 + 状态徽标"连通 Nms/不通"。Scan：ModeOptions/Port + StartListen/StopListen 命令 + ScanRows 表 + 状态徽标"已连接 N"。ScanVM Dispose 取消订阅并停服务。
+- UI 模板: `PageTemplates.xaml` 移除 AGV/扫码枪占位模板，按 `docs/prototype/index.html` §AGV/扫码枪 一比一还原：单 panel max-width 700、表单字段左标签 84px、终端深色 TermBrush + mono 字体、状态徽标 Border+Ellipse+TextBlock、最近扫码 DataGrid。密码字段保留 PasswordBox 视觉但不绑（"仅测试连通"无需密码）。
+- 转换器: `ConfigConverters.cs` 加 `InverseBoolConverter`（含 Instance 单例），用于 IsTesting 时禁用测试按钮。
+- 验证：`dotnet build` 0 警告 0 错误；启动 App（PID 20828）窗口正常渲染、无 XAML/DI 异常、PLC 模拟器建链如常。
+- 待用户人工确认 UI：① AGV 页表单 + 测试连接按钮 + 终端结果；② 扫码枪页表单 + 开始监听/停止按钮 + 最近扫码表；③ 两页布局与原型一致。
+
+### Session 13 — 2026-06-27 修复 AGV 页导航栈溢出（PasswordBox 误用 TextBox 样式）（代码）— 暂停等用户确认
+- 起因：用户反馈点击 AGV 管理页"疯狂弹框报错无法创建新的堆栈防护页面"。
+- 根因：`PlcEditDialog`/`EquipmentEditDialog` 之前已修过 PasswordBox 样式问题，但 AGV 模板的密码字段仍用 `Style="{StaticResource FormInput}"`，而 FormInput 是 `TargetType=TextBox` 的样式，应用到 PasswordBox 抛 `XamlParseException: TextBox TargetType 与元素 PasswordBox 的类型不匹配`。全局异常处理器 `e.Handled=true` 后 WPF 重试渲染 → 再次抛 → 弹框循环 → 栈耗尽。
+- 修复：AGV 模板密码字段改用内联属性（Height/FontSize/Background/Foreground/BorderBrush/Padding），不再套 FormInput 样式。
+- 验证：`dotnet build` 0 警告 0 错误；启动 App（PID 18876）窗口正常渲染、无新异常日志（log_006 之后无新增），导航到 AGV 页不再弹框。
+- 待用户人工确认：点击 AGV 管理页能正常进入，无弹框。
+
+### Session 14 — 2026-06-27 AGV 页删除用户名/密码字段（代码）— 暂停等用户确认
+- 起因：用户要求删除 AGV 页面的用户名与密码两项（"仅测试连通"无需鉴权）。
+- 改动：
+  - Core: `AgvTestConfig` 去 `Username/Password`。
+  - Communication: `AgvTestService` 去 Basic Auth 逻辑与 `AuthenticationHeaderValue` using。
+  - UI: `AgvViewModel` 去 `Username/Password` 属性，`TestConnectionAsync` 不再传鉴权字段。
+  - 模板: `PageTemplates.xaml` AGV 表单去"用户名"和"密码"两行，"地址"后直接是"测试连接"按钮。
+- 验证：`dotnet build` 0 警告 0 错误。
+- 待用户人工确认：AGV 页表单只有 名称/通信方式/地址 三项 + 测试连接按钮。
+
+### Session 15 — 2026-06-27 AGV/扫码枪页布局左对齐（代码）— 暂停等用户确认
+- 起因：用户反馈 AGV 页与扫码枪页面板居中显示，与原型左上方不一致。
+- 根因：Border 用 `HorizontalAlignment="Stretch" + MaxWidth="700"`，Stretch 时剩余空间被分配导致视觉居中。
+- 修复：两页 Border 改 `HorizontalAlignment="Left"`，与原型 `max-width:700px` 左对齐一致。
+- 验证：`dotnet build` 0 警告 0 错误。
+- 待用户人工确认：AGV/扫码枪页面板贴左上方，不再居中。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - Phase 1/2 完成后暂停演示，Phase 3（配置管理）待用户确认。

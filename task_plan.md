@@ -90,8 +90,22 @@
 ### Phase 4 — 核心上下料流程　Status: pending
 加工位级状态机、双工位并行调度、信号合成状态、电极槽位流转、加工记录。
 
-### Phase 5 — 外设测试页　Status: pending
-AGV / 扫码枪连通性测试（仅测试）。
+### Phase 5 — 外设测试页　Status: 待用户确认（按原型一比一还原）
+AGV / 扫码枪连通性测试（仅测试，不纳入调度/来料校验）。
+
+- [x] 5.1 Core：`IExternalDeviceTestService` — `IAgvTestService`(TestConnectionAsync) + `IScanListenerService`(Start/Stop/ScanReceived 事件/GetRecent) + DTO(AgvTestConfig/AgvTestResult/ScanRecord/AgvCommWay)
+- [x] 5.2 Communication：`AgvTestService`（HTTP REST GET + 可选 Basic Auth；Socket 模式 TCP 连一次；5s 超时）；`ScanListenerService`（TCP 服务端监听，按 CR/LF 拆行，维护最近 50 条 + 连接计数）
+- [x] 5.3 UI：`AgvViewModel` 全功能（表单 5 字段 + 测试连接命令 + 终端结果 + 状态徽标"连通 Nms/不通"）；`ScanViewModel` 全功能（模式/端口 + 开始监听/停止 + 状态徽标"已连接 N" + 最近扫码表）；从 `PageViewModels.cs` 拆为独立文件
+- [x] 5.4 UI 模板：`PageTemplates.xaml` 移除 AGV/扫码枪占位模板，按 `docs/prototype/index.html` §AGV/扫码枪 一比一还原（单 panel max-width 700、表单 + 测试结果终端、状态徽标 + 最近扫码表）；密码字段保留 PasswordBox 视觉但不绑（"仅测试连通"无需密码）；加 `InverseBoolConverter` 用于测试中按钮禁用
+- [x] 5.5 Phase 5 验收：构建 0 警告 0 错误✓ 启动 App 无异常✓ DI 装配 IAgvTestService/IScanListenerService✓
+
+#### Phase 5 验收清单
+1. dotnet build 全解决方案 0 警告 0 错误
+2. AGV 管理：表单（名称/通信方式 HTTP REST·Socket/地址）+ "测试连接"按钮
+3. AGV 测试结果：状态徽标（连通 Nms 绿/不通 红）+ 终端展示 `> GET url` `< 200 OK Nms` `< {json}` 或 `< ERROR ...`
+4. 扫码枪管理：表单（模式 TCP 服务端·TCP 客户端 / 监听端口）+ "开始监听/停止"按钮
+5. 扫码枪连接/最近扫码：状态徽标"已连接 N"绿 + 表格 时间/来源/扫码内容（mono 字体）
+6. 两页布局按原型一比一：单 panel max-width 700、表单字段左标签 84px、终端深色 TermBrush
 
 ### Phase 6 — 联调验收　Status: pending
 现场真机联调、异常场景、地址表复核、验收要点核对。
