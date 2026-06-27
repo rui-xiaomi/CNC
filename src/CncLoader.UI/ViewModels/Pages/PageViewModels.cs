@@ -27,13 +27,6 @@ public sealed class EquipmentViewModel : PageViewModelBase
     public override string Title => "机台管理";
 }
 
-public sealed class PlcViewModel : PageViewModelBase
-{
-    public override string Key => "plc";
-    public override string Title => "PLC 管理";
-    public override string Description => "核心控制枢纽，Phase 2 优先开发：连接管理、在线/离线检测、读写界面、点位映射、通信日志与告警。";
-}
-
 public sealed class AgvViewModel : PageViewModelBase
 {
     public override string Key => "agv";

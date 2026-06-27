@@ -17,6 +17,7 @@ public static class UiServiceCollectionExtensions
         services.AddSingleton<CraftworkViewModel>();
         services.AddSingleton<EquipmentViewModel>();
         services.AddSingleton<PlcViewModel>();
+        services.AddSingleton<PointMappingViewModel>();
         services.AddSingleton<AgvViewModel>();
         services.AddSingleton<ScanViewModel>();
         services.AddSingleton<FrameViewModel>();

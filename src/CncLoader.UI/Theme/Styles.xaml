@@ -3,9 +3,10 @@
 
     <!-- 基础按钮模板：3px 圆角、30px 高、150ms 颜色过渡 -->
     <Style x:Key="PrimaryButton" TargetType="Button">
-        <Setter Property="Height" Value="30"/>
+        <Setter Property="Height" Value="32"/>
         <Setter Property="Padding" Value="12,0"/>
-        <Setter Property="Foreground" Value="White"/>
+        <Setter Property="Foreground" Value="{StaticResource AccentFgBrush}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
         <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
@@ -69,6 +70,67 @@
         <Setter Property="BorderBrush" Value="{StaticResource AlarmBrush}"/>
     </Style>
 
+    <!-- 表格：统一走 HandyControl 深色基线（与原型一致），仅叠加行为/字体设置。
+         旧自定义浅色表格样式与 DataGridColumnHeader 已移除，全局统一。 -->
+    <Style x:Key="DataGridCompact" TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
+        <Setter Property="AutoGenerateColumns" Value="False"/>
+        <Setter Property="CanUserAddRows" Value="False"/>
+        <Setter Property="SelectionMode" Value="Single"/>
+        <Setter Property="HeadersVisibility" Value="Column"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontSans}"/>
+        <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <!-- 下拉框 / 文本框：统一走 HandyControl 深色基线 -->
+    <Style x:Key="FormCombo" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="Height" Value="32"/>
+        <Setter Property="FontSize" Value="13"/>
+    </Style>
+
+    <Style x:Key="FormInput" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Setter Property="Height" Value="32"/>
+        <Setter Property="FontSize" Value="13"/>
+    </Style>
+
+    <!-- 日志抽屉 Expander：标题栏与 panel-h 一致；点击整行可展开；右侧 ▾ 视觉提示 -->
+    <Style x:Key="LogDrawer" TargetType="Expander">
+        <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
+        <Setter Property="BorderBrush" Value="{x:Null}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Expander">
+                    <DockPanel LastChildFill="True">
+                        <ToggleButton DockPanel.Dock="Top"
+                                      IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Background="Transparent" BorderThickness="0" Cursor="Hand">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="hdr" Background="{StaticResource Surface2Brush}" Height="34"
+                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                                        <ContentPresenter VerticalAlignment="Center" Margin="12,0"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="hdr" Property="Background" Value="{StaticResource Chrome2Brush}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                            <ContentPresenter ContentSource="Header"/>
+                        </ToggleButton>
+                        <ContentPresenter x:Name="body" Visibility="Collapsed"/>
+                    </DockPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="True">
+                            <Setter TargetName="body" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 面板 Panel：白底 + 1px 边框、无阴影 -->
     <Style x:Key="Panel" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
@@ -119,7 +181,7 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="bd" Property="Background" Value="#333A42"/>
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource Chrome2Brush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

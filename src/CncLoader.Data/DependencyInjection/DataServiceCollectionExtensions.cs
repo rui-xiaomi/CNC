@@ -26,6 +26,13 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<IPlcPointSource, PlcPointSource>();
         services.AddSingleton<IDataHealthProbe, DataHealthProbe>();
 
+        services.AddSingleton<IDeviceLogStore, DeviceLogStore>();
+        services.AddSingleton<IAlarmEventService, AlarmEventService>();
+        services.AddSingleton<IPlcPointManagementService, PlcPointManagementService>();
+        services.AddSingleton<IPlcCatalogService>(sp => new PlcCatalogService(
+            sp.GetRequiredService<IDbContextFactory<CncDbContext>>(),
+            () => sp.GetRequiredService<IPlcConnectionService>()));
+
         return services;
     }
 }

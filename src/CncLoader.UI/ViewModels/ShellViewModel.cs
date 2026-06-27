@@ -119,6 +119,7 @@ internal static class Icons
     public const string Craft = "M4,6 H20 V10 H4 Z M4,14 H14 V18 H4 Z";
     public const string Equipment = "M4,4 H20 V20 H4 Z M9,9 H15 V15 H9 Z";
     public const string Plc = "M3,6 H21 V18 H3 Z M7,10 V14 M11,10 V14 M15,10 V14";
+    public const string Point = "M4,5 H20 M4,9 H14 M4,13 H18 M4,17 H10 M17,15 L20,18 L17,21";
     public const string Agv = "M3,9 H17 V16 H3 Z M17,11 H20 L21,14 M6,16 a1.6,1.6 0 1 0 0.01,0 M14,16 a1.6,1.6 0 1 0 0.01,0";
     public const string Scan = "M4,7 V5 H7 M20,7 V5 H17 M4,17 V19 H7 M20,17 V19 H17 M7,12 H17";
     public const string Frame = "M3,3 H21 V21 H3 Z M3,9 H21 M3,15 H21 M9,3 V21";

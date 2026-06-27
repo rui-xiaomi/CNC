@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="HandyControl" Version="3.5.1" />
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 
   <!-- 嵌入字体（随程序打包，不依赖系统已装） -->

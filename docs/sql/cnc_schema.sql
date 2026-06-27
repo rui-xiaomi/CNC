@@ -3,8 +3,11 @@
 -- 依据：docs/客户端开发文档.md、docs/测试机信号表.md
 -- 约束：客户端仅经 IP/TCP 与 PLC 通信；机台双加工位；料架可一架两用 + 电极槽位追踪
 -- 字符集 utf8mb4，存储引擎 InnoDB
--- 执行：mysql -u<user> -p < cnc_schema.sql
+-- 执行：mysql --default-character-set=utf8mb4 -u<user> -p < cnc_schema.sql
 -- =============================================================
+
+-- 强制本会话连接字符集为 utf8mb4，避免客户端默认 latin1 把中文字节解为 ?。
+SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS cnc_auto
   DEFAULT CHARACTER SET utf8mb4

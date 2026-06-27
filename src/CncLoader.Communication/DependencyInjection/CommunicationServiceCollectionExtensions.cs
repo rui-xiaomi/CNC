@@ -17,7 +17,7 @@ public static class CommunicationServiceCollectionExtensions
     /// <summary>注册通信层：设备流水、PLC 客户端工厂、连接管理器、模拟器、轮询中枢。</summary>
     public static IServiceCollection AddCncCommunication(this IServiceCollection services)
     {
-        services.AddSingleton<IDeviceLogger, SerilogDeviceLogger>();
+        services.AddSingleton<IDeviceLogger, CompositeDeviceLogger>();
 
         services.AddSingleton<IPlcClientFactory>(sp =>
         {
@@ -30,6 +30,9 @@ public static class CommunicationServiceCollectionExtensions
         });
 
         services.AddSingleton<PlcConnectionManager>();
+        services.AddSingleton<IPlcEndpointResolver, PlcEndpointResolver>();
+        services.AddSingleton<IPlcConnectionService, PlcConnectionService>();
+        services.AddSingleton<IPlcOperationService, PlcOperationService>();
 
         services.AddSingleton(sp =>
         {

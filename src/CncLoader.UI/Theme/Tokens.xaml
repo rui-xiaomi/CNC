@@ -2,25 +2,28 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
-    <!-- ===== 颜色令牌（计量仪表盘：冷钢 + 仪器外框）===== -->
-    <Color x:Key="ChromeColor">#191D22</Color>
-    <Color x:Key="Chrome2Color">#232A31</Color>
-    <Color x:Key="ChromeFgColor">#BFC6CE</Color>
-    <Color x:Key="ChromeFgDimColor">#828B95</Color>
-    <Color x:Key="BgColor">#E8EBEE</Color>
-    <Color x:Key="SurfaceColor">#FFFFFF</Color>
-    <Color x:Key="Surface2Color">#E9ECEF</Color>
-    <Color x:Key="BorderColor">#CBD1D8</Color>
-    <Color x:Key="Border2Color">#E1E5E9</Color>
-    <Color x:Key="FgColor">#15181C</Color>
-    <Color x:Key="FgMutedColor">#586069</Color>
-    <Color x:Key="AccentColor">#135C96</Color>
-    <Color x:Key="AccentDarkColor">#0E486F</Color>
-    <Color x:Key="OkColor">#16A34A</Color>
-    <Color x:Key="RunColor">#1F6FEB</Color>
-    <Color x:Key="WarnColor">#C2710C</Color>
-    <Color x:Key="AlarmColor">#D62828</Color>
+    <!-- ===== 颜色令牌（现代工业 HMI：石墨深色面 + teal 强调 + 状态色编码）=====
+         资源键沿用旧名以兼容既有绑定（PlcRowVm.StatusBrushKey 等）。 -->
+    <Color x:Key="ChromeColor">#11161C</Color>     <!-- 标题栏 / 导航 rail -->
+    <Color x:Key="Chrome2Color">#222B34</Color>    <!-- 导航 hover / 选中 -->
+    <Color x:Key="ChromeFgColor">#C7CDD4</Color>
+    <Color x:Key="ChromeFgDimColor">#8B95A1</Color>
+    <Color x:Key="BgColor">#0E1116</Color>
+    <Color x:Key="SurfaceColor">#161B22</Color>
+    <Color x:Key="Surface2Color">#1C232B</Color>
+    <Color x:Key="BorderColor">#2A323B</Color>
+    <Color x:Key="Border2Color">#222A32</Color>
+    <Color x:Key="FgColor">#E6EAF0</Color>
+    <Color x:Key="FgMutedColor">#8B95A1</Color>
+    <Color x:Key="AccentColor">#16C2C7</Color>
+    <Color x:Key="AccentDarkColor">#11A3A8</Color>
+    <Color x:Key="AccentFgColor">#04201F</Color>     <!-- 强调按钮上的深色文字 -->
+    <Color x:Key="OkColor">#22C55E</Color>
+    <Color x:Key="RunColor">#3B82F6</Color>
+    <Color x:Key="WarnColor">#F59E0B</Color>
+    <Color x:Key="AlarmColor">#EF4444</Color>
     <Color x:Key="IdleColor">#6B7280</Color>
+    <Color x:Key="TermColor">#0B0E12</Color>        <!-- 终端 / 流水背景 -->
 
     <SolidColorBrush x:Key="ChromeBrush" Color="{StaticResource ChromeColor}"/>
     <SolidColorBrush x:Key="Chrome2Brush" Color="{StaticResource Chrome2Color}"/>
@@ -35,20 +38,25 @@
     <SolidColorBrush x:Key="FgMutedBrush" Color="{StaticResource FgMutedColor}"/>
     <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}"/>
     <SolidColorBrush x:Key="AccentDarkBrush" Color="{StaticResource AccentDarkColor}"/>
+    <SolidColorBrush x:Key="AccentFgBrush" Color="{StaticResource AccentFgColor}"/>
     <SolidColorBrush x:Key="OkBrush" Color="{StaticResource OkColor}"/>
     <SolidColorBrush x:Key="RunBrush" Color="{StaticResource RunColor}"/>
     <SolidColorBrush x:Key="WarnBrush" Color="{StaticResource WarnColor}"/>
     <SolidColorBrush x:Key="AlarmBrush" Color="{StaticResource AlarmColor}"/>
     <SolidColorBrush x:Key="IdleBrush" Color="{StaticResource IdleColor}"/>
+    <SolidColorBrush x:Key="TermBrush" Color="{StaticResource TermColor}"/>
 
     <!-- ===== 形状/间距 ===== -->
-    <CornerRadius x:Key="Radius">3</CornerRadius>
-    <CornerRadius x:Key="RadiusBadge">2</CornerRadius>
-    <sys:Double x:Key="RowHeight">32</sys:Double>
+    <CornerRadius x:Key="Radius">6</CornerRadius>
+    <CornerRadius x:Key="RadiusBadge">4</CornerRadius>
+    <sys:Double x:Key="RowHeight">34</sys:Double>
 
-    <!-- ===== 字体（Saira/Inter/JetBrains Mono 已作为 .ttf 资源打包，pack:// 引用，系统字体兜底）===== -->
-    <FontFamily x:Key="FontSans">pack://application:,,,/CncLoader.UI;component/Assets/Fonts/#Inter, Segoe UI</FontFamily>
-    <FontFamily x:Key="FontCond">pack://application:,,,/CncLoader.UI;component/Assets/Fonts/#Saira, Segoe UI Semibold, Segoe UI</FontFamily>
-    <FontFamily x:Key="FontMono">pack://application:,,,/CncLoader.UI;component/Assets/Fonts/#JetBrains Mono, Consolas, Courier New</FontFamily>
+    <!-- ===== 字体 =====
+         现代工业方向：Inter（界面）+ JetBrains Mono（机器数据），移除旧 Saira 标牌体。
+         嵌入 .ttf 经 pack 引用；字形缺失时按逗号分隔列表 fallback 到 Microsoft YaHei UI 兜中文。
+    -->
+    <FontFamily x:Key="FontSans">pack://application:,,,/CncLoader.UI;component/Assets/Fonts/#Inter, Microsoft YaHei UI, Segoe UI</FontFamily>
+    <FontFamily x:Key="FontCond">pack://application:,,,/CncLoader.UI;component/Assets/Fonts/#Inter, Microsoft YaHei UI, Segoe UI Semibold</FontFamily>
+    <FontFamily x:Key="FontMono">pack://application:,,,/CncLoader.UI;component/Assets/Fonts/#JetBrains Mono, Consolas, Microsoft YaHei UI</FontFamily>
 
 </ResourceDictionary>

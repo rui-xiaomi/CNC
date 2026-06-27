@@ -8,6 +8,7 @@
         MinHeight="600" MinWidth="1000"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource BgBrush}"
+        Foreground="{StaticResource FgBrush}"
         FontFamily="{StaticResource FontSans}" FontSize="13">
 
     <WindowChrome.WindowChrome>
@@ -41,8 +42,15 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <Grid Width="18" Height="18" Margin="0,0,9,0" VerticalAlignment="Center">
+                        <Ellipse Width="15" Height="15" Stroke="{StaticResource AccentBrush}" StrokeThickness="1.8"/>
+                        <Ellipse Width="4" Height="4" Fill="{StaticResource AccentBrush}"/>
+                        <Path Stroke="{StaticResource AccentBrush}" StrokeThickness="1.8"
+                              Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Data="M9,0 V2 M9,16 V18 M0,9 H2 M16,9 H18"/>
+                    </Grid>
                     <TextBlock Text="CNC 自动化上下料客户端" Foreground="White"
-                               FontFamily="{StaticResource FontCond}" FontWeight="SemiBold"/>
+                               FontFamily="{StaticResource FontCond}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <TextBlock Text="v1.0" Foreground="{StaticResource ChromeFgDimBrush}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
 
@@ -131,7 +139,7 @@
                     <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
                         <Grid Margin="16,0">
                             <TextBlock Text="{Binding CurrentTitle}" FontFamily="{StaticResource FontCond}" FontWeight="SemiBold"
-                                       FontSize="15" VerticalAlignment="Center"/>
+                                       FontSize="15" Foreground="{StaticResource FgBrush}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" Margin="0,0,6,0"/>
                                 <TextBlock Text="PLC ModbusTCP" Style="{StaticResource MutedText}" Margin="0,0,18,0"/>
