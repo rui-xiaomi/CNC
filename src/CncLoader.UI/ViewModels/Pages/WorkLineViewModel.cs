@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Identity;
@@ -7,7 +8,8 @@ using CncLoader.Core.Config;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
-/// <summary>线体管理：左列表 + 右编辑表单（按原型一比一）。</summary>
+/// <summary>线体管理：左列表 + 右编辑表单（按原型一比一）。
+/// 业务链：线体→工序→机台→PLC；线体不直接关联 PLC，故编辑表单无 PLC 字段。</summary>
 public sealed partial class WorkLineViewModel : PageViewModelBase
 {
     private readonly IWorkLineService _service;
@@ -18,7 +20,6 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
         _service = service;
         _user = user;
         Lines = new ObservableCollection<WorkLineListItem>();
-        PlcOptions = new ObservableCollection<NamedOption>();
         _ = InitializeAsync();
     }
 
@@ -26,7 +27,6 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
     public override string Title => "线体管理";
 
     public ObservableCollection<WorkLineListItem> Lines { get; }
-    public ObservableCollection<NamedOption> PlcOptions { get; }
     public string[] ScanOptions { get; } = ["否", "是"];
 
     [ObservableProperty] private WorkLineListItem? _selectedLine;
@@ -38,18 +38,11 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
     [ObservableProperty] private string _editComputerIp = "";
     [ObservableProperty] private string _editPlanNum = "";
     [ObservableProperty] private string _selectedScan = "否";
-    [ObservableProperty] private NamedOption? _selectedPlcOption;
     [ObservableProperty] private string _statusMessage = "";
 
     private async Task InitializeAsync()
     {
-        try
-        {
-            var plcs = await _service.GetPlcOptionsAsync();
-            PlcOptions.Clear();
-            foreach (var p in plcs) PlcOptions.Add(p);
-            await ReloadAsync();
-        }
+        try { await ReloadAsync(); }
         catch (Exception ex) { StatusMessage = $"加载失败：{ex.Message}"; }
     }
 
@@ -79,7 +72,6 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
         EditComputerIp = model.ComputerIp ?? "";
         EditPlanNum = model.PlanNum?.ToString() ?? "";
         SelectedScan = model.ScanEnabled ? "是" : "否";
-        SelectedPlcOption = PlcOptions.FirstOrDefault(p => p.Id == model.PlcId);
         EditTitle = $"编辑 · {model.Code}";
     }
 
@@ -94,7 +86,6 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
         EditComputerIp = "";
         EditPlanNum = "";
         SelectedScan = "否";
-        SelectedPlcOption = PlcOptions.FirstOrDefault();
         EditTitle = "新增线体";
     }
 
@@ -115,7 +106,6 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
             ComputerIp = string.IsNullOrWhiteSpace(EditComputerIp) ? null : EditComputerIp.Trim(),
             PlanNum = long.TryParse(EditPlanNum, out var n) ? n : null,
             ScanEnabled = SelectedScan == "是",
-            PlcId = SelectedPlcOption?.Id ?? 0,
             Enabled = true
         };
         try
@@ -138,5 +128,34 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
     {
         if (SelectedLine is not null) _ = LoadEditAsync(SelectedLine.Id);
         else NewLine();
+    }
+
+    [RelayCommand]
+    private async Task DeleteLineAsync(WorkLineListItem? row)
+    {
+        if (row is null) return;
+        try
+        {
+            var check = await _service.CheckDeleteAsync(row.Id);
+            if (!check.CanDelete)
+            {
+                HandyControl.Controls.Growl.Warning(check.Message);
+                StatusMessage = check.Message;
+                return;
+            }
+            var msg = $"确认删除线体 {row.Name}（{row.Code}）？\n软删后列表不再显示，可在 DB 恢复。";
+            if (HandyControl.Controls.MessageBox.Show(msg, "删除线体二次确认",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
+            await _service.DeleteAsync(row.Id, _user.Name);
+            HandyControl.Controls.Growl.Success($"线体 {row.Name} 已删除。");
+            StatusMessage = $"线体 {row.Name} 已删除";
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+        }
     }
 }

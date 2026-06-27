@@ -46,14 +46,15 @@
 6. 内置模拟器可启动，NModbusPlcClient 连上并读到一个 D 寄存器
 7. 日志文件生成；敏感配置密文存储
 
-### Phase 2 — PLC 管理模块（优先）　Status: 待用户确认（全部验收项通过）
-连接管理 / 在线离线检测 / 读操作界面 / 写操作界面(危险二次确认+先落流水) / 点位映射维护 / 通信日志+告警 / 多 PLC 切换。借中枢与模拟器自测。
+### Phase 2 — PLC 管理模块（优先）　Status: 待用户确认（全部验收项通过 + PLC 配置 CRUD 补全）
+连接管理 / 在线离线检测 / 读操作界面 / 写操作界面(危险二次确认+先落流水) / 点位映射维护 / 通信日志+告警 / 多 PLC 切换 / **PLC 配置 CRUD（新增/编辑/删除+引用校验）**。借中枢与模拟器自测。
 
 - [x] 2.1 Core：IPlcCatalogService/IPlcConnectionService/IPlcOperationService/IPlcPointManagementService/IDeviceLogStore/IAlarmEventService + 信号表模板
 - [x] 2.2 Data：PlcCatalogService/PlcPointManagementService/DeviceLogStore(落库)/AlarmEventService
 - [x] 2.3 Communication：PlcConnectionService/PlcOperationService(写先落流水)/CompositeDeviceLogger/PlcEndpointResolver
 - [x] 2.4 UI：PlcViewModel 全功能 + 页面模板（PLC列表/读面板/写面板/点位映射/告警/流水）
 - [x] 2.5 Phase 2 验收：构建✓ 启动✓ 3PLC在线✓ 读点位✓ 写二次确认+流水✓ 点位导入/删除✓ 告警落库✓
+- [x] 2.6 PLC 配置 CRUD 补全：IPlcCatalogService 加 SuggestNextPlcId/CheckDelete/Delete；PlcEditDialog（PlcId 新增可编辑/编辑只读）；列表操作列加 编辑/删除 按钮；删除前引用校验+二次确认+软删；构建 0 警告 0 错误✓ 服务层 SQL 等价验证✓ 种子 DB 还原✓
 
 #### Phase 2 验收清单
 1. dotnet build 全解决方案通过（0 警告 0 错误）
@@ -63,24 +64,28 @@
 5. 点位映射：列表展示、信号表批量导入、软删除
 6. 通信流水实时展示；通信失败写入 MAS_AUTO_ALARM_EVENT
 7. 多 PLC 切换（机台下拉/列表选中联动）
+8. **PLC 配置 CRUD**：新增（建议 PlcId+唯一性校验）/编辑（PlcId 只读，在线则断开）/删除（引用校验+二次确认+软删 STATE='1'）三路径均走通，DB 种子保持 plc=3 无残留
 
-### Phase 3 — 配置管理模块　Status: 待用户确认（按原型一比一开发完成）
+### Phase 3 — 配置管理模块　Status: 待用户确认（按原型一比一开发完成 + 删除 CRUD 补全）
 线体/工序/机台/加工位/料架管理页（独立页面、下拉建层级、非树），含一架两用绑定与电极分层槽位追踪+反查。
 
 - [x] 3.1 Core：ConfigModels（线体/工序/机台/料架 DTO）+ IWorkLineService/ICraftworkService/IEquipmentConfigService/IFrameService
-- [x] 3.2 Data：WorkLineService/CraftworkService（读+保存）、EquipmentConfigService（列表+加工位+关联料架）、FrameService（料架+绑定+分层槽位）；DI 注册
-- [x] 3.3 UI：WorkLine/Craftwork/Equipment/Frame 全功能 VM（列表/编辑/保存/级联过滤下拉/电极反查高亮）
+- [x] 3.2 Data：WorkLineService/CraftworkService（读+保存+删除）、EquipmentConfigService（列表+加工位+关联料架+删除）、FrameService（料架+绑定+分层槽位）；DI 注册
+- [x] 3.3 UI：WorkLine/Craftwork/Equipment/Frame 全功能 VM（列表/编辑/保存/删除/级联过滤下拉/电极反查高亮）
 - [x] 3.4 UI：PageTemplates 按 prototype 一比一还原四页 DataTemplate（移除占位）+ 4 个展示转换器
-- [x] 3.5 Phase 3 验收：构建 0 警告 0 错误✓ 启动✓ DB 实连读种子（线体1/工序1/机台3/加工位6/料架3）✓ 四页 UIAutomation 截图核对与原型一致✓
+- [x] 3.5 Phase 3 验收：构建 0 警告 0 错误✓ 启动✓ DB 实连读种子（线体1/工序2/机台3/加工位6/料架3）✓ 四页 UIAutomation 截图核对与原型一致✓
+- [x] 3.6 删除 CRUD 补全：三服务加 CheckDelete/Delete（引用校验+软删）；机台删除级联软删其 2 个加工位；UI 三 VM 加 DeleteLine/DeleteCraft/DeleteEquipment 命令，列表加"删除"按钮；线体编辑表单 VerticalAlignment=Stretch 与列表底部对齐，保存/取消按钮 DockPanel.Dock=Bottom 贴底，内容顶对齐自适应
+- [x] 3.7 删除校验验证：种子线体1 被 2 道工序引用→禁删✓ 种子工序1 被 3 台机台引用→禁删✓ 种子机台1 被 12 个点位引用→禁删✓ 孤立工序可删路径（INSERT→check=0→软删→还原 active=2）✓
 
 #### Phase 3 验收清单
 1. dotnet build 全解决方案 0 警告 0 错误
-2. 线体管理：列表 + 右编辑表单（名称/编码/电脑/IP/计划数/扫码枪/关联PLC），保存回写 MAS_AUTO_WORKLINECONFIGS
+2. 线体管理：列表 + 右编辑表单（名称/编码/电脑/IP/计划数/扫码枪），保存回写 MAS_AUTO_WORKLINECONFIGS；线体不直接关联 PLC（业务链 线体→工序→机台→PLC）
 3. 工序管理：列表按线体过滤 + 编辑表单，保存回写 MAS_AUTO_WORKLINE_CRAFTWORK
-4. 机台管理：列表按工序过滤 + 加工位（自动 2 位）+ 关联料架（上/下料架，一架两用）
+4. 机台管理：列表按工序过滤 + 加工位（自动 2 位）+ 关联料架（上/下料架，一架两用）+ 编辑（编号只读，改名称/编码/类型/工序/PLC）
 5. 料架管理：料架列表 + 绑定关系（一架两用）+ 分层槽位电极追踪 + 电极反查高亮
 6. 全部页读真实种子数据；线体/工序保存走 Growl + 状态条反馈
 7. 机台新增（模态对话框，保存自动建 2 加工位+绑PLC）/料架新增（预建层×每层槽位）/关联料架配置（写 MAS_AUTO_FRAME_BIND）均真写库——已实测：eq3→4(EQ04+工位1/2)、frame3→4(测试料架 2×5 预建10槽)，验证后已清理测试行还原种子
+8. **删除 CRUD**：线体/工序/机台 列表"操作"列加删除按钮 → CheckDelete 引用校验 → 不可删 Growl.Warning 提示引用数 → 可删 MessageBox 二次确认 → 软删 State='1'；机台删除级联软删其 2 个加工位。线体编辑表单与列表底部对齐、内容自适应、保存/取消按钮贴底
 
 ### Phase 4 — 核心上下料流程　Status: pending
 加工位级状态机、双工位并行调度、信号合成状态、电极槽位流转、加工记录。

@@ -63,6 +63,61 @@
   - 实测：UIAutomation 驱动两对话框填写并保存 → DB eq3→4(EQ04 测试机A,工位1/2=EQ04-P1/P2)、frame3→4(测试料架 FR-TEST-01,2×5 预建 10 槽,层 1..2)；验证后删测试行还原 eq3/pos6/frame3/slot14。
 - 待用户确认 Phase 3 → 进入 Phase 4：核心上下料流程（加工位级状态机、双工位并行调度、信号合成、电极槽位流转、加工记录）。
 
+### Session 6 — 2026-06-27 PLC 配置 CRUD 补全 + 文档同步（代码）— 暂停等用户确认
+- 起因：Phase 3 后回看 Phase 2，PLC 管理页的 PLC 配置 CRUD 仍是占位 Growl（"将随机台管理页在 Phase 3 一并实现"），列表操作列只有连接/断开。Phase 3 实际只做了线体/工序/机台/料架 CRUD，未补 PLC。
+- Core：`PlcEditModel` 加 `IsNew`（PlcId=0 即新增）；新增 `PlcDeleteCheckResult`；`IPlcCatalogService` 扩展 `SuggestNextPlcIdAsync/CheckDeleteAsync/DeleteAsync`。
+- Data：`PlcCatalogService.SaveAsync` 拆新增/编辑两路径——新增做 PlcId 唯一性校验+必填/范围校验后 INSERT；编辑 PlcId 只读不更新（避免外键断裂）；`SuggestNextPlcIdAsync` = max(PlcId)+1，空表=1；`CheckDeleteAsync` 数机台/点位引用返回 CanDelete+Message；`DeleteAsync` 软删 State='1'。
+- UI：新建 `Views/Dialogs/PlcEditDialog.xaml(.cs)`（仿 EquipmentEditDialog，PlcId 新增可编辑+建议提示/编辑只读，协议下拉 ModbusTCP/RTU）；`PlcViewModel` 重写 `AddPlcCommand` 为真新增、新增 `EditPlcCommand/DeletePlcCommand`（编辑在线 PLC 保存前自动断开；删除先 CheckDelete，不可删则 Growl.Warning 提示引用数，可删则 HandyControl MessageBox 二次确认后软删）；`PageTemplates.xaml` PLC 列表操作列在 连接/断开 后追加 编辑/删除 按钮。
+- 文档同步：`docs/客户端开发文档.md` §5.4 PLC 列表与连接管理 扩展为 新增/编辑/删除 三条说明（含 PlcId 只读、引用校验、软删 STATE='1'）；`task_plan.md` Phase 2 状态加 "+ PLC 配置 CRUD 补全"、追加条目 2.6 与验收清单第 8 项；`findings.md` 补 PLC_ID 外键引用与软删约束发现。
+- 验证：`dotnet build` 0 警告 0 错误；启动 App（PID 22768）窗口正常渲染、无 XAML/DI 异常；服务层数据流等价 SQL 端到端跑通（suggest=4 → insert PlcId=4 → check_delete eq_refs=0/pt_refs=0 → 软删 State=1 → 还原后 plc_count=3）；DB 种子保持干净。
+- 待用户人工确认的 UI 三路径（WPF UIAutomation 测试基线未建）：① 点"+ 新增 PLC" 弹对话框→填名称/IP→保存→列表新增+DB INSERT；② 选已有 PLC 点"编辑"→改名→保存→列表与 DB UPDATE；③ 选 0 引用测试 PLC 点"删除"→二次确认→列表移除+DB State=1；选被机台引用的 PLC 点"删除"→提示引用数禁止删除。
+- 待用户确认后 → 进入 Phase 4：核心上下料流程。
+
+### Session 7 — 2026-06-27 配置管理删除 CRUD 补全 + 线体编辑表单布局修正（代码）— 暂停等用户确认
+- 起因：Phase 3 后用户指出线体/工序/机台均缺删除功能，且线体编辑表单未与底部对齐、内容未自适应。
+- Core：新增 `DeleteCheckResult(CanDelete, Refs, Message)`；`IWorkLineService/ICraftworkService/IEquipmentConfigService` 各加 `CheckDeleteAsync/DeleteAsync`。引用约束：线体→工序引用；工序→机台引用；机台→点位映射+料架绑定引用（加工位是机台自带，删除机台时级联软删）。
+- Data：`WorkLineService/CraftworkService/EquipmentConfigService` 实现 CheckDelete（按外键 COUNT 启用行）+Delete（软删 State='1'）；`EquipmentConfigService.DeleteAsync` 同时把其 2 个加工位 State='1'。
+- UI：三 VM 各加 `DeleteLineCommand/DeleteCraftCommand/DeleteEquipmentCommand`——CheckDelete 不可删 Growl.Warning 提示引用数；可删 HandyControl MessageBox 二次确认后软删 + Growl.Success + ReloadAsync；WorkLineVM/CraftworkVM 补 `using System.Windows`。
+- UI 模板：`PageTemplates.xaml` 线体/工序/机台 列表各加"操作"列含 DangerButton"删除"；**线体管理编辑表单**改为 `VerticalAlignment=Stretch` 撑满列高与列表底部对齐，内部 DockPanel——标题 Dock=Top、保存/取消按钮 DockPanel.Dock=Bottom 贴底、StackPanel 内容顶对齐自适应；线体列表 `MaxHeight=320` 去掉改为随内容自适应。
+- 验证：`dotnet build` 0 警告 0 错误；服务层 SQL 等价验证——种子线体1 被 2 道工序引用→禁删✓ 种子工序1 被 3 台机台引用→禁删✓ 种子机台1 被 12 个点位引用→禁删✓ 孤立工序可删路径 INSERT→check eq_refs=0→软删 State=1→还原 active=2✓；DB 种子保持干净。
+- 待用户人工确认 UI 三路径（WPF 无 UIAutomation 基线）：① 线体列表"删除"按钮；② 工序列表"删除"按钮；③ 机台列表"删除"按钮；④ 线体编辑表单与列表底部对齐、保存/取消按钮贴底。
+
+### Session 8 — 2026-06-27 修复删除后列表仍显示 + 线体剥离 PLC 关联（代码）— 暂停等用户确认
+- 起因：用户反馈点击删除后列表中依旧存在；线体管理不该有"关联 PLC"字段，业务链是 线体→工序→机台→PLC。
+- 修复 1（删除后列表仍显示）：根因是 `WorkLineService.GetAllAsync`、`CraftworkService.GetByLineAsync`、`EquipmentConfigService.GetByCraftAsync`、`GetWorkLineOptionsAsync`、`GetCraftworkOptionsAsync` 均未过滤 `State=='0'`，软删行被读回。统一加 `.Where(x => x.State == ConfigFlags.Active)` 过滤。
+- 修复 2（线体剥离 PLC 关联）：业务链校正——线体不直接关联 PLC，PLC 由机台绑定。
+  - Core: `WorkLineListItem` 去掉 `PlcText`；`WorkLineEditModel` 去掉 `PlcId`；`IWorkLineService` 去掉 `GetPlcOptionsAsync`。
+  - Data: `WorkLineService.GetAllAsync` 不再投影 PlcText；`GetByIdAsync` 不读 PlcId；`SaveAsync` 不写 PlcId；移除 `GetPlcOptionsAsync` 实现。`WorkLineConfig.PlcId` DB 列保留（schema 不动），仅 UI 不再编辑。
+  - UI: `WorkLineViewModel` 去掉 `PlcOptions`/`SelectedPlcOption`；`PageTemplates.xaml` 线体列表去 "PLC" 列、编辑表单去"关联 PLC"行。
+- 验证：`dotnet build` 0 警告 0 错误；SQL 等价验证软删后 `WHERE STATE='0'` 过滤生效（INSERT 测试线体 active=1 → 软删后 active=0 → 还原 active=1 种子保持）。
+- 待用户人工确认 UI：① 删除任一行后列表立即移除；② 线体管理编辑表单与列表均无 PLC 相关字段。
+
+### Session 9 — 2026-06-27 PLC 编辑对话框对应机台改为下拉 + 反向绑定（代码）— 暂停等用户确认
+- 起因：用户反馈 PLC 编辑对话框"对应机台"应是下拉显示所有机台（不只是只读文本），且当前文本是黑色字体不符深色主题。
+- 设计：业务链机台→PLC，但允许在 PLC 侧反向绑定——选机台=把该机台的 PLC_ID 设为当前 PLC。一机一 PLC 约束：原绑到本 PLC 的机台解绑；目标机台原绑的 PLC 自然失去绑定。
+- Core: `PlcEditModel` 加 `BoundEquipmentId`（null/0=未绑定）；`IPlcCatalogService` 加 `BindEquipmentAsync(plcId, equipmentId, author)`。
+- Data: `PlcCatalogService.BindEquipmentAsync`——清所有 `PlcId==plcId` 的机台 PlcId，再把目标机台 PlcId=plcId；null/0 仅解绑。
+- UI: `PlcEditDialog` 把"对应机台" TextBlock 改为 ComboBox，首项"未绑定"(Id=0) + 全部启用机台，选中当前绑定项；ComboBox 显式 `Foreground={StaticResource FgBrush}` 修复深色背景下的黑色字体。构造改为 `(edit, suggestedId, equipments, boundEquipmentId)`。
+- VM: `PlcViewModel.AddPlc/EditPlc` 调 `GetEquipmentsAsync()` 传机台列表 + 当前绑定 Id；保存后调 `BindEquipmentAsync(plcId, result.BoundEquipmentId, user)`。
+- 验证：`dotnet build` 0 警告 0 错误；SQL 等价验证 BindEquipment(plcId=1, eqId=3) → EQ01 解绑、EQ03 改绑 PLC1（原 PLC3 失去绑定）→ 还原种子 EQ01/02/03 → PLC1/2/3 ✓。
+- 待用户人工确认 UI：① PLC 编辑对话框"对应机台"为下拉、文字浅色可读；② 选别的机台保存后该机台 PLC_ID 改为本 PLC，原机台解绑；③ 选"未绑定"保存后本 PLC 无机台关联。
+
+### Session 10 — 2026-06-27 新增机台对话框关联 PLC 加"无"选项（代码）— 暂停等用户确认
+- 起因：用户反馈新增机台时关联 PLC 下拉无"无"选项，若不绑 PLC 无法选择。
+- 改动：`EquipmentEditDialog` 构造在 PLC 列表前加 `NamedOption(0, "无")`；有 PLC 时默认选第一台 PLC，无 PLC 时默认选"无"。`CreateEquipmentAsync` 已有 `PlcId = model.PlcId > 0 ? model.PlcId : null` 处理，选"无"(Id=0) 时 DB 写 `PLC_ID=NULL`，机台不绑 PLC。
+- 验证：`dotnet build` 0 警告 0 错误。
+- 待用户人工确认 UI：新增机台对话框"关联 PLC"下拉首项为"无"，可选不绑定。
+
+### Session 11 — 2026-06-27 机台编辑功能补全（代码）— 暂停等用户确认
+- 起因：用户反馈机台管理页只有新增/配置料架/删除，缺编辑机台本身（名称/编码/类型/所属工序/关联 PLC）。
+- Core: `ConfigModels` 加 `EquipmentEditModel(Id, CraftworkId, No, Name, Code, Type, PlcId)`；`IEquipmentConfigService` 加 `GetByIdAsync/UpdateAsync`。
+- Data: `EquipmentConfigService.GetByIdAsync` 返回编辑数据；`UpdateAsync` 更新名称/编码/类型/工序/PLC，**EquipmentNo 业务键不改**（避免加工位编码、点位映射引用断裂）；`PlcId=0` 写 `NULL`。
+- UI: `EquipmentEditDialog` 改造支持新增/编辑双模式——构造 `(crafts, plcs, suggestedNo, preselectCraftId)` 新增、`(crafts, plcs, edit)` 编辑；编辑时标题"编辑机台"、机台编号只读、预填现值；返回 `CreateResult` 或 `EditResult`。CraftCombo/PlcCombo 显式 `Foreground={StaticResource FgBrush}` 修深色黑字。PLC 下拉含"无"。
+- VM: `EquipmentViewModel` 加 `EditEquipmentCommand`；AddEquipment 改用 `dlg.CreateResult`；EditEquipment 调 `GetByIdAsync` → 弹编辑对话框 → `UpdateAsync` → 刷新。
+- 模板: `PageTemplates.xaml` 机台列表"操作"列宽 80→120，加"编辑" GhostButton 在"删除"前。
+- 验证：`dotnet build` 0 警告 0 错误；SQL 等价 UpdateAsync（EQ02 改名/编码/PLC_ID=1）→ 仅名称/编码/类型/PLC 更新、EQUIMENT_NO 不变 ✓；还原种子 EQ01/02/03 → PLC1/2/3 ✓。
+- 待用户人工确认 UI：机台列表点"编辑" → 弹编辑对话框预填现值、编号只读、可改名称/编码/类型/工序/PLC → 保存回写。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - Phase 1/2 完成后暂停演示，Phase 3（配置管理）待用户确认。

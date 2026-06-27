@@ -45,3 +45,13 @@
 - mysql.exe 实际路径（验证建库时确定）。
 - 三款字体 .ttf 来源（Google Fonts 可下；需放 UI/Assets/Fonts/）。
 - NModbus 对 Modbus TCP holding register 读写 API 细节（实现 NModbusPlcClient 时查 find-docs）。
+- PLC_ID 外键约束：`MAS_AUTO_WORKLINE_EQUIMENT.PLC_ID`(fk_eq_plc) 与 `MAS_AUTO_PLC_POINT.PLC_ID`(fk_point_plc) 引用 `MAS_AUTO_WORKLINE_PLC.PLC_ID`（业务键非主键 ID1）。
+  - 删除 PLC 必须先校验 0 引用，否则外键断裂；本期走软删 `STATE='1'`，DB 行保留可恢复，列表过滤 `STATE='0'`。
+  - 编辑 PLC 时 PlcId 只读，仅改名称/IP/端口/协议，避免外键断裂。
+  - 新增 PLC 时 PlcId 唯一性校验（含已软删行），建议值 = `max(PLC_ID)+1`。
+- 配置管理删除引用链：线体→工序→机台→(加工位/点位映射/料架绑定)。
+  - 线体删除前校验 `MAS_AUTO_WORKLINE_CRAFTWORK.WORKLINE_ID` 引用；工序删除前校验 `MAS_AUTO_WORKLINE_EQUIMENT.CARFTWORK_ID`；机台删除前校验 `MAS_AUTO_PLC_POINT.EQUIMENT_ID` 与 `MAS_AUTO_FRAME_BIND.EQUIPMENT_ID`。
+  - 加工位是机台自带（新增机台时自动建 2 个），删除机台时**级联软删**其加工位（不是外键引用，是附属子资源）。
+  - 种子引用计数实测：线体1→2 道工序；工序1→3 台机台；机台1→12 个点位+0 条料架绑定。
+- 配置列表查询必须过滤 `STATE='0'`：软删后不被读回。`GetAllAsync/GetByLineAsync/GetByCraftAsync/GetWorkLineOptionsAsync/GetCraftworkOptionsAsync` 均加 `.Where(x => x.State == "0")`。
+- 业务链校正：**线体→工序→机台→PLC**。线体不直接关联 PLC；PLC 由机台绑定（`MAS_AUTO_WORKLINE_EQUIMENT.PLC_ID`）。`MAS_AUTO_WORKLINECONFIGS.PLC_ID` DB 列保留但 UI 不再编辑。

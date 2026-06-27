@@ -108,11 +108,11 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
             {
                 Owner = Application.Current?.MainWindow
             };
-            if (dlg.ShowDialog() != true || dlg.Result is null) return;
+            if (dlg.ShowDialog() != true || dlg.CreateResult is null) return;
 
-            var id = await _service.CreateEquipmentAsync(dlg.Result, _user.Name);
-            HandyControl.Controls.Growl.Success($"机台 {dlg.Result.No} 已新增，并自动创建 2 个加工位。");
-            StatusMessage = $"机台 {dlg.Result.No} 已新增";
+            var id = await _service.CreateEquipmentAsync(dlg.CreateResult, _user.Name);
+            HandyControl.Controls.Growl.Success($"机台 {dlg.CreateResult.No} 已新增，并自动创建 2 个加工位。");
+            StatusMessage = $"机台 {dlg.CreateResult.No} 已新增";
             await ReloadAsync();
             SelectedEquipment = Equipments.FirstOrDefault(e => e.Id == id);
         }
@@ -120,6 +120,40 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
         {
             StatusMessage = ex.Message;
             HandyControl.Controls.Growl.Error($"新增失败：{ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task EditEquipmentAsync(EquipmentListItem? row)
+    {
+        if (row is null) return;
+        try
+        {
+            var edit = await _service.GetByIdAsync(row.Id);
+            if (edit is null)
+            {
+                HandyControl.Controls.Growl.Warning("该机台不存在或已删除。");
+                await ReloadAsync();
+                return;
+            }
+            var crafts = await _service.GetCraftworkOptionsAsync();
+            var plcs = await _service.GetPlcOptionsAsync();
+            var dlg = new EquipmentEditDialog(crafts, plcs, edit)
+            {
+                Owner = Application.Current?.MainWindow
+            };
+            if (dlg.ShowDialog() != true || dlg.EditResult is null) return;
+
+            await _service.UpdateAsync(dlg.EditResult, _user.Name);
+            HandyControl.Controls.Growl.Success($"机台 {dlg.EditResult.Name} 已更新。");
+            StatusMessage = $"机台 {dlg.EditResult.Name} 已更新";
+            await ReloadAsync();
+            SelectedEquipment = Equipments.FirstOrDefault(e => e.Id == row.Id);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"更新失败：{ex.Message}");
         }
     }
 
@@ -152,6 +186,35 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
         {
             StatusMessage = ex.Message;
             HandyControl.Controls.Growl.Error($"配置失败：{ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task DeleteEquipmentAsync(EquipmentListItem? row)
+    {
+        if (row is null) return;
+        try
+        {
+            var check = await _service.CheckDeleteAsync(row.Id);
+            if (!check.CanDelete)
+            {
+                HandyControl.Controls.Growl.Warning(check.Message);
+                StatusMessage = check.Message;
+                return;
+            }
+            var msg = $"确认删除机台 {row.Name}（{row.No}）？\n将级联软删其 2 个加工位；软删后列表不再显示，可在 DB 恢复。";
+            if (HandyControl.Controls.MessageBox.Show(msg, "删除机台二次确认",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
+            await _service.DeleteAsync(row.Id, _user.Name);
+            HandyControl.Controls.Growl.Success($"机台 {row.Name} 已删除。");
+            StatusMessage = $"机台 {row.Name} 已删除";
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
         }
     }
 }

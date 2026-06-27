@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Identity;
@@ -148,5 +149,34 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
     {
         if (SelectedCraft is not null) _ = LoadEditAsync(SelectedCraft.Id);
         else NewCraft();
+    }
+
+    [RelayCommand]
+    private async Task DeleteCraftAsync(CraftworkListItem? row)
+    {
+        if (row is null) return;
+        try
+        {
+            var check = await _service.CheckDeleteAsync(row.Id);
+            if (!check.CanDelete)
+            {
+                HandyControl.Controls.Growl.Warning(check.Message);
+                StatusMessage = check.Message;
+                return;
+            }
+            var msg = $"确认删除工序 {row.Name}（{row.No}）？\n软删后列表不再显示，可在 DB 恢复。";
+            if (HandyControl.Controls.MessageBox.Show(msg, "删除工序二次确认",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return;
+            await _service.DeleteAsync(row.Id, _user.Name);
+            HandyControl.Controls.Growl.Success($"工序 {row.Name} 已删除。");
+            StatusMessage = $"工序 {row.Name} 已删除";
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+        }
     }
 }

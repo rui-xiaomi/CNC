@@ -5,13 +5,12 @@ namespace CncLoader.Core.Config;
 
 // ===== 线体 =====
 
-/// <summary>线体列表行（对应原型「线体列表」表格列：编码/名称/扫码枪/PLC/AGV/状态）。</summary>
+/// <summary>线体列表行（对应原型「线体列表」表格列：编码/名称/扫码枪/AGV/状态）。</summary>
 public sealed record WorkLineListItem(
     long Id,
     string Code,
     string Name,
     bool ScanEnabled,
-    string PlcText,
     string AgvText,
     bool Enabled);
 
@@ -25,7 +24,6 @@ public sealed class WorkLineEditModel
     public string? ComputerIp { get; set; }
     public long? PlanNum { get; set; }
     public bool ScanEnabled { get; set; }
-    public long PlcId { get; set; }
     public bool Enabled { get; set; } = true;
 }
 
@@ -80,6 +78,18 @@ public sealed record PositionItem(
 /// <summary>新增机台（保存时自动建 2 个加工位、绑定独立 PLC）。</summary>
 public sealed class EquipmentCreateModel
 {
+    public long CraftworkId { get; set; }
+    public string No { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Code { get; set; } = "";
+    public string Type { get; set; } = "检测";
+    public long PlcId { get; set; }
+}
+
+/// <summary>编辑机台（No 为业务编号，编辑时只读；PlcId=0 表示不绑 PLC）。</summary>
+public sealed class EquipmentEditModel
+{
+    public long Id { get; set; }
     public long CraftworkId { get; set; }
     public string No { get; set; } = "";
     public string Name { get; set; } = "";
