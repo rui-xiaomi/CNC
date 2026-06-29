@@ -87,6 +87,17 @@
         <Setter Property="FontSize" Value="13"/>
     </Style>
 
+    <!-- 标题栏线体下拉：紧凑暗色，贴合原型 .tb-sel（小尺寸、Surface2 背景、悬停高亮边框） -->
+    <Style x:Key="ChromeCombo" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="9,0"/>
+        <Setter Property="Background" Value="{StaticResource Chrome2Brush}"/>
+        <Setter Property="BorderBrush" Value="#333A42"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Foreground" Value="{StaticResource ChromeFgBrush}"/>
+    </Style>
+
     <Style x:Key="FormInput" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="Height" Value="32"/>
         <Setter Property="FontSize" Value="13"/>

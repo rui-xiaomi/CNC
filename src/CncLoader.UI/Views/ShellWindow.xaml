@@ -54,14 +54,18 @@
                     <TextBlock Text="v1.0" Foreground="{StaticResource ChromeFgDimBrush}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <Border Grid.Column="1" Background="{StaticResource Chrome2Brush}" CornerRadius="3"
-                        BorderBrush="#333A42" BorderThickness="1" Margin="12,6" Padding="8,2"
-                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="线体：" Foreground="{StaticResource ChromeFgBrush}" FontSize="12" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding WorkLineName}" Foreground="{StaticResource ChromeFgBrush}" FontSize="12" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
+                <ComboBox x:Name="WorkLineCombo" Grid.Column="1"
+                          ItemsSource="{Binding WorkLines}"
+                          SelectedItem="{Binding SelectedWorkLine, Mode=TwoWay}"
+                          Style="{StaticResource ChromeCombo}"
+                          shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                          Margin="12,6" MinWidth="180">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Converter={x:Static conv:WorkLineDisplayConverter.Instance}}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
 
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">

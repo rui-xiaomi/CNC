@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CncLoader.Core.Abstractions;
+using CncLoader.Core.Config;
 using CncLoader.Core.State;
 using CncLoader.UI.Navigation;
 
@@ -9,22 +11,26 @@ namespace CncLoader.UI.ViewModels;
 
 /// <summary>
 /// 主窗口外壳 ViewModel：扁平导航、当前页路由、全局状态（线体/PLC在线/告警/时钟/心跳）。
+/// 标题栏线体为可切换下拉，数据来自 <see cref="IWorkLineService"/>；DB 未就绪时回退为占位项。
 /// </summary>
 public sealed partial class ShellViewModel : ViewModelBase, IDisposable
 {
     private readonly INavigationService _navigation;
     private readonly ISignalStateStore _store;
+    private readonly IWorkLineService _workLineService;
     private readonly DispatcherTimer _timer;
     private long _heartbeat;
 
-    public ShellViewModel(INavigationService navigation, ISignalStateStore store)
+    public ShellViewModel(INavigationService navigation, ISignalStateStore store, IWorkLineService workLineService)
     {
         _navigation = navigation;
         _store = store;
+        _workLineService = workLineService;
         _navigation.Navigated += OnNavigated;
         _store.MachineChanged += OnMachineChanged;
 
         NavItems = new ObservableCollection<NavItem>(BuildNavItems());
+        WorkLines = new ObservableCollection<WorkLineListItem>();
         _timer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
@@ -32,10 +38,12 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     }
 
     public ObservableCollection<NavItem> NavItems { get; }
+    public ObservableCollection<WorkLineListItem> WorkLines { get; }
 
     [ObservableProperty] private NavItem? _selectedNavItem;
     [ObservableProperty] private PageViewModelBase? _currentPage;
     [ObservableProperty] private string _currentTitle = "监控看板";
+    [ObservableProperty] private WorkLineListItem? _selectedWorkLine;
     [ObservableProperty] private string _workLineName = "未选择线体";
     [ObservableProperty] private string _plcStatusText = "PLC --/--";
     [ObservableProperty] private bool _plcAllOnline;
@@ -48,14 +56,34 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         if (value is not null) _navigation.NavigateTo(value.Key);
     }
 
-    /// <summary>外部（App）注入初始线体名等上下文。</summary>
-    public void SetContext(string workLineName) => WorkLineName = workLineName;
+    partial void OnSelectedWorkLineChanged(WorkLineListItem? value)
+    {
+        WorkLineName = value is null ? "未选择线体" : $"{value.Name} ({value.Code})";
+    }
 
-    /// <summary>初始化导航到默认页（监控看板）。</summary>
+    /// <summary>初始化导航到默认页（监控看板），并异步加载线体下拉。</summary>
     public void Start()
     {
         SelectedNavItem = NavItems.FirstOrDefault(i => i.Key == "dash");
         RefreshPlcStatus();
+        _ = LoadWorkLinesAsync();
+    }
+
+    private async Task LoadWorkLinesAsync()
+    {
+        try
+        {
+            var lines = await _workLineService.GetAllAsync();
+            WorkLines.Clear();
+            foreach (var l in lines) WorkLines.Add(l);
+            SelectedWorkLine = WorkLines.FirstOrDefault();
+        }
+        catch
+        {
+            // DB 未就绪等：保持空下拉，标题栏显示"未选择线体"，不阻塞 UI。
+            WorkLines.Clear();
+            SelectedWorkLine = null;
+        }
     }
 
     [RelayCommand]

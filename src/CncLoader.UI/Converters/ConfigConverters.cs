@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
+using CncLoader.Core.Config;
 
 namespace CncLoader.UI.Converters;
 
@@ -47,4 +48,17 @@ public sealed class InverseBoolConverter : IValueConverter
     public static readonly InverseBoolConverter Instance = new();
     public object Convert(object? value, Type t, object? p, CultureInfo c) => value is not true;
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => value is not true;
+}
+
+/// <summary>WorkLineListItem → 「名称 (编码)」显示文本。</summary>
+public sealed class WorkLineDisplayConverter : IValueConverter
+{
+    public static readonly WorkLineDisplayConverter Instance = new();
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        if (value is WorkLineListItem item)
+            return $"{item.Name} ({item.Code})";
+        return "未选择线体";
+    }
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
