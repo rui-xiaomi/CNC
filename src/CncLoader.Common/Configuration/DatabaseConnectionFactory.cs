@@ -40,7 +40,14 @@ public sealed class DatabaseConnectionFactory : IDatabaseConnectionFactory
             return string.Empty;
 
         if (_db.PasswordProtected)
-            return _protector.Unprotect(_db.Password);
+        {
+            if (_protector.TryUnprotect(_db.Password, out var plain))
+                return plain;
+
+            throw new InvalidOperationException(
+                "数据库口令 DPAPI 解密失败：密文由其他 Windows 用户或机器加密，无法在本机使用。" +
+                "开发环境请将 appsettings.json 中 PasswordProtected 设为 false 并填写明文口令。");
+        }
 
         // 开发期允许明文，但提示加密。
         _logger.LogWarning("数据库口令以明文配置（PasswordProtected=false），生产环境请改为 DPAPI 密文。");
