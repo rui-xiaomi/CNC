@@ -18,14 +18,17 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     private readonly INavigationService _navigation;
     private readonly ISignalStateStore _store;
     private readonly IWorkLineService _workLineService;
+    private readonly IPlcCatalogService _plcCatalog;
     private readonly DispatcherTimer _timer;
     private long _heartbeat;
 
-    public ShellViewModel(INavigationService navigation, ISignalStateStore store, IWorkLineService workLineService)
+    public ShellViewModel(INavigationService navigation, ISignalStateStore store,
+        IWorkLineService workLineService, IPlcCatalogService plcCatalog)
     {
         _navigation = navigation;
         _store = store;
         _workLineService = workLineService;
+        _plcCatalog = plcCatalog;
         _navigation.Navigated += OnNavigated;
         _store.MachineChanged += OnMachineChanged;
 
@@ -46,6 +49,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private WorkLineListItem? _selectedWorkLine;
     [ObservableProperty] private string _workLineName = "未选择线体";
     [ObservableProperty] private string _plcStatusText = "PLC --/--";
+    [ObservableProperty] private string _plcProtocolText = "PLC --";
     [ObservableProperty] private bool _plcAllOnline;
     [ObservableProperty] private int _unhandledAlarms;
     [ObservableProperty] private string _clock = "";
@@ -67,6 +71,27 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         SelectedNavItem = NavItems.FirstOrDefault(i => i.Key == "dash");
         RefreshPlcStatus();
         _ = LoadWorkLinesAsync();
+        _ = LoadPlcProtocolsAsync();
+    }
+
+    /// <summary>读取已配置 PLC 的协议，标题栏按实际协议显示（多协议并存时用 "/" 连接）。</summary>
+    private async Task LoadPlcProtocolsAsync()
+    {
+        try
+        {
+            var plcs = await _plcCatalog.GetAllAsync();
+            var protocols = plcs
+                .Select(p => string.IsNullOrWhiteSpace(p.Protocol) ? "ModbusTCP" : p.Protocol)
+                .Distinct()
+                .OrderBy(p => p)
+                .ToList();
+            PlcProtocolText = protocols.Count == 0 ? "PLC --" : $"PLC {string.Join("/", protocols)}";
+        }
+        catch
+        {
+            // DB 未就绪等：保持占位，不阻塞 UI。
+            PlcProtocolText = "PLC --";
+        }
     }
 
     private async Task LoadWorkLinesAsync()

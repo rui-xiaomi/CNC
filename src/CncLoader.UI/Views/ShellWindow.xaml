@@ -150,7 +150,7 @@
                                        FontSize="15" Foreground="{StaticResource FgBrush}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" Margin="0,0,6,0"/>
-                                <TextBlock Text="PLC ModbusTCP" Style="{StaticResource MutedText}" Margin="0,0,18,0"/>
+                                <TextBlock Text="{Binding PlcProtocolText}" Style="{StaticResource MutedText}" Margin="0,0,18,0"/>
                                 <TextBlock Text="心跳" Style="{StaticResource MutedText}" Margin="0,0,4,0"/>
                                 <TextBlock Text="{Binding HeartbeatText}" FontFamily="{StaticResource FontMono}" FontSize="12"
                                            Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Center" Margin="0,0,18,0"/>
