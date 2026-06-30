@@ -17,22 +17,29 @@ namespace CncLoader.App.Startup;
 public sealed class PlcRuntimeBootstrapper
 {
     private const int SimulatorPortBase = 15000;
+    private const int FinsSimulatorPortBase = 16000;
 
     private readonly IDbContextFactory<CncDbContext> _dbFactory;
     private readonly PlcConnectionManager _connections;
     private readonly ModbusTcpSimulator _simulator;
+    private readonly OmronFinsUdpSimulator _finsSimulator;
     private readonly PlcOptions _plc;
     private readonly ILogger<PlcRuntimeBootstrapper> _logger;
 
     public PlcRuntimeBootstrapper(IDbContextFactory<CncDbContext> dbFactory, PlcConnectionManager connections,
-        ModbusTcpSimulator simulator, IOptions<AppOptions> options, ILogger<PlcRuntimeBootstrapper> logger)
+        ModbusTcpSimulator simulator, OmronFinsUdpSimulator finsSimulator, IOptions<AppOptions> options,
+        ILogger<PlcRuntimeBootstrapper> logger)
     {
         _dbFactory = dbFactory;
         _connections = connections;
         _simulator = simulator;
+        _finsSimulator = finsSimulator;
         _plc = options.Value.Plc;
         _logger = logger;
     }
+
+    private static bool IsFins(string protocol) =>
+        protocol.Contains("FINS", StringComparison.OrdinalIgnoreCase);
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -45,24 +52,30 @@ public sealed class PlcRuntimeBootstrapper
 
         if (_plc.UseSimulator)
         {
+            // 按协议分流到对应模拟器：FINS → FINS/UDP 模拟器，其余 → Modbus TCP 模拟器。
             foreach (var p in plcs)
             {
-                var port = SimulatorPortBase + (int)p.PlcId;
-                _simulator.AddPlc(p.PlcId, port, p.Seed);
+                if (IsFins(p.Protocol))
+                    _finsSimulator.AddPlc(p.PlcId, FinsSimulatorPortBase + (int)p.PlcId, p.Seed);
+                else
+                    _simulator.AddPlc(p.PlcId, SimulatorPortBase + (int)p.PlcId, p.Seed);
             }
             await _simulator.StartAsync();
+            await _finsSimulator.StartAsync();
 
             foreach (var p in plcs)
             {
-                var port = SimulatorPortBase + (int)p.PlcId;
-                _connections.Register(p.PlcId, new PlcEndpoint(_plc.SimulatorBindAddress, port));
+                var port = (IsFins(p.Protocol) ? FinsSimulatorPortBase : SimulatorPortBase) + (int)p.PlcId;
+                _connections.Register(p.PlcId, new PlcEndpoint(_plc.SimulatorBindAddress, port, p.Protocol));
             }
-            _logger.LogInformation("内置 Modbus 模拟器已启动，登记 {Count} 台虚拟 PLC。", plcs.Count);
+            var finsCount = plcs.Count(p => IsFins(p.Protocol));
+            _logger.LogInformation("内置模拟器已启动：Modbus {Modbus} 台、FINS {Fins} 台。",
+                plcs.Count - finsCount, finsCount);
         }
         else
         {
             foreach (var p in plcs)
-                _connections.Register(p.PlcId, new PlcEndpoint(p.Host, p.Port));
+                _connections.Register(p.PlcId, new PlcEndpoint(p.Host, p.Port, p.Protocol));
         }
 
         await _connections.ConnectAllAsync(ct);
@@ -91,8 +104,11 @@ public sealed class PlcRuntimeBootstrapper
                             // 读点位初值给 OFF；写点位给 0。
                             seed[offset] = pt.Rw == "1" ? (ushort)0 : (ushort)pt.OffValue;
                         }
+                        var protocol = string.IsNullOrWhiteSpace(plc.PlcReadWay) ? "ModbusTCP" : plc.PlcReadWay;
+                        var isFins = protocol.Contains("FINS", StringComparison.OrdinalIgnoreCase);
+                        var defaultPort = isFins ? _plc.FinsDefaultPort : _plc.DefaultPort;
                         result.Add(new PlcDefinition(plc.PlcId, plc.PlcComputerIp,
-                            plc.PlcComputerPort ?? _plc.DefaultPort, seed));
+                            plc.PlcComputerPort ?? defaultPort, protocol, seed));
                     }
                     return result;
                 }
@@ -117,8 +133,8 @@ public sealed class PlcRuntimeBootstrapper
         // 写点位（启动信号，初值 0）
         seed[1100] = 0;
         seed[1102] = 0;
-        return new PlcDefinition(1, "127.0.0.1", 502, seed);
+        return new PlcDefinition(1, "127.0.0.1", 502, "ModbusTCP", seed);
     }
 
-    private sealed record PlcDefinition(long PlcId, string Host, int Port, Dictionary<int, ushort> Seed);
+    private sealed record PlcDefinition(long PlcId, string Host, int Port, string Protocol, Dictionary<int, ushort> Seed);
 }

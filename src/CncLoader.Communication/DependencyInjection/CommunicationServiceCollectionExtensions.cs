@@ -23,7 +23,7 @@ public static class CommunicationServiceCollectionExtensions
         services.AddSingleton<IPlcClientFactory>(sp =>
         {
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
-            return new NModbusPlcClientFactory(
+            return new PlcClientFactory(
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<IDeviceLogger>(),
                 plc.ConnectTimeoutMs,
@@ -44,6 +44,13 @@ public static class CommunicationServiceCollectionExtensions
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
             return new ModbusTcpSimulator(plc.SimulatorBindAddress,
                 sp.GetRequiredService<ILogger<ModbusTcpSimulator>>());
+        });
+
+        services.AddSingleton(sp =>
+        {
+            var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
+            return new OmronFinsUdpSimulator(plc.SimulatorBindAddress,
+                sp.GetRequiredService<ILogger<OmronFinsUdpSimulator>>());
         });
 
         services.AddSingleton<IPlcPollingService>(sp =>

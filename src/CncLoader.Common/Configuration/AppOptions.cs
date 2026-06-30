@@ -35,6 +35,10 @@ public sealed class DatabaseOptions
 public sealed class PlcOptions
 {
     public int DefaultPort { get; set; } = 502;
+
+    /// <summary>欧姆龙 FINS/UDP 默认端口（DB 未填端口时使用）。</summary>
+    public int FinsDefaultPort { get; set; } = 9600;
+
     public int PollingIntervalMs { get; set; } = 500;
     public int ConnectTimeoutMs { get; set; } = 3000;
     public int ReadWriteTimeoutMs { get; set; } = 2000;

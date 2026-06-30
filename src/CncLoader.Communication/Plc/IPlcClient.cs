@@ -1,7 +1,7 @@
 namespace CncLoader.Communication.Plc;
 
-/// <summary>PLC 连接端点。一机一 PLC，各 IP 不同。</summary>
-public sealed record PlcEndpoint(string Host, int Port);
+/// <summary>PLC 连接端点。一机一 PLC，各 IP 不同。Protocol 决定建链时创建的具体客户端。</summary>
+public sealed record PlcEndpoint(string Host, int Port, string Protocol = "ModbusTCP");
 
 public enum PlcConnectionState { Disconnected, Connecting, Connected, Faulted }
 

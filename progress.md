@@ -152,6 +152,18 @@
 - 验证：`dotnet build` 0 警告 0 错误。
 - 待用户人工确认：AGV/扫码枪页面板贴左上方，不再居中。
 
+### Session 16 — 2026-06-30 新增欧姆龙 FINS 协议支持（代码 + 文档）
+- 背景：现场 PLC 改走 FINS 协议，需在保持 Modbus 的同时支持 FINS，并能在本机先验证。
+- 通信层：
+  - `PlcEndpoint` 增 `Protocol` 字段；工厂 `PlcClientFactory`（原 `NModbusPlcClientFactory`）按协议分流创建 `NModbusPlcClient` / 新增 `OmronFinsPlcClient`。
+  - `OmronFinsPlcClient`：手写 FINS/UDP（9600），D→DM 字读写（读 0x0101/写 0x0102），节点号自动取 IP 末段、网络/单元号=0；连接做 DM 探活，离线判未连接；socket 用 CancellationToken 重载避免未观察异常。
+  - 协议透传：`PlcEndpointResolver.Resolve` 加 protocol 参数，`PlcConnectionService`/`PlcRuntimeBootstrapper` 全链路传递；`PlcOptions.FinsDefaultPort=9600`。
+  - 本地模拟：新增 `OmronFinsUdpSimulator`（UDP 响应读写），`UseSimulator=true` 时按协议分流——FINS→16000+id，Modbus→15000+id，两类可共存。
+- 启动修复：`App.OnStartup` 改为先显示窗口、后台跑启动自检——原先自检 await 在前，连不上真机时数十秒读超时导致“窗口不弹出”。
+- UI：`PlcEditDialog` 协议下拉加 FINS，选中联动端口 9600。
+- 验证：`dotnet build` 0 警告 0 错误（WPF 运行态待现场/人工确认）。
+- 文档同步：`docs/客户端开发文档.md`(§2 通信栈、目录结构、§3.3 适配器、§5.4 新增 PLC)、`docs/UI设计文档.md`(§6.3 连接条)、`docs/sql/cnc_schema.sql`(PLC_READ_WAY/端口注释)、`task_plan.md`(技术栈/结构)、`findings.md`(FINS 节点号假设)。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - Phase 1/2 完成后暂停演示，Phase 3（配置管理）待用户确认。

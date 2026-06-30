@@ -10,14 +10,15 @@ public interface IPlcClientFactory
     IPlcClient Create(long plcId, PlcEndpoint endpoint);
 }
 
-public sealed class NModbusPlcClientFactory : IPlcClientFactory
+/// <summary>按端点协议分流创建具体 PLC 客户端（Modbus TCP / 欧姆龙 FINS）。</summary>
+public sealed class PlcClientFactory : IPlcClientFactory
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly IDeviceLogger _deviceLogger;
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
 
-    public NModbusPlcClientFactory(ILoggerFactory loggerFactory, IDeviceLogger deviceLogger,
+    public PlcClientFactory(ILoggerFactory loggerFactory, IDeviceLogger deviceLogger,
         int connectTimeoutMs, int rwTimeoutMs)
     {
         _loggerFactory = loggerFactory;
@@ -27,8 +28,11 @@ public sealed class NModbusPlcClientFactory : IPlcClientFactory
     }
 
     public IPlcClient Create(long plcId, PlcEndpoint endpoint) =>
-        new NModbusPlcClient(plcId, endpoint, _connectTimeoutMs, _rwTimeoutMs,
-            _loggerFactory.CreateLogger<NModbusPlcClient>(), _deviceLogger);
+        endpoint.Protocol.Contains("FINS", StringComparison.OrdinalIgnoreCase)
+            ? new OmronFinsPlcClient(plcId, endpoint, _connectTimeoutMs, _rwTimeoutMs,
+                _loggerFactory.CreateLogger<OmronFinsPlcClient>(), _deviceLogger)
+            : new NModbusPlcClient(plcId, endpoint, _connectTimeoutMs, _rwTimeoutMs,
+                _loggerFactory.CreateLogger<NModbusPlcClient>(), _deviceLogger);
 }
 
 /// <summary>

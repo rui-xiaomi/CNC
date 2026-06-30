@@ -55,3 +55,8 @@
   - 种子引用计数实测：线体1→2 道工序；工序1→3 台机台；机台1→12 个点位+0 条料架绑定。
 - 配置列表查询必须过滤 `STATE='0'`：软删后不被读回。`GetAllAsync/GetByLineAsync/GetByCraftAsync/GetWorkLineOptionsAsync/GetCraftworkOptionsAsync` 均加 `.Where(x => x.State == "0")`。
 - 业务链校正：**线体→工序→机台→PLC**。线体不直接关联 PLC；PLC 由机台绑定（`MAS_AUTO_WORKLINE_EQUIMENT.PLC_ID`）。`MAS_AUTO_WORKLINECONFIGS.PLC_ID` DB 列保留但 UI 不再编辑。
+- FINS 协议（欧姆龙）接入要点与风险：
+  - FINS 是应用层协议，可走 UDP(9600) 或 TCP(9600)，两者线格式不同、不通用；本期实现 FINS/UDP。现场若 PLC 只开 FINS/TCP 则需另补 TCP 客户端（抽象已留）。
+  - **节点号假设（最大风险）**：当前自动推导 目的节点=PLC IP 末段、源节点=本机 IP 末段、网络号/单元号=0。欧姆龙以太网单元的 FINS 节点号若不等于 IP 末段，则“连上但读超时”。现场需确认节点号；不符则要把 网络号/节点号/单元号 做成每台 PLC 可配置项（落 DB）。
+  - 仅支持 DM(D 区)字读写；CIO/W/H/A 区码已在 `OmronFinsPlcClient.WordAreaCodes` 预留但未启用，位寻址未做。
+  - 三台机共用一台物理 PLC 时：保留三条 PLC 记录、IP 全设为同一台即可（三路独立 UDP，目的节点同为该 IP 末段，各读各的 DM 段，不冲突）。

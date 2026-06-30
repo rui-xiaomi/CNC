@@ -6,7 +6,7 @@
 完整设计见已批准计划：`C:\Users\Administrator\.claude\plans\docs-robust-goose.md`。
 
 ## 技术栈（已确认）
-.NET 8（net8.0-windows）· WPF + MVVM(CommunityToolkit.Mvvm) · Microsoft.Extensions.Hosting(DI) · EF Core 8 + Pomelo.EntityFrameworkCore.MySql 8.0.3 · NModbus + 内置 Modbus TCP 模拟器 · Serilog · MySQL 8.x(本机) 库名 `cnc_auto`。
+.NET 8（net8.0-windows）· WPF + MVVM(CommunityToolkit.Mvvm) · Microsoft.Extensions.Hosting(DI) · EF Core 8 + Pomelo.EntityFrameworkCore.MySql 8.0.3 · PLC 通信协议可切换：NModbus(Modbus TCP) + 欧姆龙 FINS/UDP(手写) · 内置 Modbus TCP / FINS UDP 模拟器 · Serilog · MySQL 8.x(本机) 库名 `cnc_auto`。
 
 ## 关键设计决策（brainstorming 确认）
 1. 操作人 = 轻量 `ICurrentUser`（本机用户名/配置项），不建用户表、不做登录。
@@ -17,7 +17,7 @@
 - `CncLoader.App`：WPF 启动、DI/Host、全局异常、导航宿主
 - `CncLoader.UI`：View + ViewModel、设计令牌 ResourceDictionary、控件样式
 - `CncLoader.Core`：领域模型、SignalKey 枚举、状态合成/状态机、轮询中枢+状态仓接口
-- `CncLoader.Communication`：IPlcClient/PlcConnectionManager/NModbus 实现/模拟器/外设测试客户端
+- `CncLoader.Communication`：IPlcClient/PlcConnectionManager/NModbus 实现/欧姆龙 FINS 实现/模拟器(Modbus+FINS)/外设测试客户端
 - `CncLoader.Data`：CncDbContext、17 实体映射、仓储
 - `CncLoader.Common`：日志、配置、加解密、ICurrentUser
 - 依赖：App→UI→Core→(Data,Communication)→Common

@@ -75,7 +75,7 @@ public sealed class PlcConnectionService : IPlcConnectionService
         if (!force && _manager.Get(plcId) is not null) return;
         var plc = await _catalog.GetByIdAsync(plcId, ct)
             ?? throw new InvalidOperationException($"PLC#{plcId} 不存在");
-        var endpoint = _endpoints.Resolve(plcId, plc.Ip, plc.Port);
+        var endpoint = _endpoints.Resolve(plcId, plc.Ip, plc.Port, plc.Protocol);
         _manager.Register(plcId, endpoint);
     }
 
@@ -98,5 +98,5 @@ public sealed class PlcConnectionService : IPlcConnectionService
 /// <summary>解析 PLC 连接端点（模拟器模式映射到环回端口）。</summary>
 public interface IPlcEndpointResolver
 {
-    PlcEndpoint Resolve(long plcId, string dbIp, int dbPort);
+    PlcEndpoint Resolve(long plcId, string dbIp, int dbPort, string protocol = "ModbusTCP");
 }

@@ -7,7 +7,7 @@ namespace CncLoader.UI.Views.Dialogs;
 
 public partial class PlcEditDialog : Window
 {
-    private static readonly string[] Protocols = { "ModbusTCP", "ModbusRTU" };
+    private static readonly string[] Protocols = { "ModbusTCP", "ModbusRTU", "FINS" };
 
     public PlcEditModel? Result { get; private set; }
 
@@ -22,6 +22,7 @@ public partial class PlcEditDialog : Window
         InitializeComponent();
 
         ProtocolCombo.ItemsSource = Protocols;
+        ProtocolCombo.SelectionChanged += OnProtocolChanged;
 
         // 机台下拉：首项"未绑定"(Id=0) + 全部启用机台；选中当前绑定项
         var options = new List<EquipmentOption> { new EquipmentOption(0, "未绑定", 0) };
@@ -54,6 +55,17 @@ public partial class PlcEditDialog : Window
             PortBox.Text = edit.Port.ToString();
             ProtocolCombo.SelectedItem = string.IsNullOrEmpty(edit.Protocol) ? "ModbusTCP" : edit.Protocol;
         }
+    }
+
+    /// <summary>切到 FINS 且端口仍为 Modbus 默认 502 时，建议改为 9600（仅轻量联动，不强制覆盖用户值）。</summary>
+    private void OnProtocolChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (ProtocolCombo.SelectedItem is not string protocol) return;
+        var isFins = protocol.Contains("FINS", System.StringComparison.OrdinalIgnoreCase);
+        if (isFins && PortBox.Text.Trim() == "502")
+            PortBox.Text = "9600";
+        else if (!isFins && PortBox.Text.Trim() == "9600")
+            PortBox.Text = "502";
     }
 
     private void OnSave(object sender, RoutedEventArgs e)

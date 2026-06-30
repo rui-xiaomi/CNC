@@ -36,10 +36,12 @@ public partial class App : Application
             await _host.StartAsync();
             _logger = _host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 
-            await RunStartupVerificationAsync(_host.Services);
-
+            // 先显示主窗口，再后台跑启动自检（DB 探活 + PLC 建链 + 轮询一轮）。
+            // 自检可能因连不上真机而耗时数十秒，绝不能阻塞窗口显示。
             var shell = _host.Services.GetRequiredService<ShellWindow>();
             shell.Show();
+
+            _ = RunStartupVerificationSafeAsync(_host.Services);
         }
         catch (Exception ex)
         {
@@ -83,6 +85,13 @@ public partial class App : Application
     /// Phase 1 启动自检：数据库连通 + ORM 映射、PLC 模拟器建链、轮询读一轮、读单寄存器。
     /// 全程尽力而为：任一步骤失败仅记日志，绝不阻止主窗口显示（DB 未就绪时仍可演示界面与模拟器通信）。
     /// </summary>
+    /// <summary>后台执行启动自检；任何异常仅记日志，不影响已显示的主窗口。</summary>
+    private async Task RunStartupVerificationSafeAsync(IServiceProvider sp)
+    {
+        try { await RunStartupVerificationAsync(sp); }
+        catch (Exception ex) { _logger!.LogWarning(ex, "启动自检异常"); }
+    }
+
     private async Task RunStartupVerificationAsync(IServiceProvider sp)
     {
         // 1. 数据库连通与 ORM 映射
