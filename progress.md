@@ -164,6 +164,13 @@
 - 验证：`dotnet build` 0 警告 0 错误（WPF 运行态待现场/人工确认）。
 - 文档同步：`docs/客户端开发文档.md`(§2 通信栈、目录结构、§3.3 适配器、§5.4 新增 PLC)、`docs/UI设计文档.md`(§6.3 连接条)、`docs/sql/cnc_schema.sql`(PLC_READ_WAY/端口注释)、`task_plan.md`(技术栈/结构)、`findings.md`(FINS 节点号假设)。
 
+### Session 17 — 2026-06-30 现场配置变更：取消机台安全 + 平面度工位2
+- 现场确认两点：① 内长宽(EQ01)、平面度(EQ02) 取消「机台安全」信号；② 平面度只保留工位1，取消工位2。
+- 代码无需改：`StatusSynthesizer` 用 `MachineSafe == false` 才报警，缺该信号时为 null，不会误报警。
+- 种子 `docs/sql/cnc_schema.sql`：删 EQ1/EQ2 MACHINE_SAFE 点位；删平面度工位2(POS ID=4)及其 5 个点位(D1212/1214/1216/1218/1302)。
+- 信号表 `docs/测试机信号表.md`：内长宽去机台安全、平面度去机台安全+工位2，各加变更注。
+- 现有库迁移：新增 `docs/sql/migration_2026-06-30_remove_machinesafe_and_pmd_pos2.sql`（软删 STATE='1'，按 EQUIMENT_NO/POSITION_CODE 定位，幂等可回滚）。需对现有 cnc_auto 执行后才在运行时生效。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - Phase 1/2 完成后暂停演示，Phase 3（配置管理）待用户确认。

@@ -438,14 +438,13 @@ VALUES
   (2, 1, 2, 'EQ02', '平面度', 'M-PMD', '检测', '平面度测试机', '产品', '0', 'system'),
   (3, 1, 3, 'EQ03', 'A基准', 'M-ABASE', '检测', 'A基准测试机', '产品', '0', 'system');
 
--- 加工位（每机台2个）
+-- 加工位（内长宽/A基准各2个；平面度仅工位1——工位2按现场确认取消 2026-06-30）
 INSERT INTO MAS_AUTO_EQUIMENT_POSITION
   (ID1, EQUIMENT_ID, POSITION_NAME, POSITION_CODE, POSITION_WORK_STATE, STATE, AUTHOR)
 VALUES
   (1, 1, '工位1', 'EQ01-P1', '0', '0', 'system'),
   (2, 1, '工位2', 'EQ01-P2', '0', '0', 'system'),
   (3, 2, '工位1', 'EQ02-P1', '0', '0', 'system'),
-  (4, 2, '工位2', 'EQ02-P2', '0', '0', 'system'),
   (5, 3, '工位1', 'EQ03-P1', '0', '0', 'system'),
   (6, 3, '工位2', 'EQ03-P2', '0', '0', 'system');
 
@@ -467,7 +466,6 @@ INSERT INTO MAS_AUTO_EQUIMENT_CONDITION
 INSERT INTO MAS_AUTO_PLC_POINT
   (PLC_ID, EQUIMENT_ID, POSITION_ID, SIGNAL_KEY, RW, REGISTER_ADDR, IO_ADDR) VALUES
   (1, 1, NULL, 'DOOR',           '0', 'D1000', 'I0.0'),
-  (1, 1, NULL, 'MACHINE_SAFE',   '0', 'D1002', 'I0.1'),
   (1, 1, 1,    'POS_HAS_MAT',    '0', 'D1004', 'I0.2'),
   (1, 1, 1,    'POS_ALLOW_LOAD', '0', 'D1006', 'I0.3'),
   (1, 1, 1,    'POS_OK',         '0', 'D1008', 'I0.4'),
@@ -478,21 +476,15 @@ INSERT INTO MAS_AUTO_PLC_POINT
   (1, 1, 2,    'POS_NG',         '0', 'D1018', 'I1.1'),
   (1, 1, 1,    'POS_TEST_START', '1', 'D1100', 'Q0.0'),
   (1, 1, 2,    'POS_TEST_START', '1', 'D1102', 'Q0.1');
--- ---- 平面度 (EQUIMENT_ID=2, 工位1=POS3, 工位2=POS4) ----
+-- ---- 平面度 (EQUIMENT_ID=2, 工位1=POS3；工位2及机台安全按现场确认取消 2026-06-30) ----
 INSERT INTO MAS_AUTO_PLC_POINT
   (PLC_ID, EQUIMENT_ID, POSITION_ID, SIGNAL_KEY, RW, REGISTER_ADDR, IO_ADDR) VALUES
   (2, 2,NULL, 'DOOR',           '0', 'D1200', 'I2.4'),
-  (2, 2,NULL, 'MACHINE_SAFE',   '0', 'D1202', 'I2.5'),
   (2, 2,3,    'POS_HAS_MAT',    '0', 'D1204', 'I2.6'),
   (2, 2,3,    'POS_ALLOW_LOAD', '0', 'D1206', 'I2.7'),
   (2, 2,3,    'POS_OK',         '0', 'D1208', 'I3.0'),
   (2, 2,3,    'POS_NG',         '0', 'D1210', 'I3.1'),
-  (2, 2,4,    'POS_HAS_MAT',    '0', 'D1212', 'I3.2'),
-  (2, 2,4,    'POS_ALLOW_LOAD', '0', 'D1214', 'I3.3'),
-  (2, 2,4,    'POS_OK',         '0', 'D1216', 'I3.4'),
-  (2, 2,4,    'POS_NG',         '0', 'D1218', 'I3.5'),
-  (2, 2,3,    'POS_TEST_START', '1', 'D1300', 'Q0.4'),
-  (2, 2,4,    'POS_TEST_START', '1', 'D1302', 'Q0.5');
+  (2, 2,3,    'POS_TEST_START', '1', 'D1300', 'Q0.4');
 -- ---- A基准 (EQUIMENT_ID=3, 工位1=POS5, 工位2=POS6) ----
 INSERT INTO MAS_AUTO_PLC_POINT
   (PLC_ID, EQUIMENT_ID, POSITION_ID, SIGNAL_KEY, RW, REGISTER_ADDR, IO_ADDR) VALUES
