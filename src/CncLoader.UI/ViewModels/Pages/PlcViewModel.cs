@@ -50,6 +50,8 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         WriteSignals = new ObservableCollection<WriteSignalOption>();
 
         _connections.ConnectionChanged += (_, plcId) => _ = RefreshPlcRowAsync(plcId);
+        // 点位映射 tab 改完点位后，自动刷新本页读/写面板（免去重选 PLC）。
+        PointMapping.PointsChanged += (_, plcId) => _ = OnPointsChangedAsync(plcId);
         _logStore.LogAppended += (_, row) => PrependLog(row.DisplayLine);
         _alarms.AlarmRaised += (_, row) => PrependAlarm($"{row.Time:HH:mm:ss} [{row.Level}] {row.Message}");
 
@@ -351,6 +353,23 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         _ = plcId;
     }
 
+    /// <summary>
+    /// 点位映射变更后刷新读/写面板。点位映射 tab 内有独立 PLC 过滤，可能与顶部所选 PLC 不一致，
+    /// 故将读/写面板切到“刚编辑的那台 PLC”：不同则切换（触发完整重载），相同则就地重载。
+    /// </summary>
+    private async Task OnPointsChangedAsync(long plcId)
+    {
+        var target = PlcRows.FirstOrDefault(p => p.PlcId == plcId);
+        if (target is null) return;
+        if (SelectedPlc?.PlcId != plcId)
+        {
+            SelectedPlc = target; // 触发 OnSelectedPlcChanged → 自动重载读行/写信号/日志
+            return;
+        }
+        await LoadWriteSignalsAsync(plcId);
+        await ReadOnceAsync();
+    }
+
     private async Task LoadWriteSignalsAsync(long plcId)
     {
         var signals = await _points.GetWriteSignalsAsync(plcId);
@@ -372,6 +391,10 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         var updated = plcs.FirstOrDefault(p => p.PlcId == plcId);
         if (updated is null) return;
 
+        // 替换列表项会让 DataGrid 把 SelectedItem 置空（连带 SelectedPlc=null），
+        // 故在替换前先记住是否选中，替换后无条件恢复，避免选中丢失导致单次读/写无目标。
+        var wasSelected = SelectedPlc?.PlcId == plcId;
+
         var idx = -1;
         for (var i = 0; i < PlcRows.Count; i++)
         {
@@ -384,7 +407,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         var online = plcs.Count(p => p.IsConnected);
         OnlineSummary = $"{online} / {plcs.Count} 在线";
 
-        if (idx >= 0 && SelectedPlc?.PlcId == plcId)
+        if (idx >= 0 && wasSelected)
             SelectedPlc = PlcRows[idx];
     }
 

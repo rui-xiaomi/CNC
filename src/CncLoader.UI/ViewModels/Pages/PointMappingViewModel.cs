@@ -34,6 +34,9 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
         _ = InitializeAsync();
     }
 
+    /// <summary>点位发生增删改后触发（参数为受影响的 PlcId），供 PLC 页刷新读/写面板。</summary>
+    public event EventHandler<long>? PointsChanged;
+
     public override string Key => "point";
     public override string Title => "点位映射";
     public override string Description => "维护 MAS_AUTO_PLC_POINT：按 PLC 过滤、行内编辑、信号表批量导入。新增机台只需新增点位即可纳入轮询。";
@@ -101,24 +104,65 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
             var added = await _points.ImportSignalTableAsync(
                 SelectedEquipment.Id, SelectedPlc.PlcId, _user.Name);
             await LoadPointsAsync(SelectedPlc.PlcId);
+            NotifyPointsChanged();
             StatusMessage = added > 0 ? $"已导入 {added} 个点位" : "点位已存在，无需导入";
             HandyControl.Controls.Growl.Success(StatusMessage);
         }
-        catch (Exception ex) { StatusMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导入失败：{ex.Message}";
+            HandyControl.Controls.Growl.Error(StatusMessage);
+        }
     }
 
     [RelayCommand]
     private async Task SaveSelectedAsync()
     {
-        if (SelectedPoint is null) return;
+        if (SelectedPoint is null)
+        {
+            StatusMessage = "请先在列表中选中要保存的行";
+            HandyControl.Controls.Growl.Warning(StatusMessage);
+            return;
+        }
         try
         {
             await _points.SavePointAsync(SelectedPoint, _user.Name);
             if (SelectedPlc is not null) await LoadPointsAsync(SelectedPlc.PlcId);
+            NotifyPointsChanged();
             StatusMessage = "点位已保存";
             HandyControl.Controls.Growl.Success(StatusMessage);
         }
-        catch (Exception ex) { StatusMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存失败：{ex.Message}";
+            HandyControl.Controls.Growl.Error(StatusMessage);
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveAllAsync()
+    {
+        if (PointRows.Count == 0)
+        {
+            StatusMessage = "当前没有可保存的点位";
+            HandyControl.Controls.Growl.Warning(StatusMessage);
+            return;
+        }
+        try
+        {
+            var rows = PointRows.ToList();
+            foreach (var row in rows)
+                await _points.SavePointAsync(row, _user.Name);
+            if (SelectedPlc is not null) await LoadPointsAsync(SelectedPlc.PlcId);
+            NotifyPointsChanged();
+            StatusMessage = $"已保存全部 {rows.Count} 个点位";
+            HandyControl.Controls.Growl.Success(StatusMessage);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存失败：{ex.Message}";
+            HandyControl.Controls.Growl.Error(StatusMessage);
+        }
     }
 
     [RelayCommand]
@@ -134,10 +178,15 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
         {
             await _points.DeletePointAsync(SelectedPoint.Id, _user.Name);
             if (SelectedPlc is not null) await LoadPointsAsync(SelectedPlc.PlcId);
+            NotifyPointsChanged();
             StatusMessage = "点位已删除";
             HandyControl.Controls.Growl.Success(StatusMessage);
         }
-        catch (Exception ex) { StatusMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            StatusMessage = $"删除失败：{ex.Message}";
+            HandyControl.Controls.Growl.Error(StatusMessage);
+        }
     }
 
     private async Task LoadPointsAsync(long plcId)
@@ -147,6 +196,12 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
         foreach (var p in points) PointRows.Add(p);
         TotalCount = PointRows.Count;
         StatusMessage = $"共 {TotalCount} 个点位";
+    }
+
+    /// <summary>通知订阅者（PLC 页）点位已变更，触发读/写面板刷新。</summary>
+    private void NotifyPointsChanged()
+    {
+        if (SelectedPlc is not null) PointsChanged?.Invoke(this, SelectedPlc.PlcId);
     }
 }
 

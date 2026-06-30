@@ -1059,8 +1059,11 @@
                         <TextBlock Style="{StaticResource MutedText}" VerticalAlignment="Center">
                             <Run Text="共 "/><Run Text="{Binding TotalCount}" FontFamily="{StaticResource FontMono}"/><Run Text=" 个点位"/>
                         </TextBlock>
-                        <Button Content="保存所选" Style="{StaticResource PrimaryButton}"
+                        <Button Content="保存全部" Style="{StaticResource PrimaryButton}"
                                 Padding="12,0" Margin="16,0,0,0"
+                                Command="{Binding SaveAllCommand}"/>
+                        <Button Content="保存所选" Style="{StaticResource GhostButton}"
+                                Padding="12,0" Margin="8,0,0,0"
                                 Command="{Binding SaveSelectedCommand}"/>
                         <Button Content="删除所选" Style="{StaticResource DangerButton}"
                                 Padding="12,0" Margin="8,0,0,0"
@@ -1073,7 +1076,7 @@
             <Border Grid.Row="1" Style="{StaticResource Panel}">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
-                        <TextBlock Text="点位列表（双击单元格可编辑；改完按右上 保存所选 提交）"
+                        <TextBlock Text="点位列表（双击单元格可编辑；改多行用 保存全部，仅改当前行用 保存所选）"
                                    Style="{StaticResource PanelTitle}" Margin="12,0" VerticalAlignment="Center"/>
                     </Grid>
                     <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
@@ -1091,7 +1094,7 @@
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                             <DataGridTextColumn Header="信号语义" Binding="{Binding SignalLabel}" Width="90" IsReadOnly="True"/>
-                            <DataGridTextColumn Header="信号 KEY" Binding="{Binding SignalKey}" Width="130">
+                            <DataGridTextColumn Header="信号 KEY" Binding="{Binding SignalKey, UpdateSourceTrigger=PropertyChanged}" Width="130">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
@@ -1114,7 +1117,7 @@
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                             <DataGridCheckBoxColumn Header="写" Binding="{Binding IsWrite}" Width="40"/>
-                            <DataGridTextColumn Header="ON" Binding="{Binding OnValue}" Width="50">
+                            <DataGridTextColumn Header="ON" Binding="{Binding OnValue, UpdateSourceTrigger=PropertyChanged}" Width="50">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
@@ -1122,7 +1125,7 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Header="OFF" Binding="{Binding OffValue}" Width="50">
+                            <DataGridTextColumn Header="OFF" Binding="{Binding OffValue, UpdateSourceTrigger=PropertyChanged}" Width="50">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
@@ -1130,7 +1133,7 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Header="长度" Binding="{Binding DataLength}" Width="50">
+                            <DataGridTextColumn Header="长度" Binding="{Binding DataLength, UpdateSourceTrigger=PropertyChanged}" Width="50">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
