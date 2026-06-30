@@ -46,10 +46,19 @@ public sealed class OmronFinsUdpSimulator : IDisposable
 
         foreach (var plc in _plcs.Values)
         {
-            var udp = new UdpClient(new IPEndPoint(_bindAddress, plc.Port));
-            plc.Socket = udp;
-            plc.ListenTask = Task.Run(() => ServeAsync(plc, udp, _cts.Token));
-            _logger.LogInformation("FINS 模拟器 PLC {PlcId} 监听 {Addr}:{Port}", plc.PlcId, _bindAddress, plc.Port);
+            try
+            {
+                var udp = new UdpClient(new IPEndPoint(_bindAddress, plc.Port));
+                plc.Socket = udp;
+                plc.ListenTask = Task.Run(() => ServeAsync(plc, udp, _cts.Token));
+                _logger.LogInformation("FINS 模拟器 PLC {PlcId} 监听 {Addr}:{Port}", plc.PlcId, _bindAddress, plc.Port);
+            }
+            catch (SocketException ex)
+            {
+                // 端口被占用（10048）：通常是同时开了多个程序实例。单台失败不影响其余台启动。
+                _logger.LogWarning(ex, "FINS 模拟器 PLC {PlcId} 端口 {Port} 监听失败（可能已有程序实例占用，请勿同时运行多个实例）",
+                    plc.PlcId, plc.Port);
+            }
         }
 
         IsRunning = true;
