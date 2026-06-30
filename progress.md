@@ -171,6 +171,16 @@
 - 信号表 `docs/测试机信号表.md`：内长宽去机台安全、平面度去机台安全+工位2，各加变更注。
 - 现有库迁移：新增 `docs/sql/migration_2026-06-30_remove_machinesafe_and_pmd_pos2.sql`（软删 STATE='1'，按 EQUIMENT_NO/POSITION_CODE 定位，幂等可回滚）。需对现有 cnc_auto 执行后才在运行时生效。
 
+### Session 18 — 2026-06-30 FINS 现场联调期 UI/健壮性修复（代码）
+- 标题栏协议改为跟随实际配置：`ShellViewModel` 注入 `IPlcCatalogService`，`PlcProtocolText` 去重各 PLC 协议（多协议用 / 连接），`ShellWindow` 绑定之（提交 2337249）。
+- FINS 模拟器端口占用容错：`OmronFinsUdpSimulator.StartAsync` 单台 bind 失败(10048，常因开多个程序实例)只记警告并继续，不再整体抛异常（提交 e2afac4）。
+- 启动不弹窗修复（前序）：`App.OnStartup` 先显示窗口、自检改后台，避免连不上真机时数十秒读超时阻塞窗口。
+- 点位映射页（提交 cab3912 的一部分）：新增「保存全部」批量写多行；保存/删除/导入失败弹 `Growl.Error`；信号KEY/ON/OFF/长度列 `UpdateSourceTrigger=PropertyChanged` 即时提交。
+- 跨面板刷新：`PointMappingViewModel.PointsChanged` 事件 → `PlcViewModel.OnPointsChangedAsync` 自动刷新读/写面板并切到对应 PLC。
+- 断开重连单次读无反应修复：`PlcViewModel.RefreshPlcRowAsync` 替换行前记录选中、替换后无条件恢复 `SelectedPlc`（替换被选中行会被 DataGrid 置 null）。
+- 排障要点（现场注意）：① 勿同时运行多个程序实例（会抢模拟器端口 / 端口冲突）；② FINS 节点号默认取 IP 末段，不符需后续做成可配置。
+- 文档同步：`docs/客户端开发文档.md` §5.4 点位映射维护操作说明。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - Phase 1/2 完成后暂停演示，Phase 3（配置管理）待用户确认。
