@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md
+            "name": ".NET Core Launch (console)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/src/CncLoader.App/bin/Debug/net8.0-windows/CncLoader.App.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/CncLoader.App",
+            // integratedTerminal 避免 DEBUG CONSOLE 在 Windows 下中文乱码
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        },
+        {
+            "name": ".NET Core Attach",
+            "type": "coreclr",
+            "request": "attach"
+        }
+    ]
+}

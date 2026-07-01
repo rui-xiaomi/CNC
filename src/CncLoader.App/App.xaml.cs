@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using CncLoader.App.Startup;
@@ -28,6 +30,7 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        TrySetConsoleUtf8();
         RegisterGlobalExceptionHandlers();
 
         try
@@ -161,6 +164,19 @@ public partial class App : Application
     {
         Log.Logger.Error(e.Exception, "未观察的 Task 异常");
         e.SetObserved();
+    }
+
+    private static void TrySetConsoleUtf8()
+    {
+        try
+        {
+            Console.OutputEncoding = Encoding.UTF8;
+            Console.InputEncoding = Encoding.UTF8;
+        }
+        catch (IOException)
+        {
+            // WinExe 无附加控制台时忽略
+        }
     }
 
     protected override async void OnExit(ExitEventArgs e)
