@@ -262,11 +262,20 @@ public sealed class OmronFinsPlcClient : IPlcClient
 
         if (resp.Length < 14)
             throw new InvalidOperationException($"FINS 响应过短（{resp.Length} 字节）");
-        // 结束码：resp[12..13]，0x0000 为成功。
+        // 结束码 resp[12..13] 含 3 个状态标志位，必须剥离后再判成败：
+        //   MRES bit7 = 网络中继错误；SRES bit7 = PLC 致命错误；SRES bit6 = PLC 非致命错误。
+        // 其中「非致命错误」（如电池欠压）不影响本次读写结果，若一并当作失败会导致
+        // 带该标志的正常响应被误判为连接失败，整机永远连不上。
         var mres = resp[12];
         var sres = resp[13];
-        if (mres != 0x00 || sres != 0x00)
+        var relayError = (mres & 0x80) != 0;
+        var pcFatalError = (sres & 0x80) != 0;
+        var pcNonFatalError = (sres & 0x40) != 0;
+        var realCode = ((mres & 0x7F) << 8) | (sres & 0x3F);
+        if (relayError || pcFatalError || realCode != 0)
             throw new InvalidOperationException($"FINS 错误码 {mres:X2}{sres:X2}");
+        if (pcNonFatalError)
+            _logger.LogWarning("PLC {PlcId} 存在非致命错误（如电池欠压），通信正常但建议现场检查。", PlcId);
         return resp;
     }
 
