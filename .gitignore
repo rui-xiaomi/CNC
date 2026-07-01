@@ -14,6 +14,9 @@ logs/
 appsettings.*.local.json
 secrets.local.json
 
+## Node (docs/scripts PPT 生成)
+node_modules/
+
 ## OS
 Thumbs.db
 .DS_Store
