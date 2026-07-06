@@ -9,6 +9,11 @@
     <PackageReference Include="NModbus" Version="3.0.83" />
   </ItemGroup>
 
+  <!-- RCS 回调服务端内嵌 Kestrel 自宿主（第四阶段②）。 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

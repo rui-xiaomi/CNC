@@ -9,8 +9,61 @@ public sealed class AppOptions
 
     public DatabaseOptions Database { get; set; } = new();
     public PlcOptions Plc { get; set; } = new();
+    public RcsOptions Rcs { get; set; } = new();
     public OperatorOptions Operator { get; set; } = new();
     public LoggingOptions Logging { get; set; } = new();
+}
+
+/// <summary>RCS 调度系统对接配置（第四阶段）。地址等亦可存 MAS_AUTO_WORKLINE_AGV，此处为默认/兜底。</summary>
+public sealed class RcsOptions
+{
+    /// <summary>RCS 出站基址，如 http://192.168.1.50:8080。</summary>
+    public string BaseUrl { get; set; } = "http://127.0.0.1:8090";
+
+    /// <summary>本系统标识（请求公共字段 clientCode）。</summary>
+    public string ClientCode { get; set; } = "CNC";
+
+    /// <summary>协议版本（须与 RCS 一致，否则失败）。</summary>
+    public string Version { get; set; } = "1.0.0";
+
+    /// <summary>令牌（预留字段）。</summary>
+    public string TokenCode { get; set; } = "0";
+
+    /// <summary>出站 HTTP 超时（毫秒）。</summary>
+    public int RequestTimeoutMs { get; set; } = 10000;
+
+    /// <summary>网络级失败重试次数（指数退避）。</summary>
+    public int MaxRetries { get; set; } = 3;
+
+    /// <summary>内嵌回调服务端监听 IP（第四阶段②启用）。</summary>
+    public string CallbackHost { get; set; } = "0.0.0.0";
+
+    /// <summary>内嵌回调服务端监听端口。</summary>
+    public int CallbackPort { get; set; } = 9080;
+
+    /// <summary>兜底轮询间隔（毫秒，2~5s）。</summary>
+    public int PollIntervalMs { get; set; } = 3000;
+
+    /// <summary>是否启用任务跟踪器（回调主通道 + queryTask 兜底轮询 + 自动 redo + 取消工单）。第四阶段④启用。</summary>
+    public bool TrackerEnabled { get; set; } = true;
+
+    /// <summary>任务失败自动 redo 上限（同 taskId 幂等重发；超出告警人工）。</summary>
+    public int MaxAutoRedo { get; set; } = 3;
+
+    /// <summary>是否启用本机 RCS 模拟器（第四阶段③启用）。</summary>
+    public bool UseSimulator { get; set; } = true;
+
+    /// <summary>模拟器：收到任务后回推结果前的延时下限（毫秒）。</summary>
+    public int SimulatorMinDelayMs { get; set; } = 1500;
+
+    /// <summary>模拟器：回推结果前的延时上限（毫秒）。</summary>
+    public int SimulatorMaxDelayMs { get; set; } = 4000;
+
+    /// <summary>模拟器：任务失败率 0~1（命中则回推 error_code=1）。</summary>
+    public double SimulatorFailureRate { get; set; }
+
+    /// <summary>模拟器：任务自发取消率 0~1（命中则回推 error_code=9）。</summary>
+    public double SimulatorCancelRate { get; set; }
 }
 
 /// <summary>数据库连接配置。Password 可为明文（开发）或 DPAPI 密文（PasswordProtected=true）。</summary>

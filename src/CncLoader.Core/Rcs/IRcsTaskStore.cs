@@ -1,0 +1,80 @@
+namespace CncLoader.Core.Rcs;
+
+/// <summary>
+/// RCS 任务落库仓储（MAS_AUTO_AGV_TASK）。承载"先落库后发送"与状态推进。
+/// </summary>
+public interface IRcsTaskStore
+{
+    /// <summary>先落库（TASK_STATE=CREATED），返回主键 ID1。</summary>
+    Task<long> CreateAsync(RcsTaskRecord record, CancellationToken ct = default);
+
+    /// <summary>下发成功：置 DISPATCHED + DISPATCH_TIME。</summary>
+    Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default);
+
+    /// <summary>更新任务态（可带 RCS 原始态与错误信息）。COMPLETED/CANCELED 时置 FINISH_TIME。</summary>
+    Task UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
+        string? error = null, CancellationToken ct = default);
+
+    /// <summary>redo：REDO_COUNT+1，态回到 DISPATCHED（同 taskId 幂等重发）。</summary>
+    Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 自动重做原子守卫：仅当当前 REDO_COUNT &lt; maxRedo 时，REDO_COUNT+1、态回 DISPATCHED、清错误，返回 true；
+    /// 否则返回 false（已达上限，调用方应告警人工）。避免回调与轮询并发触发双重 redo。
+    /// </summary>
+    Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default);
+
+    /// <summary>标记取消后人工处理已确认。</summary>
+    Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);
+
+    /// <summary>按 taskId 取一行（不存在返回 null）。</summary>
+    Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default);
+
+    /// <summary>最近 N 条任务（倒序），供 UI 展示。</summary>
+    Task<IReadOnlyList<RcsTaskRow>> GetRecentAsync(int limit = 100, CancellationToken ct = default);
+
+    /// <summary>全部未完结（CREATED/DISPATCHED/EXECUTING）任务的 taskId，供 queryTask 兜底轮询。</summary>
+    Task<IReadOnlyList<string>> GetUnfinishedTaskIdsAsync(CancellationToken ct = default);
+}
+
+/// <summary>任务落库入参（先落库时构建）。</summary>
+public sealed record RcsTaskRecord
+{
+    public required string RcsTaskId { get; init; }
+    public required RcsTaskKind Kind { get; init; }
+    public long WorkLineId { get; init; }
+    /// <summary>0=上料 1=下料 2=转序（TASK_TYPE，兼容旧列）。</summary>
+    public string TaskType { get; init; } = "0";
+    public int Priority { get; init; } = 5;
+    public string FromCode { get; init; } = "";
+    public string ToCode { get; init; } = "";
+    public long? EquipmentId { get; init; }
+    public long? PositionId { get; init; }
+    public long? CraftworkId { get; init; }
+    public string? ElectrodeId { get; init; }
+    public string? TxnId { get; init; }
+    public string? ReqParam { get; init; }
+    public string? Author { get; init; }
+}
+
+/// <summary>任务展示行。</summary>
+public sealed record RcsTaskRow(
+    long Id,
+    string? RcsTaskId,
+    string? Kind,
+    string TaskState,
+    string? RcsStatus,
+    int Priority,
+    string FromCode,
+    string ToCode,
+    long? EquipmentId,
+    long? PositionId,
+    string? ElectrodeId,
+    string? TxnId,
+    string? ReqParam,
+    int RedoCount,
+    string CancelManualFlag,
+    DateTime SendTime,
+    DateTime? DispatchTime,
+    DateTime? FinishTime,
+    string? ErrorMsg);

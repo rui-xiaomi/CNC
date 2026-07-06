@@ -21,6 +21,7 @@ public static class UiServiceCollectionExtensions
         services.AddSingleton<AgvViewModel>();
         services.AddSingleton<ScanViewModel>();
         services.AddSingleton<FrameViewModel>();
+        services.AddSingleton<RcsViewModel>();
 
         services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<DashboardViewModel>());
         services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<WorkLineViewModel>());
@@ -30,6 +31,7 @@ public static class UiServiceCollectionExtensions
         services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<AgvViewModel>());
         services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<ScanViewModel>());
         services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<FrameViewModel>());
+        services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<RcsViewModel>());
 
         services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<ShellViewModel>();

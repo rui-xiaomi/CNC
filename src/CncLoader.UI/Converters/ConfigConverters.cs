@@ -13,6 +13,14 @@ public sealed class BoolToYesNoConverter : IValueConverter
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
+/// <summary>取消任务的人工处理标记：0=待处理（红）、1=已处理（灰）。用于 RCS 任务列表"取消处理"列。</summary>
+public sealed class CancelFlagConverter : IValueConverter
+{
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+        => value is "0" or "0 " ? "待处理" : (value is "1" ? "已处理" : "");
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
 /// <summary>bool → 「启用」/「禁用」（状态徽标）。</summary>
 public sealed class BoolToEnabledTextConverter : IValueConverter
 {

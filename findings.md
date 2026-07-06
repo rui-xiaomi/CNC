@@ -60,3 +60,33 @@
   - **节点号假设（最大风险）**：当前自动推导 目的节点=PLC IP 末段、源节点=本机 IP 末段、网络号/单元号=0。欧姆龙以太网单元的 FINS 节点号若不等于 IP 末段，则“连上但读超时”。现场需确认节点号；不符则要把 网络号/节点号/单元号 做成每台 PLC 可配置项（落 DB）。
   - 仅支持 DM(D 区)字读写；CIO/W/H/A 区码已在 `OmronFinsPlcClient.WordAreaCodes` 预留但未启用，位寻址未做。
   - 三台机共用一台物理 PLC 时：保留三条 PLC 记录、IP 全设为同一台即可（三路独立 UDP，目的节点同为该 IP 末段，各读各的 DM 段，不冲突）。
+
+## 第四阶段（RCS 对接）关键发现与决策
+- **RCS 契约来源**：`docs/agv对外接口.docx`（4 出站 transitTask/excuteTask/cancelTask/queryTask + 3 回调 pushTaskStatus/scanTaskStatus/warnCallback），已合并进开发文档 §12（自足）。docx 为二进制，本机无 python，用 PowerShell 解压 `word/document.xml` 提取文本（文件被 Word 锁定需先复制到临时目录）。
+- **分层接缝**（避免 Data↔Communication 循环依赖）：Core 定义接口——`IRcsClient`（HTTP 契约，Communication 实现）、`IRcsTaskStore`/`IRcsMessageLog`/`ILocationMapService`（DB，Data 实现）、`IRcsTaskService`（编排，Communication 实现，注入前述 Core 接口）。UI 只依赖 Core 接口，与既有模式一致。
+- **taskId 格式**：`{线体Code}-{类型缩写TR/GR/ID/PR/CF}-{yyyyMMddHHmmss}-{4位序列}`，同秒序列递增；**先落库(CREATED)后发送**保证幂等，redo 复用同 taskId。
+- **JSON 序列化**：用 `System.Text.Json` + `JsonPropertyName` 精确字段名（reqTime/clientCode/taskId/version/taskType/priority/container/position/param/commandType；queryTask 无公共字段仅 condition/pageIndex/pageSize）；`DefaultIgnoreCondition=WhenWritingNull`（cancelTask 不带 commandType）；`Encoder=UnsafeRelaxedJsonEscaping`（中文与内嵌引号按 `\"` 输出，非 `\u0022`，与 docx 示例一致、日志可读）。grabTask 的 `param` 是**内嵌 JSON 字符串**（GrabItem 数组序列化后作字符串值），identifyQR 的 `param` 为 `"起始孔位,数量"`。应答外层 `{Success,Message,Data}`，Success 兼容布尔与字符串 "true"；查询成功报文用小写 success。
+- **状态**：本系统 6 态 CREATED/DISPATCHED/EXECUTING/COMPLETED/FAILED/CANCELED（RCS 11 态映射见开发文档 §4.5，步骤④实现）。TASK_STATUS(CHAR1) 保留兼容，改用 TASK_STATE(VARCHAR)。
+- **FRAME_ROLE 语义扩展**：保持 `CHAR(1)`、取值域扩为 0/1/2/3=上料/下料/中转/NG（不改字段类型，兼容原 '0'/'1' 种子），代码里映射枚举。
+- **本机环境（重要，与旧 session 不同）**：MySQL 为 **8.4**（服务 MySQL84，`C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe`），root 口令 `2580.wxr`（非旧 session 的 8.0.46/`Mas@2026`）。执行 SQL 用 `MYSQL_PWD` 环境变量避免口令进命令行。**`appsettings.json` 当前 Password 为空、PasswordProtected=false，连不上本机库**——运行 App 端到端（含 RCS 先落库写）前需配连库口令（建议 DPAPI 加密，勿明文提交）。
+- **迁移幂等**：MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`，用临时存储过程 `sp_add_col_if_absent`/`sp_add_index_if_absent`（查 information_schema）守卫；新表用 `CREATE TABLE IF NOT EXISTS`。已验证重复执行 exit 0。
+- **待办依赖**：步骤② RcsCallbackHost 需内嵌 Kestrel（`Microsoft.AspNetCore.App` 框架引用或 `Microsoft.Extensions.Hosting` + Kestrel 包），监听 IP/端口配置化、需报备 RCS 并开防火墙（Phase 6 现场项）。
+- **步骤②（回调服务端）实现要点（Session 22）**：
+  - **Kestrel 内嵌方式**：`CncLoader.Communication.csproj` 加 `<FrameworkReference Include="Microsoft.AspNetCore.App" />`（net8.0 非 windows 库可用），用 `WebApplication.CreateSlimBuilder()` 构最小 Web 应用 + `ConfigureKestrel(k => k.Listen(ip,port) / ListenAnyIP(port))`，作为独立 `WebApplication` 由 `RcsCallbackHost : IHostedService` 的 StartAsync 起、StopAsync 停（与主 GenericHost 并存，各自 Kestrel/生命周期）。`ConfigureKestrel` 扩展在 `Microsoft.AspNetCore.Hosting` 命名空间（需 using）。`builder.Logging.ClearProviders()` 静默其自带日志避免与 Serilog 双写。**运行时依赖**：WPF App(net8.0-windows) 传递引用 AspNetCore.App，本机/现场需装 ASP.NET Core 8 运行时。
+  - **回调契约（docx §3.5/3.6/3.7）**：pushTaskStatus `{taskId,version,data:{system:{error_code,msg}}}`（error_code 0成功/1错误/9取消）；scanTaskStatus 额外 `data.code`（被扫料架编号）+ `data.products[]`（按下发孔位顺序）；warnCallback `data[]`（robotCode/beginTime/warnContent/taskCode，无 taskId）。三者应答统一 `{"taskId":"..."}`（warn 无 taskId → 空串）。
+  - **分层**：Core 定义 `IRcsCallbackProcessor`(处理，Communication 实现)/`IRcsCallbackNotifier`+`RcsCallbackNotifier`(事件总线，单例)/事件记录；处理器注入 `IRcsMessageLog`/`IRcsTaskStore`/`IAlarmEventService`(Core 接口，Data 实现)。回调只做"落库 IN + 幂等去重 + 态推进/告警 + 派发事件"短逻辑，长逻辑（跟踪/复核/账目）由订阅 notifier 事件的步骤④⑥处理。
+  - **幂等去重**：内存有界 HashSet+Queue（容量 4000）；push/scan 键=`{iface}:{taskId}:{error_code}`，warn 键=`robotCode|beginTime|warnContent`。重复推送仍落 IN 报文（审计），但跳过态变更/告警/事件。
+  - **健壮性**：所有 Handle* try/catch 吞异常并总返回应答报文，避免 RCS 侧收 5xx 而反复重推；解析失败也落 IN（success=false+error）。
+- **步骤③（RcsSimulator）实现要点（Session 23）**：
+  - 扮演 RCS 服务端，与步骤②回调宿主同进程双 Kestrel（模拟器监听 `BaseUrl` 端口、回调宿主监听 `CallbackPort`），形成本机全环回闭环：客户端 OUT→模拟器 ack→延时→模拟器回推 IN→回调宿主→处理器→notifier。
+  - 回推 host：`CallbackHost` 为 `0.0.0.0`/空时改用 `127.0.0.1`（绑定任意 IP 但主动连接需具体环回地址）。
+  - identify 的 products 按下发 `param="posStart,count"` 生成 count 个 `SIM{code}-{posStart+i}`，`code` 取 position[0].code，供步骤⑥盘点校正联调。
+  - 可配项：延时区间 `SimulatorMinDelayMs`~`MaxDelayMs`、`SimulatorFailureRate`(→error_code=1)、`SimulatorCancelRate`(→9)；显式 cancelTask 优先（标记 SimTask.Canceled）。
+  - 仅 `UseSimulator=true` 生效（守卫在 `StartAsync`）；现场对接真实 RCS 时置 false，同一 `RcsClient`/回调宿主不变。
+- **步骤④（任务跟踪器）实现要点（Session 24）**：
+  - **11→5 态映射**（§4.5）：uninitialized/queued/standby/blocked/delayed→DISPATCHED；underway→EXECUTING；completed→COMPLETED（PLC 复核留步骤⑤）；failed/error/skipped→FAILED（可 redo）；canceled/killed→CANCELED（工单）。未知态返回 null 不推进，等下一次轮询/回调。
+  - **回调主通道 + queryTask 兜底**：回调（步骤②）即时推 FAILED/COMPLETED/CANCELED；跟踪器每 `PollIntervalMs`(2~5s) 批量 queryTask（condition IN 未完结 taskId 列表）兜底，**与回调冲突以 queryTask 为准**（poll 直接 UpdateStateAsync 覆盖）。RCS 查无此任务（items 未返回该 taskId）→ `RaiseRcsTaskNotFoundAsync` 告警人工。
+  - **自动 redo 原子守卫**：`TryIncrementRedoIfUnderAsync(taskId, MaxAutoRedo)` 在 DB 行内 CAS——仅 REDO_COUNT<max 才 +1 并回 DISPATCHED/清错；返回 true 后跟踪器调 `RedispatchAsync`（同 taskId 幂等重发，不递增）。超限 → `RaiseRcsRedoLimitAsync` 告警人工。手动 redo（UI「redo」按钮）走 `RedoAsync`（始终递增，无上限守卫，用户显式触发）。
+  - **取消工单**：CANCELED → `RaiseRcsTaskCanceledAsync`(ALARM_TYPE=RCS_CANCELED 严重) + UI「确认取消已处理」按钮 → `ConfirmCancelHandledAsync`(CANCEL_MANUAL_FLAG=1)。**锁点位（确认前不可对相关点位重新派工）由步骤⑤状态机实现**，本步骤只生成工单 + 确认入口。
+  - **去重**：取消/查无/重做上限告警按 taskId 内存去重（终态后清理），避免轮询反复告警。回调侧已由处理器 dedup（步骤②）。
+  - **事件源**：`RcsTaskStatusEvent.Source` = callback/poll/autoRedo，UI 终端区分显示。跟踪器轮询发现态变化时 RaiseTaskStatus(source=poll)→UI 自动刷新。

@@ -1,5 +1,6 @@
 using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Rcs;
 using CncLoader.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +40,11 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<IPlcCatalogService>(sp => new PlcCatalogService(
             sp.GetRequiredService<IDbContextFactory<CncDbContext>>(),
             () => sp.GetRequiredService<IPlcConnectionService>()));
+
+        // Phase 4 RCS 对接：报文流水 / 任务落库 / 位置映射
+        services.AddSingleton<IRcsMessageLog, RcsMessageLog>();
+        services.AddSingleton<IRcsTaskStore, RcsTaskStore>();
+        services.AddSingleton<ILocationMapService, LocationMapService>();
 
         return services;
     }

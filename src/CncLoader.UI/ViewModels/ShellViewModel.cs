@@ -151,6 +151,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         new("craft", "工序管理",   "配置", Icons.Craft),
         new("eq",    "机台管理",   "配置", Icons.Equipment),
         new("plc",   "PLC 管理",   "设备", Icons.Plc),
+        new("rcs",   "RCS 任务",   "物流", Icons.Agv),
         new("agv",   "AGV 管理",   "设备", Icons.Agv),
         new("scan",  "扫码枪管理", "设备", Icons.Scan),
         new("frame", "料架管理",   "物流", Icons.Frame),

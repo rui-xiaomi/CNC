@@ -181,7 +181,79 @@
 - 排障要点（现场注意）：① 勿同时运行多个程序实例（会抢模拟器端口 / 端口冲突）；② FINS 节点号默认取 IP 末段，不符需后续做成可配置。
 - 文档同步：`docs/客户端开发文档.md` §5.4 点位映射维护操作说明。
 
+### Session 19 — 2026-07-06 第四阶段启动：DB schema 变更（RCS 对接）
+- 起因：开始第四阶段（RCS 对接 + 上下料流程），按开发文档 §10(v3) 7 步推进，每步暂停确认。首步补齐 DB schema。
+- 新增迁移脚本 `docs/sql/migration_phase4_rcs.sql`（幂等：存储过程守卫 ADD COLUMN、新表 CREATE IF NOT EXISTS、附回滚段）：
+  - `MAS_AUTO_AGV_TASK` 扩展 RCS 任务全生命周期列：RCS_TASK_ID/RCS_KIND/RCS_STATUS/TASK_STATE/PRIORITY/DISPATCH_TIME/REDO_COUNT/CANCEL_MANUAL_FLAG/POSITION_ID/ELECTRODE_ID/TXN_ID/REQ_PARAM + 3 索引。
+  - 新增 `MAS_AUTO_LOCATION_MAP`（逻辑位置↔RCS点位编码 station/cell 双层）、`MAS_AUTO_RCS_MSG_LOG`（双向报文流水）。
+  - `MAS_AUTO_FRAME_SLOT` 加 BIND_SOURCE/LAST_VERIFY_TIME；`FRAME_BIND.FRAME_ROLE` 语义扩展 0/1/2/3=上料/下料/中转/NG（CHAR(1) 不变，兼容旧种子）；ALARM_TYPE 注释补 RCS_WARN。
+- 同步更新 `docs/sql/cnc_schema.sql`（全新建库含全部新表/列，DROP 段补两新表）；EF 实体 `RunAndReservedEntities.cs`（AgvTask 扩展 + 新增 LocationMap/RcsMsgLog）、`SignalAndFrameEntities.cs`（FrameSlot 扩展）、`CncDbContext.cs` 注册两 DbSet；`docs/数据库文档.md` 补表清单/结构变化/§5b RCS 表说明。
+- 环境校正：本机为 MySQL 8.4（服务 MySQL84，`C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe`），root 口令 `2580.wxr`（非旧 session 的 8.0.46/Mas@2026）。**注意 appsettings.json 仍是空口令，运行前需用户按本机配置连接口令（建议 DPAPI 加密，勿明文提交）**。
+- 验证：`dotnet build` 0 警告 0 错误；迁移已应用到本机 cnc_auto 并校验两新表 + AGV_TASK/FRAME_SLOT 新列就位；重复执行幂等（RERUN_EXIT=0）。
+- 下一步（待用户确认）：进入步骤①（IRcsClient + RcsClient 4 出站接口 + TaskId 先落库 + RcsOptions + LOCATION_MAP 录入 + RCS 页骨架）。
+
+### Session 20 — 2026-07-06 第四阶段步骤①：RcsClient + 手动测试页 + LOCATION_MAP（代码）— 暂停等用户确认
+- Core（新增 `Rcs/`）：`RcsModels`（transit/excute/cancel/query 请求 DTO + RcsPosition/RcsContainer/GrabItem + QueryCondition + RcsResult + RcsTaskKind/State 常量）；`IRcsClient`（4 出站接口）；`IRcsMessageLog`（报文流水 + 展示行）；`IRcsTaskStore`（先落库/状态推进/redo/取消确认/未完结查询）；`ILocationMapService`（LOCATION_MAP CRUD + 解析）；`IRcsTaskService`（编排：生成 taskId→先落库→下发）；`RcsTaskId`（`{线体}-{类型}-{yyyyMMddHHmmss}-{4位序列}` 生成器）。
+- Communication（新增 `Rcs/`）：`RcsClient`（HttpClient 封装公共字段/超时10s/网络重试≤3指数退避/双向报文落库/relaxed JSON 编码）；`RcsTaskService`（transit/grab/identify 下发 + cancel + redo 同 taskId 幂等 + query）。DI 注册 IRcsClient（内建 HttpClient）+ IRcsTaskService。
+- Data（新增仓储）：`RcsMessageLog`（MAS_AUTO_RCS_MSG_LOG）、`RcsTaskStore`（MAS_AUTO_AGV_TASK 全生命周期）、`LocationMapService`（MAS_AUTO_LOCATION_MAP）。DI 注册三单例。
+- Common：`AppOptions` 加 `RcsOptions`（BaseUrl/clientCode/version/tokenCode/超时/重试/回调 host+port/轮询/UseSimulator）；`appsettings.json` 加 Rcs 节。
+- UI：新增 `RcsViewModel`（连接配置只读展示 + 手动下发搬运/抓取/识别 + 取消/redo/查询 + 任务列表 + 报文流水 + 位置映射录入编辑）；`PageTemplates.xaml` 加 RCS 页 DataTemplate（4 tab：连接&下发/任务列表/报文流水/位置映射）；导航加 "RCS 任务" 项（物流组）；UI DI 注册。
+- 验证：`dotnet build` 0 警告 0 错误；临时 harness 用假 handler+假 store 跑通 4 接口，请求 JSON 与 docx §12 示例一致（transit taskType=move+cell / grab param 数组+station / identifyQR param="101,3" / cancel 仅公共字段 / query condition+分页），先落库 3 条 CREATED、报文流水 OUT 逐条触发、taskId 格式正确；harness 与 docx 提取临时文件已清理。
+- 完成标志达成：四种请求可发出 + 报文有流水 + 格式与 §12/docx 一致（对本地 Mock）✓。
+- 待用户人工确认 UI（需先修 appsettings 连库口令）：RCS 页四 tab 可用、下发后任务/报文列表刷新、位置映射录入保存。
+- 下一步（待确认）：步骤②（RcsCallbackHost 内嵌 Kestrel 3 回调 + 幂等去重 + warnCallback 落库）。
+
+### Session 21 — 2026-07-06 文档同步 + appsettings 连库口令（DPAPI）
+- 文档同步：`task_plan.md` Phase 4 重写为 v2/RCS 版（4.0–4.7 条目，DB+步骤①打勾）；`findings.md` 加"第四阶段（RCS 对接）关键发现与决策"段（分层接缝/taskId/JSON编码/FRAME_ROLE/本机 MySQL8.4 环境/迁移幂等/Kestrel 依赖）；`docs/README.md` 清单收录 `agv对外接口.docx` 与 `sql/migration_*.sql`。
+- appsettings 连库口令：本机 MySQL 8.4 root 口令用 DPAPI(CurrentUser, entropy=CncLoader.Secret.v1) 加密写入 `appsettings.json`，`PasswordProtected=true`，不留明文。密文绑定当前 Windows 用户(75626)+本机，换用户/机器需重新加密。
+- App 运行态验证受阻（非代码问题）：本机 **应用程序控制策略拦截新构建的 CncLoader.App.dll**（事件日志 FileLoadException 0x800711C7 "应用程序控制策略已终止此文件"），exe 无法加载运行——无法本地冒烟跑 UI/DB 连通；`dotnet build`（含 BAML 编译）通过为当前可用自动化上限。DB 连通性已由迁移执行（root/2580.wxr 直连成功）间接佐证；DPAPI 密文由同参 Protect/Unprotect 保证可解。
+- 待办：`docs/客户端开发文档.md` §12 的"落地"指引因文件被编辑器占用(只读锁)未写入，后续解锁再补（`数据库文档.md` 已覆盖）。
+
+### Session 22 — 2026-07-06 第四阶段步骤②：RcsCallbackHost 内嵌 Kestrel 3 回调（代码）— 暂停等用户确认
+- Core（新增 `Rcs/`）：`RcsCallbackModels`（`RcsCallbackInterfaces` 接口名/路径常量、`RcsErrorCode` 0/1/9→态映射、事件记录 `RcsTaskStatusEvent`/`RcsScanResultEvent`/`RcsWarnEvent`）；`IRcsCallbackNotifier` + `RcsCallbackNotifier`（单例事件总线，处理器 Raise*、跟踪器/UI 订阅）；`IRcsCallbackProcessor`（收原始报文→返回应答报文体）。
+- Core：`IAlarmEventService` 加 `RaiseRcsWarnAsync(robotCode/beginTime/warnContent/taskCode)`；Data `AlarmEventService` 实现（ALARM_TYPE=RCS_WARN、级别 '2' 严重、拼消息、AlarmRaised 事件）。
+- Communication（新增 `Rcs/`）：`RcsCallbackProcessor`——解析 JsonDocument（`data.system.error_code/msg`、scan 的 `code`/`products`、warn 的 `data[]`）；每次先落 IN 报文流水（`IRcsMessageLog` direction=IN，reqBody=原文、respBody=应答）；幂等去重内存有界集合（push `push:{taskId}:{code}`、scan `scan:{taskId}:{code}`、warn `warn:{robot}|{begin}|{content}`，容量 4000）；push/scan → `IRcsTaskStore.UpdateStateAsync`（0→COMPLETED/9→CANCELED/其它→FAILED）；warn 逐项 → `RaiseRcsWarnAsync` + 派发事件；所有 Handle* 吞异常总能应答，防 RCS 反复重推。`RcsCallbackHost : IHostedService,IAsyncDisposable`——`WebApplication.CreateSlimBuilder()` + `ConfigureKestrel` 监听 `CallbackHost:CallbackPort`，MapPost 三端点读原始 body 交处理器、`Results.Content(ack,"application/json")`；ClearProviders 静默自带日志；启动失败（端口占用）仅 LogError 不阻断。
+- 依赖：`CncLoader.Communication.csproj` 加 `<FrameworkReference Include="Microsoft.AspNetCore.App" />`（net8.0 库可用；WPF App 传递引用，运行需本机装 ASP.NET Core 8 运行时——现场部署注意项）。
+- DI：Core 注册 `RcsCallbackNotifier` 单例 + `IRcsCallbackNotifier`；Communication 注册 `IRcsCallbackProcessor` + `AddHostedService<RcsCallbackHost>`（随 `_host.StartAsync()` 启动）。
+- UI：`RcsViewModel` 注入 `IRcsCallbackNotifier`，订阅 TaskStatus/ScanResult/Warn 三事件——终端追加（↩/⚠）+ 刷新任务/报文列表 + warn 弹 Growl.Warning（单例 VM，无退订泄漏）。
+- 验证：`dotnet build` 0 警告 0 错误；临时 harness（Communication+Core+Common，假 MsgLog/Store/Alarms + 真 RcsCallbackHost/Processor/Notifier）起 Kestrel:19087，用 docx §3.5/3.6/3.7 示例报文 POST——全 PASS：三端点 200 且 ack 含 taskId（warn 空串）、push 0→COMPLETED / 9→CANCELED、push+warn 幂等去重（重复不再更新/不新增告警）、scan products=3 code=101、warn→2 条 RCS_WARN、6+ 条 IN 报文均落库；harness 已删除。
+- 待用户人工确认（需先连库）：运行 App 后 RCS 回调服务监听 `0.0.0.0:9080`（appsettings），外部 POST 三回调 → 任务态更新/报文流水 IN/告警面板出 RCS_WARN/RCS 页终端与列表实时刷新。
+- 下一步（待确认）：步骤③ RcsSimulator 本机联调（收任务→延时→回推完成/失败/取消，失败率/延时/取消可配），与步骤②回调服务端闭环自测。
+
+### Session 23 — 2026-07-06 第四阶段步骤③：RcsSimulator 本机联调（代码）— 暂停等用户确认
+- Common：`RcsOptions` 加模拟器可配项 `SimulatorMinDelayMs`(1500)/`SimulatorMaxDelayMs`(4000)/`SimulatorFailureRate`(0)/`SimulatorCancelRate`(0)。
+- Communication（新增 `Simulation/RcsSimulator.cs`，`IHostedService,IAsyncDisposable`）：扮演 RCS 服务端。`WebApplication.CreateSlimBuilder` 从 `RcsOptions.BaseUrl` 解析端口 `ListenAnyIP`，MapPost 4 出站接口——transit/excute/cancel/query 收原始 body、应答 `{Success:true,Message,Data:null}`；excute 按 `taskType` 分流 grab/identifyQR；受理即建 `SimTask`（含 position[0].code、identify 的 posStart/count）入内存表并调度延时回推。回推逻辑：延时随机 [min,max]；error_code 判定=已被 cancelTask 标记→9 / 命中 FailureRate→1 / 命中 CancelRate→9 / 否则 0；identify→scanTaskStatus（成功时按 count 生成 `SIM{code}-{pos}` products + code）、其余→pushTaskStatus；回推 host 为 0.0.0.0 时改走 127.0.0.1 环回到 `CallbackPort`。cancelTask 标记 Canceled 抑制/改判回推。停机 `CancellationTokenSource` 取消挂起回推。
+- DI：`AddCncCommunication` 注册 `AddHostedService<RcsSimulator>()`（守卫在 StartAsync 内，UseSimulator=false 直接返回）。与步骤② `RcsCallbackHost` 并存，各自 Kestrel/端口。
+- 验证：`dotnet build` 0 警告 0 错误；临时 harness（真实 `RcsCallbackHost`+`RcsCallbackProcessor`+`RcsCallbackNotifier` + 假 store/log/alarm + 3 个真实 `RcsSimulator`：成功18090/失败18091/取消18092，均回推 19088）闭环——POST transit→COMPLETED、identify→scanTaskStatus 事件 products=3 code=101 且 COMPLETED、fail=1→FAILED、下发即 cancelTask→CANCELED，全 PASS；harness 已删除。
+- 待用户人工确认（需先连库运行 App）：`UseSimulator=true` 下 RCS 页手动下发 transit/grab/identify → 秒级后任务列表自动翻 COMPLETED、报文流水出 IN pushTaskStatus/scanTaskStatus、终端 ↩ 提示；调 `SimulatorFailureRate`/`SimulatorCancelRate`/延时可复现失败/取消/慢任务。
+- 修复（同 session）：RCS 页回调到达不实时刷新——根因 `OnTaskStatusReceived/OnScanResultReceived` 在 Kestrel 后台线程触发，`RefreshTasksAsync/RefreshMessagesAsync` 直接改 `ObservableCollection` 抛跨线程异常被 catch 吞掉。改为 `ReplaceOnUi` 助手：`Dispatcher.CheckAccess()` 命中直接改、否则 `Dispatcher.Invoke` marshal 到 UI 线程（任务/报文/位置映射三处统一走）。构建 0 警告 0 错误。
+- 修复（同 session）：任务列表表头 `态` → `状态`（`PageTemplates.xaml`）。
+- 增强（同 session）：报文流水筛选（用户确认「筛选+可调条数+暂停刷新」，不做传统分页；表清理留 Phase 6）——
+  - Data：`IRcsMessageLog.QueryAsync(RcsMsgQuery{Direction/Interface/TaskId/Limit})` 服务端筛选（方向精确、接口精确、taskId 模糊 Contains、条数 Clamp 1..5000），`GetRecentAsync` 复用之；`IRcsTaskService.QueryMessagesAsync` 委派。
+  - UI：报文流水 tab 加筛选栏（taskId 框 / 方向 / 接口 / 条数 100·500·1000·2000 下拉 / 查询 / 自动刷新 CheckBox）；`RcsViewModel` 加对应筛选属性 + `AutoRefreshMessages`；回调到达时任务列表始终刷新、报文流水仅在自动刷新开启时刷新（筛选/排查时不被回调刷走）。构建 0 警告 0 错误。
+- 下一步（待确认）：步骤④ 任务跟踪器（回调主通道 + queryTask 2~5s 批量兜底 + RCS 11→本系统 5 态映射 + redo + cancel 人工工单锁点位）。
+
+### Session 24 — 2026-07-06 第四阶段步骤④：任务跟踪器（代码）— 暂停等用户确认
+- Core（新增 `Rcs/RcsStatusMapper.cs`）：`RcsStatus` 11 态常量 + `ToTaskState` 按 §4.5 映射（uninitialized/queued/standby/blocked/delayed→DISPATCHED；underway→EXECUTING；completed→COMPLETED；failed/error/skipped→FAILED；canceled/killed→CANCELED；未知→null）+ `IsTerminal`。`RcsCallbackModels` 的 `RcsTaskStatusEvent` 加 `Source`(默认 callback)。
+- Core：`IRcsTaskStore` 加 `TryIncrementRedoIfUnderAsync(taskId, maxRedo)` 原子 CAS（REDO_COUNT<max 才 +1 并回 DISPATCHED/清错，返回 bool），避免回调与轮询并发双重 redo。`IRcsTaskService` 加 `RedispatchAsync`（只重发不递增，配合 CAS）+ `ConfirmCancelHandledAsync` 委派。
+- Core：`IAlarmEventService` 加 `RaiseRcsTaskCanceledAsync`/`RaiseRcsTaskNotFoundAsync`/`RaiseRcsRedoLimitAsync`（ALARM_TYPE=RCS_CANCELED/RCS_NOT_FOUND/RCS_REDO_LIMIT，级别严重/警告/严重）。
+- Data：`RcsTaskStore.TryIncrementRedoIfUnderAsync` 实装；`AlarmEventService` 加 3 个 RCS 任务告警实装（私有 `RaiseRcsTaskAlarmAsync` 复用）。
+- Communication：`RcsTaskService.RedoAsync` 拆为 `BuildAndSendAsync`(按落库种类重建请求) + `RedispatchAsync`(不递增) + `ConfirmCancelHandledAsync`；新增 `Rcs/RcsTaskTracker.cs`（`IHostedService`）：
+  - 轮询循环每 `PollIntervalMs`：`GetUnfinishedTaskIdsAsync` → 批量 `QueryAsync`(condition IN) → `ParseItems`(items[].id/status) → `ApplyPollStateAsync`(映射+UpdateStateAsync+RaiseTaskStatus source=poll)；未返回的 taskId → `RaiseRcsTaskNotFoundAsync`(去重)。
+  - 订阅 `notifier.TaskStatusReceived`：FAILED → `AutoRedoAsync`(TryIncrement→Redispatch，超限→RaiseRcsRedoLimit 去重)；CANCELED → `RaiseRcsTaskCanceledAsync`(去重)。终态清理去重集合。
+  - 与回调冲突以 queryTask 为准（poll 直接覆盖态）。
+- Communication：模拟器 `queryTask` 实装——按请求 condition IN 的 taskId 列表从内存表回 `items[]`（已回推完成的视为 completed，被 cancel 的 canceled，否则 underway），`ParseQueryTaskIds` 解析 IN 条件。
+- Common：`RcsOptions` 加 `TrackerEnabled=true`/`MaxAutoRedo=3`。
+- DI：`AddCncCommunication` 注册 `AddHostedService<RcsTaskTracker>()`（`TrackerEnabled=false` 时 StartAsync 直接返回）。
+- UI：`RcsViewModel` 事件行带 Source（`↩ {source} ...`）；新增 `ConfirmCancelHandledCommand` + 模板加「确认取消已处理」按钮；任务列表加「取消处理」列（`CancelFlagConverter` 0→待处理/1→已处理）。
+- 验证：`dotnet build` 0 警告 0 错误（Core/Data/Communication/UI）；harness 真 tracker+processor+notifier+service + 假 client/store/log/alarms 10 项全 PASS：poll underway→EXECUTING、poll completed→COMPLETED、callback FAILED→自动 redo Redispatch 调用 +REDO_COUNT=1、REDO_COUNT=3→不再 redo +RaiseRcsRedoLimit 告警、CANCELED→RaiseRcsTaskCanceled 告警+态CANCELED、ConfirmCancelHandled→flag=1；harness 已清理。
+- 待用户人工确认（需先连库运行 App）：下发后任务态自动从 DISPATCHED→EXECUTING→COMPLETED（轮询驱动）；模拟器 FailureRate=1 时 FAILED 任务自动 redo ≤3 次后告警；取消任务后告警面板出 RCS_CANCELED，点「确认取消已处理」后 CANCEL_MANUAL_FLAG=1。
+- 下一步（待确认）：步骤⑤ 状态机改造（DISPATCHING/TRANSPORTING 态 + LOADED 双条件 + 优先级队列 + §6.2 路由决策 + §6.3 启动对账 + PLC 复核收口），PLC 模拟器+RcsSimulator 双位并行联跑 ≥10 节拍。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
+- 本机环境：MySQL 8.4（服务 MySQL84），root 口令 `2580.wxr`；appsettings 用明文口令开发（PasswordProtected=false，勿提交明文进 git）。
+- Smart App Control（Win11 智能应用控制）曾强制开启拦截未签名新构建 exe（事件 3118/3077，FileLoadException 0x800711C7）；用户已在 Windows 安全中心手动关闭（VerifiedAndReputablePolicyState=0）。关闭后已验证 `CncLoader.App.exe` 正常运行：DB 连通（线体1/PLC3/机台3/加工位6/点位36/料架3）、3 PLC 模拟器建链、轮询读 D 寄存器正常。本机现可跑 App+连库+RCS 页端到端。
 - Phase 1/2 完成后暂停演示，Phase 3（配置管理）待用户确认。
 - 后续 UI 开发以 `docs/prototype/index.html` 为唯一权威基准。
+- 第四阶段：按开发文档 §10(v3) 7 步推进，每步暂停等用户确认；DB schema 变更（Session 19）已完成并应用。

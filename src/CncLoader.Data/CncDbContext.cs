@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 namespace CncLoader.Data;
 
 /// <summary>
-/// EF Core 上下文，映射 cnc_schema.sql 的 17 张表。
+/// EF Core 上下文，映射 cnc_schema.sql 的表（含第四阶段 RCS 扩展）。
 /// schema 以 SQL 脚本为权威、手工建库；本上下文仅做映射与读写，不使用 Migrations。
 /// </summary>
 public sealed class CncDbContext : DbContext
@@ -33,6 +33,10 @@ public sealed class CncDbContext : DbContext
     public DbSet<AgvTask> AgvTasks => Set<AgvTask>();
     public DbSet<DeviceLog> DeviceLogs => Set<DeviceLog>();
     public DbSet<AlarmEvent> AlarmEvents => Set<AlarmEvent>();
+
+    // 第四阶段 RCS 对接
+    public DbSet<LocationMap> LocationMaps => Set<LocationMap>();
+    public DbSet<RcsMsgLog> RcsMsgLogs => Set<RcsMsgLog>();
 
     // 保留（本期不实现）
     public DbSet<EquipmentReport> EquipmentReports => Set<EquipmentReport>();
