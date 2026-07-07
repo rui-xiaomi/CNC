@@ -31,6 +31,8 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
         public int PosStart { get; init; } = 101;
         public int Count { get; init; } = 1;
         public volatile bool Canceled;
+        /// <summary>回推后的终态错误码（-1=尚未回推/进行中）。用于 queryTask 返回真实终态，避免失败任务被误报为 completed。</summary>
+        public volatile int FinalErrorCode = -1;
     }
 
     private static readonly JsonSerializerOptions JsonOpt = new()
@@ -128,15 +130,21 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
         app.MapPost("/api/ExternalInterfaces/queryTask", async (HttpContext ctx) =>
         {
             var raw = await ReadBodyAsync(ctx);
-            // 查询兜底：按 condition IN 的 taskId 列表从内存表回 status（已回推完成的返回 completed，否则 underway）。
+            // 查询兜底：按 condition IN 的 taskId 列表从内存表回真实 status。
             var asked = ParseQueryTaskIds(raw);
             var items = new List<object>();
             foreach (var id in asked)
             {
+                string status;
                 if (_tasks.TryGetValue(id, out var t))
-                    items.Add(new { id = id, status = t.Canceled ? "canceled" : "underway" });
+                    status = t.Canceled ? "canceled"
+                           : t.FinalErrorCode < 0 ? "underway"           // 尚未回推 → 进行中
+                           : t.FinalErrorCode == RcsErrorCode.Success ? "completed"
+                           : t.FinalErrorCode == RcsErrorCode.Cancel ? "canceled"
+                           : "failed";                                    // error_code=1 → 失败（不再误报 completed）
                 else
-                    items.Add(new { id = id, status = "completed" }); // 已回推完成已从内存表移除 → 视为 completed
+                    status = "completed"; // 从未受理过的未知任务：兜底视为完成
+                items.Add(new { id = id, status });
             }
             var body = JsonSerializer.Serialize(new
             {
@@ -195,7 +203,10 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
             }
             finally
             {
-                _tasks.TryRemove(task.TaskId, out _);
+                // 记录真实终态而非删除：queryTask 据此返回 completed/failed/canceled，
+                // 保证失败任务在轮询兜底里也报 failed（此前删除后被误报 completed，打断 redo/告警链）。
+                // redo 重发同 taskId 会以新的 SimTask 覆盖本条（FinalErrorCode 重置为 -1）。
+                task.FinalErrorCode = errorCode;
             }
         });
     }

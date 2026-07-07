@@ -46,6 +46,12 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<IRcsTaskStore, RcsTaskStore>();
         services.AddSingleton<ILocationMapService, LocationMapService>();
 
+        // Phase 4 步骤⑥a：槽位账目（预记/落账/回滚 + 同架并发互斥 + 人工校正/反查）
+        services.AddSingleton<ISlotAccountService, SlotAccountService>();
+
+        // Phase 4 步骤⑦：加工记录（WORK_RECORD 关联任务/工件/加工位/耗时）
+        services.AddSingleton<IWorkRecordService, WorkRecordService>();
+
         return services;
     }
 }

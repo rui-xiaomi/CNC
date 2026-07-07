@@ -21,6 +21,27 @@ public sealed class CancelFlagConverter : IValueConverter
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
+/// <summary>加工位状态徽标 → 状态色 Brush（监控看板 StateBadge 字符串转 Brush）。
+/// offline→FgMuted / alarm→Alarm / run→Run / ok→Ok / ng→Alarm / idle→Idle。</summary>
+public sealed class StateBadgeToBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        var key = value as string ?? "idle";
+        var name = key switch
+        {
+            "offline" => "FgMutedBrush",
+            "alarm" => "AlarmBrush",
+            "run" => "RunBrush",
+            "ok" => "OkBrush",
+            "ng" => "AlarmBrush",
+            _ => "IdleBrush"
+        };
+        return System.Windows.Application.Current?.TryFindResource(name) ?? System.Windows.Media.Brushes.Gray;
+    }
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
 /// <summary>bool → 「启用」/「禁用」（状态徽标）。</summary>
 public sealed class BoolToEnabledTextConverter : IValueConverter
 {

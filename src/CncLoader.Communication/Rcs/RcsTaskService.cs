@@ -70,7 +70,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
         var result = await _client.TransitTaskAsync(req, ct);
         await FinishAsync(taskId, result, ct);
-        return result;
+        return result with { TaskId = taskId };
     }
 
     public async Task<RcsResult> DispatchGrabAsync(GrabDispatchArgs args, CancellationToken ct = default)
@@ -109,7 +109,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
         var result = await _client.ExcuteTaskAsync(req, ct);
         await FinishAsync(taskId, result, ct);
-        return result;
+        return result with { TaskId = taskId };
     }
 
     public async Task<RcsResult> DispatchIdentifyAsync(IdentifyDispatchArgs args, CancellationToken ct = default)
@@ -141,7 +141,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
         var result = await _client.ExcuteTaskAsync(req, ct);
         await FinishAsync(taskId, result, ct);
-        return result;
+        return result with { TaskId = taskId };
     }
 
     public async Task<RcsResult> CancelAsync(string rcsTaskId, CancellationToken ct = default)
@@ -194,6 +194,16 @@ public sealed class RcsTaskService : IRcsTaskService
 
     public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)
         => _store.ConfirmCancelHandledAsync(rcsTaskId, ct);
+
+    public Task<RcsResult> DispatchPalletReturnAsync(long equipmentId, long? positionId, string fromCode, string toCode,
+        long workLineId, string lineCode, string author, CancellationToken ct = default)
+        => DispatchTransitAsync(new TransitDispatchArgs
+        {
+            WorkLineId = workLineId, LineCode = lineCode, TaskType = "2",
+            Priority = 8, FromCode = fromCode, ToCode = toCode,
+            EquipmentId = equipmentId, PositionId = positionId,
+            Kind = RcsTaskKind.PalletReturn, Author = author
+        }, ct);
 
     private async Task FinishAsync(string taskId, RcsResult result, CancellationToken ct)
     {

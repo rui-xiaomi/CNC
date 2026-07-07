@@ -11,7 +11,7 @@ namespace CncLoader.Communication.Simulation;
 /// 进程内 Modbus TCP 模拟器（开发期无真机时使用）。为每台虚拟 PLC 在环回地址各开一个监听端口，
 /// 按《测试机信号表》预置 D 段保持寄存器。Master 写入会自动反映到对应数据存储，可端到端自测读写。
 /// </summary>
-public sealed class ModbusTcpSimulator : IDisposable
+public sealed class ModbusTcpSimulator : IDisposable, ISimulatorRegisterStore
 {
     private readonly ILogger<ModbusTcpSimulator> _logger;
     private readonly IPAddress _bindAddress;
@@ -38,6 +38,19 @@ public sealed class ModbusTcpSimulator : IDisposable
 
     public int GetPort(long plcId) =>
         _plcs.TryGetValue(plcId, out var p) ? p.Port : throw new KeyNotFoundException($"模拟器未登记 PLC {plcId}");
+
+    /// <summary>读一个保持寄存器（模拟器内部直读，供行为模拟器驱动 CNC 语义用）。</summary>
+    public ushort ReadRegister(long plcId, int offset)
+        => _plcs.TryGetValue(plcId, out var p)
+            ? p.DataStore.HoldingRegisters.ReadPoints((ushort)offset, 1).FirstOrDefault()
+            : (ushort)0;
+
+    /// <summary>写一个保持寄存器（模拟器内部直写）。</summary>
+    public void WriteRegister(long plcId, int offset, ushort value)
+    {
+        if (_plcs.TryGetValue(plcId, out var p))
+            p.DataStore.HoldingRegisters.WritePoints((ushort)offset, new[] { value });
+    }
 
     public Task StartAsync()
     {

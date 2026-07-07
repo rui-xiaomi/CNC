@@ -186,11 +186,13 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         }
     }
 
+    // 轮询事件本身无 error_code（queryTask 只回状态字），此处按终态语义合成用于展示：
+    // 仅真失败→1、取消→9；进行中/已完成等无错误含义一律 0，避免 EXECUTING 误显示 error_code=1。
     private static int ErrorCodeFrom(string state) => state switch
     {
-        RcsTaskState.Completed => RcsErrorCode.Success,
+        RcsTaskState.Failed => RcsErrorCode.Error,
         RcsTaskState.Canceled => RcsErrorCode.Cancel,
-        _ => RcsErrorCode.Error
+        _ => RcsErrorCode.Success
     };
 
     private void ClearDedup(string taskId)

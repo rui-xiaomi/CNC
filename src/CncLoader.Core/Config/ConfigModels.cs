@@ -124,12 +124,15 @@ public sealed record FrameBindRow(
     bool IsUpload,
     string RoleText);
 
-/// <summary>槽位（层 + 层内位 + 电极绑定），按层分组渲染。</summary>
+/// <summary>槽位（层 + 层内位 + 电极绑定 + 状态），按层分组渲染。
+/// SlotState：0=空 1=占用 2=锁定 3=预记（第四阶段⑥a 槽位账目）。</summary>
 public sealed record SlotItem(
+    int SlotNo,
     int LayerNo,
     int PosInLayer,
     string Label,
     string? ElectrodeId,
+    string SlotState,
     bool Occupied);
 
 /// <summary>新增料架（保存时按 层×每层数 预建空槽位）。</summary>

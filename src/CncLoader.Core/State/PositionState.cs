@@ -9,6 +9,10 @@ public enum PositionState
     Offline,
     /// <summary>等待上料：允许上料=ON 且 有料=OFF。</summary>
     WaitLoad,
+    /// <summary>【v2】已下发 RCS 上料/下料任务，等 RCS 应答 Success。</summary>
+    Dispatching,
+    /// <summary>【v2】RCS 已接单，搬运中（status=underway），等 completed。</summary>
+    Transporting,
     /// <summary>已上料：有料=ON，未写测试启动。</summary>
     Loaded,
     /// <summary>检测中：已写测试启动且未出 OK/NG。</summary>
@@ -29,6 +33,8 @@ public static class PositionStateNames
     {
         PositionState.Offline => "OFFLINE",
         PositionState.WaitLoad => "WAIT_LOAD",
+        PositionState.Dispatching => "DISPATCHING",
+        PositionState.Transporting => "TRANSPORTING",
         PositionState.Loaded => "LOADED",
         PositionState.Processing => "PROCESSING",
         PositionState.DoneOk => "DONE_OK",
@@ -42,6 +48,8 @@ public static class PositionStateNames
     {
         PositionState.Offline => "离线",
         PositionState.WaitLoad => "等待上料",
+        PositionState.Dispatching => "已下发",
+        PositionState.Transporting => "搬运中",
         PositionState.Loaded => "已上料",
         PositionState.Processing => "检测中",
         PositionState.DoneOk => "检测OK",

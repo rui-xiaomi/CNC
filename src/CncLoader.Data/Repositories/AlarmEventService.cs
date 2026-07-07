@@ -12,6 +12,7 @@ public sealed class AlarmEventService : IAlarmEventService
     public AlarmEventService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
 
     public event EventHandler<AlarmRow>? AlarmRaised;
+    public event EventHandler? AlarmsChanged;
 
     public async Task RaisePlcAlarmAsync(long plcId, string message, string level = "1", CancellationToken ct = default)
     {
@@ -32,7 +33,7 @@ public sealed class AlarmEventService : IAlarmEventService
         await db.SaveChangesAsync(ct);
 
         var row = new AlarmRow(entity.Id, entity.CreateTime ?? DateTime.Now,
-            level == "2" ? "严重" : "警告", message, "未处理");
+            level == "2" ? "严重" : "警告", message, "未处理", "PLC_COMM");
         AlarmRaised?.Invoke(this, row);
     }
 
@@ -57,7 +58,7 @@ public sealed class AlarmEventService : IAlarmEventService
         db.AlarmEvents.Add(entity);
         await db.SaveChangesAsync(ct);
 
-        var row = new AlarmRow(entity.Id, entity.CreateTime ?? DateTime.Now, "严重", msg, "未处理");
+        var row = new AlarmRow(entity.Id, entity.CreateTime ?? DateTime.Now, "严重", msg, "未处理", "RCS_WARN");
         AlarmRaised?.Invoke(this, row);
         return entity.Id;
     }
@@ -86,7 +87,7 @@ public sealed class AlarmEventService : IAlarmEventService
         await db.SaveChangesAsync(ct);
 
         var row = new AlarmRow(entity.Id, entity.CreateTime ?? DateTime.Now,
-            level == "2" ? "严重" : "警告", msg, "未处理");
+            level == "2" ? "严重" : "警告", msg, "未处理", alarmType);
         AlarmRaised?.Invoke(this, row);
         return entity.Id;
     }
@@ -98,10 +99,48 @@ public sealed class AlarmEventService : IAlarmEventService
             .OrderByDescending(a => a.CreateTime)
             .Take(limit)
             .ToListAsync(ct);
-        return rows.Select(a => new AlarmRow(
-            a.Id, a.CreateTime ?? DateTime.MinValue,
-            a.AlarmLevel == "2" ? "严重" : "警告",
-            a.AlarmMsg,
-            a.AlarmState == "0" ? "未处理" : "已处理")).ToList();
+        return rows.Select(ToRow).ToList();
     }
+
+    public async Task<IReadOnlyList<AlarmRow>> GetAlarmsAsync(bool unhandledOnly, int limit = 200, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var query = db.AlarmEvents.AsNoTracking().AsQueryable();
+        if (unhandledOnly) query = query.Where(a => a.AlarmState == "0");
+        var rows = await query.OrderByDescending(a => a.CreateTime).Take(limit).ToListAsync(ct);
+        return rows.Select(ToRow).ToList();
+    }
+
+    public async Task MarkHandledAsync(long id, string author, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var a = await db.AlarmEvents.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (a is null) return;
+        a.AlarmState = "1";
+        a.Handler = author;
+        a.HandleTime = DateTime.Now;
+        await db.SaveChangesAsync(ct);
+        AlarmsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task<int> DeleteAllAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var n = await db.AlarmEvents.ExecuteDeleteAsync(ct);
+        AlarmsChanged?.Invoke(this, EventArgs.Empty);
+        return n;
+    }
+
+    public async Task<int> GetUnhandledCountAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.AlarmEvents.AsNoTracking().CountAsync(a => a.AlarmState == "0", ct);
+    }
+
+    private static AlarmRow ToRow(AlarmEvent a) => new(
+        a.Id, a.CreateTime ?? DateTime.MinValue,
+        a.AlarmLevel == "2" ? "严重" : "警告",
+        a.AlarmMsg,
+        a.AlarmState == "0" ? "未处理" : "已处理",
+        a.AlarmType);
 }

@@ -5,6 +5,7 @@ using CncLoader.Communication.Plc;
 using CncLoader.Communication.Polling;
 using CncLoader.Communication.Rcs;
 using CncLoader.Communication.Simulation;
+using CncLoader.Communication.State;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Polling;
 using CncLoader.Core.Rcs;
@@ -59,6 +60,26 @@ public static class CommunicationServiceCollectionExtensions
         // Phase 4 步骤④：任务跟踪器（queryTask 兜底轮询 + 11→5 映射 + 自动 redo + 取消工单告警）
         services.AddHostedService<RcsTaskTracker>();
 
+        // Phase 4 步骤⑤：加工位状态机调度器（DISPATCHING/TRANSPORTING + LOADED双条件 + PLC复核 + 优先级队列 + 启动对账）
+        services.AddSingleton<IDispatchQueue, PriorityDispatchQueue>();
+        services.AddSingleton<IRouteResolver, RouteResolver>();
+        services.AddSingleton<PositionScheduler>();
+        services.AddHostedService(sp => sp.GetRequiredService<PositionScheduler>());
+        services.AddSingleton<IPositionScheduler>(sp => sp.GetRequiredService<PositionScheduler>());
+
+        // CNC 机台行为模拟器（PLC sim 之上叠加加工位节拍语义，演示用；现场关闭）
+        services.AddSingleton<CncMachineSimulator>();
+        services.AddHostedService(sp => sp.GetRequiredService<CncMachineSimulator>());
+        services.AddSingleton<IPlcWriteHook>(sp => sp.GetRequiredService<CncMachineSimulator>());
+
+        // Phase 4 步骤⑥b：换架任务对编排（先拉后送 + TXN_ID + redo/回滚/工单）+ 空托盘回收
+        services.AddSingleton<IChangeFrameOrchestrator, ChangeFrameOrchestrator>();
+
+        // Phase 4 步骤⑥c：盘点后台任务 + 水位监视器自动触发换架
+        services.AddSingleton<IInventoryService, InventoryService>();
+        services.AddHostedService<WaterMonitorService>();
+        services.AddSingleton<IWaterMonitorService>(sp => sp.GetRequiredService<WaterMonitorService>());
+
         services.AddSingleton(sp =>
         {
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
@@ -73,6 +94,10 @@ public static class CommunicationServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<OmronFinsUdpSimulator>>());
         });
 
+        // 两个模拟器都作为寄存器直写目标暴露，供 CncMachineSimulator 不依赖协议地驱动节拍。
+        services.AddSingleton<ISimulatorRegisterStore>(sp => sp.GetRequiredService<ModbusTcpSimulator>());
+        services.AddSingleton<ISimulatorRegisterStore>(sp => sp.GetRequiredService<OmronFinsUdpSimulator>());
+
         services.AddSingleton<IPlcPollingService>(sp =>
         {
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
@@ -82,8 +107,11 @@ public static class CommunicationServiceCollectionExtensions
                 sp.GetRequiredService<ISignalStateStore>(),
                 sp.GetRequiredService<IStatusSynthesizer>(),
                 sp.GetRequiredService<ILogger<PlcPollingService>>(),
-                plc.PollingIntervalMs);
+                plc.PollingIntervalMs,
+                plc.PollingEnabled);
         });
+        // 持续轮询循环随主机启动（信号仓单一数据源，调度器/UI 均依赖其实时刷新）。
+        services.AddHostedService(sp => (PlcPollingService)sp.GetRequiredService<IPlcPollingService>());
 
         return services;
     }

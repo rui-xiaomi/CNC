@@ -252,6 +252,18 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
         }).ToList();
     }
 
+    public async Task<WorkLineRef?> GetWorkLineByEquipmentAsync(long equipmentId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var eq = await db.Equipments.AsNoTracking().FirstOrDefaultAsync(e => e.Id == equipmentId, ct);
+        if (eq is null) return null;
+        var craft = await db.Craftworks.AsNoTracking().FirstOrDefaultAsync(c => c.Id == eq.CraftworkId, ct);
+        if (craft is null) return null;
+        var line = await db.WorkLines.AsNoTracking().FirstOrDefaultAsync(l => l.Id == craft.WorkLineId, ct);
+        if (line is null) return null;
+        return new WorkLineRef(line.Id, line.WorkLineCode);
+    }
+
     public async Task<IReadOnlyList<PositionItem>> GetPositionsAsync(long equipmentId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -491,10 +503,12 @@ public sealed class FrameService : IFrameService
         }).ToList();
 
         var slotItems = slots.Select(s => new SlotItem(
+            s.SlotNo,
             s.LayerNo,
             s.PosInLayer,
             $"{s.LayerNo}层{s.PosInLayer}位",
-            s.SlotState == "1" ? s.ElectrodeId : null,
+            s.SlotState == "1" || s.SlotState == "3" ? s.ElectrodeId : null,
+            s.SlotState,
             s.SlotState == "1")).ToList();
 
         return new FrameDetail(

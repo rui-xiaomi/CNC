@@ -19,18 +19,21 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private readonly ILocationMapService _locationMap;
     private readonly IWorkLineService _workLineService;
     private readonly IRcsCallbackNotifier _callbacks;
+    private readonly IChangeFrameOrchestrator _changeFrame;
     private readonly RcsOptions _options;
 
     private long _workLineId;
     private string _lineCode = "LINE";
 
     public RcsViewModel(IRcsTaskService rcs, ILocationMapService locationMap,
-        IWorkLineService workLineService, IRcsCallbackNotifier callbacks, IOptions<AppOptions> options)
+        IWorkLineService workLineService, IRcsCallbackNotifier callbacks, IChangeFrameOrchestrator changeFrame,
+        IOptions<AppOptions> options)
     {
         _rcs = rcs;
         _locationMap = locationMap;
         _workLineService = workLineService;
         _callbacks = callbacks;
+        _changeFrame = changeFrame;
         _options = options.Value.Rcs;
 
         KindOptions = new[] { "搬运 transit", "抓取 grab", "识别 identifyQR" };
@@ -52,6 +55,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
         _callbacks.TaskStatusReceived += OnTaskStatusReceived;
         _callbacks.ScanResultReceived += OnScanResultReceived;
         _callbacks.WarnReceived += OnWarnReceived;
+
+        _changeFrame.ProgressChanged += OnChangeFrameProgress;
 
         _ = InitializeAsync();
     }
@@ -128,6 +133,13 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [ObservableProperty] private string _msgFilterTaskId = "";
     [ObservableProperty] private int _msgLimit = 100;
     [ObservableProperty] private bool _autoRefreshMessages = true;
+
+    // 换架/空托盘回收（第四阶段⑥b）
+    [ObservableProperty] private string _changeFrameEquipmentId = "1";
+    [ObservableProperty] private string _changeFrameRole = "上料架";
+    public string[] ChangeFrameRoleOptions { get; } = new[] { "上料架", "下料架" };
+    [ObservableProperty] private string _palletReturnFromCode = "P100";
+    public ObservableCollection<ChangeFrameProgressEvent> ChangeFrameTransactions { get; } = new();
 
     // 位置映射编辑
     [ObservableProperty] private LocationMapItem? _selectedLocation;
@@ -258,6 +270,58 @@ public sealed partial class RcsViewModel : PageViewModelBase
             await RefreshTasksAsync();
         }
         catch (Exception ex) { HandyControl.Controls.Growl.Error($"确认失败：{ex.Message}"); }
+    }
+
+    [RelayCommand]
+    private async Task ChangeFrameAsync()
+    {
+        if (!long.TryParse(ChangeFrameEquipmentId?.Trim(), out var eqId) || eqId <= 0)
+        {
+            HandyControl.Controls.Growl.Warning("请填机台 ID（数字）。");
+            return;
+        }
+        var role = ChangeFrameRole == "下料架" ? FrameRole.Unload : FrameRole.Upload;
+        try
+        {
+            var txnId = await _changeFrame.ChangeFrameAsync(eqId, role, "operator");
+            Append($"> 换架 {txnId}（机台{eqId} {ChangeFrameRole}）");
+            HandyControl.Controls.Growl.Info($"换架已发起 {txnId}，进度见终端");
+        }
+        catch (Exception ex) { HandyControl.Controls.Growl.Error($"换架失败：{ex.Message}"); }
+    }
+
+    [RelayCommand]
+    private async Task PalletReturnAsync()
+    {
+        if (string.IsNullOrWhiteSpace(PalletReturnFromCode)) { HandyControl.Controls.Growl.Warning("请填回收点位编码。"); return; }
+        try
+        {
+            var dest = (await _locationMap.ResolveAreaAsync(_options.PalletReturnArea))?.RcsCode;
+            if (string.IsNullOrWhiteSpace(dest)) { HandyControl.Controls.Growl.Warning($"托盘回收区 {_options.PalletReturnArea} 未在 LOCATION_MAP 录入"); return; }
+            Append($"> 空托盘回收 {PalletReturnFromCode} → {dest}");
+            var r = await _rcs.DispatchPalletReturnAsync(0, null, PalletReturnFromCode.Trim(), dest, _workLineId, _lineCode, "operator");
+            ReportResult(r);
+        }
+        catch (Exception ex) { HandyControl.Controls.Growl.Error($"回收失败：{ex.Message}"); }
+    }
+
+    private void OnChangeFrameProgress(object? sender, ChangeFrameProgressEvent e)
+    {
+        Append($"↻ 换架 {e.TxnId} {e.Step} {e.State}{(string.IsNullOrEmpty(e.Message) ? "" : " " + e.Message)}");
+        if (e.State == "COMPLETED") HandyControl.Controls.Growl.Success($"换架 {e.TxnId} 完成");
+        else if (e.State == "FAILED" || e.Step == ChangeFrameStep.Alarm) HandyControl.Controls.Growl.Warning($"换架 {e.TxnId} 异常：{e.Message}");
+        _ = RefreshChangeFrameTransactionsAsync();
+    }
+
+    private async Task RefreshChangeFrameTransactionsAsync()
+    {
+        var rows = _changeFrame.GetActiveTransactions();
+        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+        {
+            ChangeFrameTransactions.Clear();
+            foreach (var r in rows) ChangeFrameTransactions.Add(r);
+        });
+        await Task.CompletedTask;
     }
 
     [RelayCommand]

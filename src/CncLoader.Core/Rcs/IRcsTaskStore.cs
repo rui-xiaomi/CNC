@@ -62,6 +62,8 @@ public sealed record RcsTaskRow(
     long Id,
     string? RcsTaskId,
     string? Kind,
+    /// <summary>0=上料 1=下料 2=转序（用于对账时区分阶段）。</summary>
+    string TaskType,
     string TaskState,
     string? RcsStatus,
     int Priority,

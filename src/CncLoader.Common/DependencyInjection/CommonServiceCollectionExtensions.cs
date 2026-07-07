@@ -1,5 +1,6 @@
 using CncLoader.Common.Configuration;
 using CncLoader.Common.Identity;
+using CncLoader.Common.Logging;
 using CncLoader.Common.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +20,7 @@ public static class CommonServiceCollectionExtensions
         services.AddSingleton<ISecretProtector, DpapiSecretProtector>();
         services.AddSingleton<ICurrentUser, CurrentUser>();
         services.AddSingleton<IDatabaseConnectionFactory, DatabaseConnectionFactory>();
+        services.AddSingleton<ILogFileReader, LogFileReader>();
 
         return services;
     }

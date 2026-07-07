@@ -10,7 +10,7 @@ namespace CncLoader.Communication.Simulation;
 /// UDP 端口，按《测试机信号表》预置 DM 字。仅实现 Memory Area Read(0x0101)/Write(0x0102) 两条命令，
 /// 与 OmronFinsPlcClient 配套，可端到端自测连接/读/写/心跳。
 /// </summary>
-public sealed class OmronFinsUdpSimulator : IDisposable
+public sealed class OmronFinsUdpSimulator : IDisposable, ISimulatorRegisterStore
 {
     private const byte PlcNode = 1; // 环回模拟，节点号固定 1（客户端对节点号不挑）。
 
@@ -38,6 +38,13 @@ public sealed class OmronFinsUdpSimulator : IDisposable
 
     public int GetPort(long plcId) =>
         _plcs.TryGetValue(plcId, out var p) ? p.Port : throw new KeyNotFoundException($"FINS 模拟器未登记 PLC {plcId}");
+
+    /// <summary>写一个 DM 字（模拟器内部直写，供行为模拟器驱动 CNC 语义用；未登记该 PLC 时 no-op）。</summary>
+    public void WriteRegister(long plcId, int offset, ushort value)
+    {
+        if (_plcs.TryGetValue(plcId, out var p))
+            p.Store[offset] = value;
+    }
 
     public Task StartAsync()
     {

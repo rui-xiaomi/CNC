@@ -25,6 +25,10 @@ public interface IRcsTaskService
     /// <summary>自动重做专用：不再递增 REDO_COUNT（调用前已由 store 原子递增），只按原参数重发。</summary>
     Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default);
 
+    /// <summary>空托盘回收（人工触发）：点位→托盘回收区，transitTask + Kind=PalletReturn。不建托盘账。</summary>
+    Task<RcsResult> DispatchPalletReturnAsync(long equipmentId, long? positionId, string fromCode, string toCode,
+        long workLineId, string lineCode, string author, CancellationToken ct = default);
+
     /// <summary>条件查询任务（兜底/手动）。</summary>
     Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default);
 

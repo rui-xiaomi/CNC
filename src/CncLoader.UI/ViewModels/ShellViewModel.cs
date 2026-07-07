@@ -19,18 +19,22 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     private readonly ISignalStateStore _store;
     private readonly IWorkLineService _workLineService;
     private readonly IPlcCatalogService _plcCatalog;
+    private readonly IAlarmEventService _alarms;
     private readonly DispatcherTimer _timer;
     private long _heartbeat;
 
     public ShellViewModel(INavigationService navigation, ISignalStateStore store,
-        IWorkLineService workLineService, IPlcCatalogService plcCatalog)
+        IWorkLineService workLineService, IPlcCatalogService plcCatalog, IAlarmEventService alarms)
     {
         _navigation = navigation;
         _store = store;
         _workLineService = workLineService;
         _plcCatalog = plcCatalog;
+        _alarms = alarms;
         _navigation.Navigated += OnNavigated;
         _store.MachineChanged += OnMachineChanged;
+        _alarms.AlarmRaised += (_, _) => _ = RefreshAlarmCountAsync();
+        _alarms.AlarmsChanged += (_, _) => _ = RefreshAlarmCountAsync();
 
         NavItems = new ObservableCollection<NavItem>(BuildNavItems());
         WorkLines = new ObservableCollection<WorkLineListItem>();
@@ -38,6 +42,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
         UpdateClock();
+        _ = RefreshAlarmCountAsync();
     }
 
     public ObservableCollection<NavItem> NavItems { get; }
@@ -140,6 +145,14 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _heartbeat++;
         HeartbeatText = _heartbeat.ToString("D6");
         UpdateClock();
+        // 每 5s 刷新未处理告警角标（覆盖告警产生/标记已处理/清空等各来源，统一在 UI 线程）
+        if (_heartbeat % 5 == 0) _ = RefreshAlarmCountAsync();
+    }
+
+    private async Task RefreshAlarmCountAsync()
+    {
+        try { UnhandledAlarms = await _alarms.GetUnhandledCountAsync(); }
+        catch { /* DB 未就绪等：保持上次值，不阻塞 UI */ }
     }
 
     private void UpdateClock() => Clock = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -155,6 +168,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         new("agv",   "AGV 管理",   "设备", Icons.Agv),
         new("scan",  "扫码枪管理", "设备", Icons.Scan),
         new("frame", "料架管理",   "物流", Icons.Frame),
+        new("log",   "日志/告警",  "运行", Icons.Dashboard),
     ];
 
     public void Dispose()

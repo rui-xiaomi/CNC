@@ -8,6 +8,9 @@ public sealed record NamedOption(long Id, string DisplayName);
 /// <summary>删除校验通用结果（引用数 + 是否可删 + 提示消息）。</summary>
 public sealed record DeleteCheckResult(bool CanDelete, int Refs, string Message);
 
+/// <summary>机台所属线体引用（线体主键 + 线体编码），供 RCS 任务 taskId 前缀与落库线体使用。</summary>
+public sealed record WorkLineRef(long WorkLineId, string LineCode);
+
 /// <summary>线体配置 CRUD 与列表。</summary>
 public interface IWorkLineService
 {
@@ -55,6 +58,8 @@ public interface IEquipmentConfigService
     Task UpdateAsync(EquipmentEditModel model, string author, CancellationToken ct = default);
     /// <summary>读取机台当前上/下料架绑定。</summary>
     Task<EquipmentFrameBindingIds> GetFrameBindingIdsAsync(long equipmentId, CancellationToken ct = default);
+    /// <summary>反查机台所属线体（机台→工序→线体）。找不到返回 null。</summary>
+    Task<WorkLineRef?> GetWorkLineByEquipmentAsync(long equipmentId, CancellationToken ct = default);
     /// <summary>设置机台上/下料架绑定（null 表示清除该角色）。</summary>
     Task SetFrameBindingAsync(long equipmentId, long? uploadFrameId, long? downloadFrameId, string author, CancellationToken ct = default);
     /// <summary>删除前校验：被点位映射或料架绑定引用时禁止删除；加工位自动级联软删。</summary>

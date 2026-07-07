@@ -164,6 +164,9 @@ public sealed record RcsResult(
     string? Error,
     int ElapsedMs)
 {
+    /// <summary>本次下发对应的 taskId（由编排服务填充，供调度器绑定加工位上下文）。</summary>
+    public string? TaskId { get; init; }
+
     public static RcsResult Fail(string requestBody, string error, int httpStatus = 0, int elapsedMs = 0)
         => new(false, httpStatus, false, null, requestBody, null, error, elapsedMs);
 }

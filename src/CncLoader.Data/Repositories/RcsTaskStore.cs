@@ -137,7 +137,7 @@ public sealed class RcsTaskStore : IRcsTaskStore
     }
 
     private static RcsTaskRow Map(AgvTask t) => new(
-        t.Id, t.RcsTaskId, t.RcsKind, t.TaskState, t.RcsStatus, t.Priority,
+        t.Id, t.RcsTaskId, t.RcsKind, t.TaskType, t.TaskState, t.RcsStatus, t.Priority,
         t.FromFrameCode, t.ToFrameCode, t.EquipmentId, t.PositionId, t.ElectrodeId, t.TxnId,
         t.ReqParam, t.RedoCount, t.CancelManualFlag, t.SendTime, t.DispatchTime, t.FinishTime, t.ErrorMsg);
 }

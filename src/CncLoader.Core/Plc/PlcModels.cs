@@ -99,7 +99,8 @@ public sealed record AlarmRow(
     DateTime Time,
     string Level,
     string Message,
-    string State);
+    string State,
+    string AlarmType = "");
 
 public sealed record EquipmentOption(long Id, string DisplayName, long PlcId);
 
