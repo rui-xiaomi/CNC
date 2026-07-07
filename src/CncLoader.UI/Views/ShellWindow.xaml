@@ -160,9 +160,12 @@
                         </Grid>
                     </Border>
 
-                    <!-- 页面路由：ContentControl（非 TreeView） -->
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="16,14">
-                        <ContentControl Content="{Binding CurrentPage}"/>
+                    <!-- 页面路由：ContentControl（非 TreeView）。
+                         Height 绑定视口高：页面被限定为视口高度，页内 Grid 的 * 行/填充列表得以填满并内部滚动、贴底，
+                         整页不再被长列表撑高。（全屏 HMI，页面按视口尺寸布局；表单页内容均短于视口。） -->
+                    <ScrollViewer x:Name="PageHost" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="16,14">
+                        <ContentControl Content="{Binding CurrentPage}"
+                                        Height="{Binding ViewportHeight, ElementName=PageHost}"/>
                     </ScrollViewer>
                 </Grid>
             </Grid>
