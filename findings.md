@@ -90,3 +90,39 @@
   - **取消工单**：CANCELED → `RaiseRcsTaskCanceledAsync`(ALARM_TYPE=RCS_CANCELED 严重) + UI「确认取消已处理」按钮 → `ConfirmCancelHandledAsync`(CANCEL_MANUAL_FLAG=1)。**锁点位（确认前不可对相关点位重新派工）由步骤⑤状态机实现**，本步骤只生成工单 + 确认入口。
   - **去重**：取消/查无/重做上限告警按 taskId 内存去重（终态后清理），避免轮询反复告警。回调侧已由处理器 dedup（步骤②）。
   - **事件源**：`RcsTaskStatusEvent.Source` = callback/poll/autoRedo，UI 终端区分显示。跟踪器轮询发现态变化时 RaiseTaskStatus(source=poll)→UI 自动刷新。
+- **步骤⑤（状态机改造）实现要点（Session 25）**：
+  - **架构**：`PlcPollingService` 只采集信号+MachineStatus，**不再合成 PositionStatus**；`PositionScheduler`（HostedService）是 PositionStatus 的**唯一权威**——主循环 500ms 每加工位独立驱动（双位并行），派工循环按优先级出队下发 RCS。
+  - **状态机**（§7）：加 `Dispatching`/`Transporting` 中间态，上下料共用、context 区分阶段。LOADED/UNLOADED 双条件（RCS completed **且** PLC 复核通过）；复核不过 → ALARM **不写启动信号**（安全底线，防账实不符撞机）。
+  - **PLC 复核 fresh 读**：Transporting+COMPLETED 时 `ReadHasMatFreshAsync` 经 `IPlcOperationService.ReadRegisterAsync` 直接读 PLC，**不依赖信号仓**——因 CncMachineSimulator 写 HasMat 与轮询读有 200ms 滞后，用信号仓会误判复核不过。
+  - **优先级队列**：`PriorityDispatchQueue` 按 priority 降序+同优先级 FIFO；下料 priority=8 > 上料 5（紧急下料 > 常规上料，防机台等卸料阻塞）。RCS 单任务串行——派工循环逐条出队下发。
+  - **§6.3 启动对账**：启动时 `GetUnfinishedTaskIdsAsync`→按 `TaskType`(0上料/1下料) 绑定回加工位上下文，态置 Dispatching；对账完成前不派工（`IsReconciled` 守卫）。`RcsTaskRow.TaskType` 为此新增字段。账实不符（PLC 有料但无对应任务）留步骤⑥细化，本步骤先保守停下。
+  - **PLC 写钩子（`IPlcWriteHook`）**：调度器写 POS_TEST_START 成功后回调 CncMachineSimulator 驱动"检测→OK"语义。**不依赖寄存器轮询**——因 NModbus master-write 与 sim 内部 `ReadPoints` 索引约定不一致（master readback 自洽但 sim 内部读不到 master 写入值），改用 hook 回调绕过。生产环境不注册 IPlcWriteHook，调度器 `?.` 调用安全跳过。
+  - **CncMachineSimulator**：在 ModbusTcpSimulator 寄存器之上叠加加工位节拍语义（RCS 上料完成→HasMat=ON；TestStart=1→2s 后 Ok=ON；下料完成→HasMat=OFF/AllowLoad=ON；TestStart=2→复位）。`SkipMaterialArrival` 注入"复核不过"演示。是步骤⑤演示能跑节拍的关键胶水。
+  - **状态机驱动模式**：`ComputeNextState`（纯函数，按信号/rcs 态算 next）→ `ExecuteActions`（执行动作，**可改写 next**，如入队→Dispatching、写启动→Processing、复核→Loaded/Unloaded/Alarm）→ `SetState`。动作驱动的态转换必须由 ExecuteActions 改写 next，否则 SetState 会覆盖回 ComputeNextState 的值（曾致双重入队 bug）。
+  - **§6.2 路由决策简化版**：`RouteResolver` 用 LOCATION_MAP 解析 LOAD_AREA↔加工位 cell↔UNLOAD_AREA；完整工序间流转/中转架/NG分流/多加工位选位策略留步骤⑥。
+- **步骤⑥a（槽位账目）实现要点（Session 26）**：
+  - **预记/落账/回滚时序**（§6.1 补充规则）：grab 任务选定孔位时 `ReserveAsync`（SLOT_STATE='3' 预记 + REMARK=taskId）；回调 completed + PLC 复核后 `ConfirmAsync`（→'1' 占用，落账）；取消/失败 `RollbackAsync`（→'0' 空，回滚）。redo 同 taskId 幂等——落账后 REMARK 保留 taskId + BindSource='RCS_CONFIRMED'，重复 Confirm 查到 '1' 态直接返回 true 不重复记账。
+  - **避免 DB schema 变更**：用现有 `REMARK` 列存预记 taskId（无需加 RESERVED_TASK_ID 列）。代价：REMARK 字段被占用作审计；人工校正置空时清 REMARK。
+  - **同架并发互斥**：`ConcurrentDictionary<long, SemaphoreSlim>` 按料架 ID 加锁，多加工位同时从一料架取料时 Reserve 串行选槽，不会两任务选同一电极（§6.1 并发保护）。
+  - **槽位状态扩展**：`SlotStates` 0空/1占用/2锁定/3预记；`SlotItem` 加 SlotNo/SlotState 暴露完整状态；UI 槽位卡按状态着色（占用 accent/预记 warn/锁定），预记态可见便于排查"挂起"的占用意向。
+  - **人工校正**：`SetSlotAsync` 直接改电极码/状态，处理账实不符后人工闭环（NG 处理/盘点差异/手动补录）。电极反查 `LocateElectrodeAsync` 跨全部料架查 ElectrodeId。
+  - **⑥a 仅服务+UI，未接调度器**：当前调度器用 transitTask（cell 级、整架搬），不触发槽位账；后续若改 grabTask（电极级）或盘点/换架接入，调度器在 enqueue/回调处调 Reserve/Confirm/Rollback。水位监视器（⑥b）依赖 `GetOccupancyAsync`。
+- **步骤⑥b（换架任务对）实现要点（Session 27）**：
+  - **先拉后送**（§6.2 v2.2）：换架=一对 RCS 任务，①拉旧架(站点→缓存)→等①completed→②送新架(缓存→站点)。站点位置唯一，必须先拉空再送新。TXN_ID 关联两 taskId（`CF-yyyyMMddHHmmss-seq`），任务表 `MAS_AUTO_AGV_TASK.TXN_ID` 字段已存。
+  - **失败回滚**（§6.2 v2.3）：第一发失败 redo≤3（RcsTaskTracker 自动）仍失败→告警+工单，**绑定不解除、原状保持**；第二发失败 redo≤3 仍失败→告警+工单，**锁定工序**（站点空置中间态，人工送架后界面点"新架到位"再绑定）。本编排用 `IsRedoExhausted(taskId)`（store.RedoCount>=MaxAutoRedo）判定 tracker 已放弃，避免与 tracker 的 redo 冲突。
+  - **事件驱动**：编排订阅 `notifier.TaskStatusReceived`，按 pull/push taskId 匹配活动事务推进。不轮询。活动事务内存 ConcurrentDictionary 跟踪，完成/告警后移除。
+  - **空托盘回收**（§6.2 v2.3 人工触发）：`DispatchPalletReturnAsync` = transitTask + Kind=PalletReturn，priority=8，点位→PALLET_RETURN 区。无自动触发、不建托盘账。UI 按钮人工发起。
+  - **缓存区点位待现场确认**：FULL_BUFFER/EMPTY_BUFFER/PALLET_RETURN 区名配置化，需在 LOCATION_MAP 录入 cell 编码才能换架/回收；现场联调前随 cell 级清单一并录入。
+  - **水位监视器自动触发留⑥c**：依赖槽位账接入调度器（grab 任务落账驱动占用变化），⑥b 只提供手动换架入口。
+- **步骤⑥c（盘点+水位+换架事务展示）实现要点（Session 28）**：
+  - **盘点全量校正**（§5.7/§6.2）：identifyQR 下发 param="起始孔位,数量" → scanTaskStatus 回调 `products[]` 按下发孔位顺序对应二维码值 → `CorrectFromInventoryAsync` 按 SlotNo 顺序从 posStart 起的 count 个槽位设电极码=products[i]+占用，空码清槽，所有槽位 `LAST_VERIFY_TIME=now`。`code` 字段（被扫料架编号）+ taskId 双重校验定位料架（本实现按 StartInventoryAsync 时绑定的 frameId，不依赖 code 反查）。
+  - **盘点后台异步**：3~4 分钟/架、RCS 单任务串行——UI 发起后立即返回 taskId，回调到达经 `InventoryCompleted` 事件通知 UI 刷新（Dispatcher Invoke）。失败/取消经 `TaskStatusReceived` 兜底（scanResult 可能不来的场景）。
+  - **水位监视器**：周期检查 `GetOccupancyAsync`，下料架剩余空槽≤`WaterFullThreshold` → 满架触发换架；上料架 empty=total → 空架触发换架。自动调 `ChangeFrameAsync`，已有该角色换架进行中（GetActiveTransactions 去重）跳过。**FindBindingAsync 占位**：料架→机台角色反查需 `IEquipmentConfigService.GetBindingByFrameAsync`（未实现，返回固定 (1,Unload)），步骤⑦/现场补。
+  - **NG 处理简化**：未单独建 NG 页——料架页人工校正「置空(0)」即释放 NG 架槽位（覆盖 §6.2 NG 闭环的"释放槽位"动作）。工件记录归档（NG 标记+待处理项）依赖步骤⑦ WORK_RECORD。
+  - **盘点互斥未做**：§6.2 约定"发起前检查队列无待处理搬运请求"，需调度器队列查询接口，步骤⑦/现场补。
+- **步骤⑦（加工记录+看板）实现要点（Session 29）**：
+  - **WORK_RECORD 时序**：调度器 LOADED→PROCESSING（写 POS_TEST_START=1 后）调 `RecordStartAsync`（关联上料 taskId 溯源）；PROCESSING→DoneOk/DoneNg 调 `RecordResultAsync("0"/"1")`；耗时由 WORK_END-WORK_START 算。`PositionContext.WorkRecordId` 持当前进行中记录主键。
+  - **重启残留补结**：RecordStart 时若同加工位有未结束记录（WORK_RESULT 空）→ 自动补结为异常(2)，防 §6.3 对账时账实不符。
+  - **监控看板实时化**：`DashboardViewModel` 订阅 `ISignalStateStore.PositionChanged/MachineChanged`——加工位卡片随调度器状态机变化；当班统计 `GetShiftStatsAsync` 按今天日期计 OK/NG；未处理告警 `IAlarmEventService.GetRecentAsync` 筛"未处理"。原 Phase 1 静态骨架替换为绑定。
+  - **StateBadge→Brush**：`StateBadgeToBrushConverter` 把 StateBadge 字符串（offline/alarm/run/ok/ng/idle）转对应 Brush 资源（TryFindResource），看板状态灯复用设计令牌。
+  - **Phase 4 闭环**：PLC 信号→轮询中枢→调度器状态机→RCS 任务下发/回调/轮询跟踪→PLC 复核收口→写 POS_TEST_START→加工记录→看板联动。槽位账目/换架/盘点服务就绪但未全接调度器（grab 任务级接入留现场/后续）。

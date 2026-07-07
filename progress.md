@@ -250,6 +250,142 @@
 - 待用户人工确认（需先连库运行 App）：下发后任务态自动从 DISPATCHED→EXECUTING→COMPLETED（轮询驱动）；模拟器 FailureRate=1 时 FAILED 任务自动 redo ≤3 次后告警；取消任务后告警面板出 RCS_CANCELED，点「确认取消已处理」后 CANCEL_MANUAL_FLAG=1。
 - 下一步（待确认）：步骤⑤ 状态机改造（DISPATCHING/TRANSPORTING 态 + LOADED 双条件 + 优先级队列 + §6.2 路由决策 + §6.3 启动对账 + PLC 复核收口），PLC 模拟器+RcsSimulator 双位并行联跑 ≥10 节拍。
 
+### Session 25 — 2026-07-07 第四阶段步骤⑤：状态机改造（代码）— 暂停等用户确认
+- 范围（用户确认）：核心状态机+复核+队列+对账+PLC 行为模拟；§6.2 工序间流转/中转架/NG分流/水位/换架/空托盘/盘点留步骤⑥。
+- Core（新增/改 `State/`）：`PositionState` 加 `Dispatching`/`Transporting`（上下料共用，context 区分阶段）+ `PositionStateNames` 同步；`DispatchQueue.cs`（`DispatchItem`/`PositionPhase`/`IDispatchQueue`/`IRouteResolver`）；`IPositionScheduler`（IsReconciled/Reconciled 事件/ResetAlarmAsync）；`IPlcWriteHook`（PLC 写钩子，模拟用）；`RcsModels.RcsResult` 加 `TaskId`；`IRcsTaskStore.TryIncrementRedoIfUnderAsync`；`IRcsTaskService.RedispatchAsync`+`ConfirmCancelHandledAsync`；`RcsTaskRow` 加 `TaskType`（对账区分阶段）。
+- Communication（新增 `State/`）：`PriorityDispatchQueue`（priority 降序+同优先级 FIFO，线性扫描小规模）；`RouteResolver`（`LOAD_AREA`/`UNLOAD_AREA` 命名点 + 加工位 cell，LOCATION_MAP 解析，失败返回 null 告警）；`PositionScheduler` HostedService——
+  - 启动：装载加工位+POS_TEST_START/HasMat 点位缓存 → §6.3 对账（`GetUnfinishedTaskIdsAsync`→按 TaskType 绑定回上下文）→ IsReconciled=true → 主循环(500ms)+派工循环。
+  - 主循环：每加工位读信号(GetReadings+GetMachine)+读 RCS 态(GetByTaskIdAsync)→ComputeNextState→ExecuteActions（入队/复核/写启动/告警，可改写 next）→SetState（唯一 PositionStatus 权威）。
+  - 状态机：Offline/Alarm→WaitLoad；WaitLoad+允许上料+无料+无任务→入上料队(prio5)→Dispatching；Dispatching+rcs DISPATCHED→Transporting；Transporting+rcs COMPLETED→**fresh PLC 读 HasMat 复核**（不依赖信号仓，避免轮询滞后误判）→上料 Loaded/下料 Unloaded/否则 Alarm；Loaded→写 POS_TEST_START=1→Processing；Processing+Ok→DoneOk/+Ng→DoneNg；Done→入下料队(prio8)→Dispatching；Unloaded→写 POS_TEST_START=2→WaitLoad。复核不过→ALARM 不写启动（安全底线）。
+  - 派工循环：优先级出队→`DispatchTransitAsync`→绑定 taskId 回上下文；失败→Alarm。
+- Communication（新增 `Simulation/CncMachineSimulator.cs`，`IHostedService,IPlcWriteHook`）：RCS 上料 COMPLETED（订阅 notifier）→置 HasMat=ON/AllowLoad=OFF；`OnTestStartWritten(1)`→延时 2s 置 PosOk=ON；RCS 下料 COMPLETED→置 HasMat=OFF/AllowLoad=ON/Ok=Ng=OFF；`OnTestStartWritten(2)`→复位 TestStart=0。`SkipMaterialArrival` 注入"RCS 报完成但工件未到位"。
+- 修改：`PlcPollingService` 不再合成 PositionStatus（调度器为唯一权威，只负责信号采集+MachineStatus）；`ModbusTcpSimulator` 加 `ReadRegister`/`WriteRegister` 内部直读写；`RcsTaskService` 拆 `RedoAsync`→`BuildAndSendAsync`+`RedispatchAsync`，dispatch 方法返 `result with { TaskId }`。
+- Common：`RcsOptions` 加 `SchedulerEnabled=true`/`SchedulerIntervalMs=500`。
+- DI：`IDispatchQueue`/`IRouteResolver`/`PositionScheduler`(singleton+hosted+`IPositionScheduler`)/`CncMachineSimulator`(singleton+hosted+`IPlcWriteHook`)。
+- 验证：`dotnet build` 0 警告 0 错误；harness 真 scheduler+Modbus sim+CncMachineSimulator+RcsSimulator+回调宿主+处理器+notifier+服务 + 假 store/log/alarms/points/location——**阶段1 ≥10 完整节拍**（WAIT_LOAD→DISPATCHING→TRANSPORTING→LOADED→PROCESSING→DONE_OK→DISPATCHING→TRANSPORTING→UNLOADED→WAIT_LOAD），**阶段2 注入 SkipMaterialArrival → 复核不过 ALARM 触发**；harness 已清理。
+- 修复历程：① SetState 覆盖动作设置的 ctx.State 致双重入队（ExecuteActions 改为返回有效 next，SetState 用之）；② 复核读信号仓滞后致误判（改 fresh PLC 读 `ReadHasMatFreshAsync`）；③ NModbus master-write 与 sim 内部 ReadPoints 索引不一致致 CncMachineSimulator 读不到 TestStart（改用 `IPlcWriteHook` 回调，不依赖寄存器轮询）；④ ComputeNextState(Loaded) 直接返 Processing 致跳过 WriteTestStart（改为返 Loaded，由 ExecuteActions 写启动后转 Processing）。
+- 待用户人工确认（需先连库运行 App + 录入 LOCATION_MAP 的 LOAD_AREA/UNLOAD_AREA/加工位 cell）：监控看板加工位状态自动跑节拍；断电重启后对账恢复；复核不过自动停下告警。
+- 下一步（待确认）：步骤⑥ RCS 管理页五块补全 + 槽位账目 + identifyQR 盘点 + 水位监视+换架任务对 + NG 处理页 + 空托盘回收 + 料架页人工校正。
+
+### Session 26 — 2026-07-07 第四阶段步骤⑥a：槽位账目（代码）— 暂停等用户确认
+- 步骤⑥ 拆三个子步骤：⑥a 槽位账目（基础）/⑥b 水位+换架+空托盘/⑥c 盘点+NG+RCS页补全。本 session 完成 ⑥a。
+- Core（新增 `Rcs/ISlotAccountService.cs`）：`ISlotAccountService`（ReserveAsync 选空槽预记/ConfirmAsync 落账/RollbackAsync 回滚/GetOccupancyAsync 占用统计/SetSlotAsync 人工校正/LocateElectrodeAsync 反查）+ DTO（`ReservedSlot`/`FrameOccupancy`/`SlotLocation`）+ `SlotStates` 常量（0空/1占用/2锁定/3预记）。
+- Data（新增 `Repositories/SlotAccountService.cs`）：预记用 `SLOT_STATE='3'` + `REMARK=taskId` 跟踪（避免 DB schema 变更）；同架并发用 `ConcurrentDictionary<long, SemaphoreSlim>` 互斥，多加工位同时取料不会撞同一槽；落账后 `REMARK` 保留 taskId + `BindSource='RCS_CONFIRMED'` 供 redo 幂等判定（重复 Confirm 返回 true 不重复记账）；回滚仅对预记态生效，已落账不回滚。
+- Core：`ConfigModels.SlotItem` 加 `SlotNo`/`SlotState`（槽位状态完整暴露，不再只有 Occupied bool）；`ConfigServices.GetDetailAsync` 投影同步。
+- UI：`FrameViewModel` 注入 `ISlotAccountService` + `SelectSlotCommand`/`CorrectSlotCommand` + `SelectedSlot`/`CorrectElectrode`/`CorrectSlotState` 属性 + `SlotStateOptions`；`SlotVm` 加 `SlotNo`/`SlotState`/`Reserved`/`StateBadge`/`ElectrodeText`（占用/预记显示电极码、锁定显示锁）；`PageTemplates.xaml` 料架页槽位卡改 Button（可点击选中）+ 按 Occupied/Reserved 着色（占用 accent/预记 warn）+ 新增「人工校正」面板（选中槽→电极码+状态下拉→校正保存）。
+- DI：`AddCncData` 注册 `ISlotAccountService → SlotAccountService` 单例。
+- 验证：`dotnet build` 0 警告 0 错误；harness（EF Core InMemory + 真 SlotAccountService + 种子料架 5 槽）11 项全 PASS：Reserve 选首个空槽(槽3)/预记后 reserved=1/Confirm 落账/落账后 occupied=3/重复 Confirm 幂等/Reserve T2 选槽4/Rollback T2 回滚/回滚后 empty=2/并发 2 个 Reserve 各选不同槽/反查 EL-001 命中槽3/人工校正后反查 EL-MANUAL 命中；harness 已清理。
+- 待用户人工确认 UI（需先连库）：料架页点槽位→人工校正电极码/状态保存；槽位卡按状态着色（占用蓝/预记橙）。
+- 下一步（待确认）：步骤⑥b 水位监视器 + 换架任务对（先拉后送/回滚）+ 空托盘回收按钮。
+
+### Session 27 — 2026-07-07 第四阶段步骤⑥b：换架任务对 + 空托盘回收（代码）— 暂停等用户确认
+- Core（新增 `Rcs/IChangeFrameOrchestrator.cs`）：`IChangeFrameOrchestrator`（ChangeFrameAsync 发起换架/ProgressChanged 事件/GetActiveTransactions）+ DTO（`ChangeFrameProgressEvent`/`ChangeFrameStep`/`FrameRole` 枚举 0/1/2/3=Upload/Unload/Transit/NgFrame）；`IRcsTaskService` 加 `DispatchPalletReturnAsync`（transitTask + Kind=PalletReturn, priority=8，不建托盘账）。
+- Communication（新增 `State/ChangeFrameOrchestrator.cs`）：先拉后送——取该角色绑定料架(`IEquipmentConfigService.GetFrameBindingIdsAsync`)→解析料架站点 cell + 缓存区 cell(`ILocationMapService.ResolveFrameAsync`/`ResolveAreaAsync` FULL_BUFFER/EMPTY_BUFFER)→生成 TXN_ID(`CF-yyyyMMddHHmmss-seq`)→下发第一发拉旧架(站点→缓存, priority=9, Kind=ChangeFrame, TxnId 绑定)→订阅 `notifier.TaskStatusReceived`：第一发 completed→下发第二发送新架(缓存→站点)；第一发 CANCELED 或 `IsRedoExhausted`(RedoCount>=MaxAutoRedo)→告警+工单(绑定不解除、原状保持)；第二发 CANCELED/redo 耗尽→告警+工单(锁定工序，人工送架后界面点"新架到位"再绑定，绑定不在本编排)；完成/Done 移除活动事务。活动事务内存 ConcurrentDictionary 跟踪。
+- Common：`RcsOptions` 加 `WaterFullThreshold=2`/`FullBufferArea="FULL_BUFFER"`/`EmptyBufferArea="EMPTY_BUFFER"`/`PalletReturnArea="PALLET_RETURN"`。
+- UI：`RcsViewModel` 注入 `IChangeFrameOrchestrator` + `ChangeFrameCommand`/`PalletReturnCommand` + `ChangeFrameEquipmentId`/`ChangeFrameRole`/`PalletReturnFromCode` 属性 + `ChangeFrameRoleOptions`；订阅 `ProgressChanged` 终端追加 `↻ 换架 {txn} {step} {state}` + Growl 完成/异常提示；`PageTemplates.xaml` RCS 页「连接&下发」加「换架/空托盘回收」面板（机台ID+角色下拉+换架按钮；点位+回收按钮）。
+- DI：`AddCncCommunication` 注册 `IChangeFrameOrchestrator → ChangeFrameOrchestrator` 单例。
+- 验证：`dotnet build` 0 警告 0 错误；harness 真 orchestrator+RcsTaskService + 假 store/equipment/location/alarms/client 7 项全 PASS：先拉后送 happy path（第一发下发→模拟 completed→第二发下发→completed→事务移除+无告警+两次 dispatch）；第二发失败（模拟 completed 第一发→第二发失败+RedoCount=3→IsRedoExhausted→工单告警+事务移除）；harness 已清理。
+- 待用户人工确认 UI（需先连库 + 录入 LOCATION_MAP 的 FULL_BUFFER/EMPTY_BUFFER/PALLET_RETURN 区 + 料架站点 cell）：RCS 页填机台ID+角色点「换架」→任务列表出现两发 ChangeFrame 任务（TXN_ID 关联）→终端 `↻ 换架` 进度；空托盘回收填点位点「回收」→PalletReturn 任务下发。
+- 下一步（待确认）：步骤⑥c identifyQR 盘点后台任务 + NG 处理页 + RCS 管理页五块补全 + 水位监视器自动触发。
+
+### Session 28 — 2026-07-07 第四阶段步骤⑥c：盘点后台任务 + 水位监视器 + RCS 页换架事务展示（代码）— 暂停等用户确认
+- Core（新增 `Rcs/IInventoryService.cs`+`IWaterMonitorService.cs`）：`IInventoryService`（StartInventoryAsync/InventoryCompleted 事件/GetActiveInventories）+ `InventoryResultEvent`/`InventoryTaskInfo`；`IWaterMonitorService`（CheckAsync/WaterLevelChanged 事件）+ `WaterLevelEvent`；`ISlotAccountService` 加 `CorrectFromInventoryAsync`（按 SlotNo 顺序从 posStart 起的 products 全量校正电极码 + 范围内空码清槽 + 所有槽位 LAST_VERIFY_TIME=now）+ `GetSlotsAsync` + `SlotRecord`。
+- Communication（新增 `State/InventoryService.cs`+`WaterMonitorService.cs`）：`InventoryService`——`StartInventoryAsync` 解析料架 station→`DispatchIdentifyAsync`→活动表跟踪→订阅 `notifier.ScanResultReceived`：error_code=0 → `CorrectFromInventoryAsync` 全量校正→`InventoryCompleted(COMPLETED, 校正数)`；error_code!=0 → FAILED；`notifier.TaskStatusReceived` 兜底 FAILED/CANCELED。`WaterMonitorService`（HostedService，周期 `SchedulerIntervalMs*4`）：遍历料架 `GetOccupancyAsync`，下料架接近满（剩余空槽≤WaterFullThreshold）/上料架空（empty=total）→ 调 `IChangeFrameOrchestrator.ChangeFrameAsync` 自动换架；已有该角色换架进行中（GetActiveTransactions 或 _inFlight 去重）跳过。
+- UI：`FrameViewModel` 注入 `IInventoryService` + `StartInventoryCommand` + `InventoryPosStart`/`InventoryCount` + 订阅 `InventoryCompleted`（Dispatcher Invoke Growl + 刷新料架详情）；料架页模板加「发起盘点」面板。`RcsViewModel` 加 `ChangeFrameTransactions` ObservableCollection + `RefreshChangeFrameTransactionsAsync`（ProgressChanged 时刷新）；RCS 页「换架/回收」面板下加「进行中的换架事务」DataGrid。
+- DI：`AddCncCommunication` 注册 `IInventoryService → InventoryService` 单例 + `WaterMonitorService`（HostedService + `IWaterMonitorService`）。
+- 验证：`dotnet build` 0 警告 0 错误；harness 真 InventoryService+notifier + 假 taskSvc/slots/locMap/alarms 7 项全 PASS：发起盘点返回 taskId+DispatchIdentify 被调(Station=FRAME-1,Count=3)+活动列入+回调后 CorrectFromInventory 被调(frameId=1,products=3)+InventoryCompleted COMPLETED 校正数 3+活动移除+失败回调(error_code=1)→FAILED；harness 已清理。
+- **简化/待办**：① 水位监视器 `FindBindingAsync` 料架→机台角色反查为占位（返回固定 (1,Unload)），需 `IEquipmentConfigService` 加 `GetBindingByFrameAsync(frameId)→(equipmentId,role)`，步骤⑦或现场补；② NG 处理页未单独建——料架页人工校正「置空(0)」即释放 NG 架槽位，覆盖 §6.2 NG 闭环的"释放槽位"动作，工件记录归档依赖步骤⑦ WORK_RECORD；③ 盘点互斥（发起前检查队列无待处理搬运）未做，依赖调度器队列查询接口（步骤⑦/现场）。
+- 待用户人工确认 UI（需先连库 + 录入料架 station 点位）：料架页选料架→填起始孔位+数量→「发起盘点」→任务列表出 identifyQR 任务→模拟器回推 scanTaskStatus 后槽位自动校正 + Growl 提示；RCS 页换架事务列表实时更新。
+- 下一步（待确认）：步骤⑦ 加工记录写 `MAS_AUTO_WORK_RECORD`（关联任务/工件/加工位/耗时）+ 监控看板联动。
+
+### Session 29 — 2026-07-07 第四阶段步骤⑦：加工记录 + 监控看板联动（代码）— Phase 4 完成
+- Core（新增 `Rcs/IWorkRecordService.cs`）：`IWorkRecordService`（RecordStartAsync/RecordResultAsync/FindOpenByPositionAsync/GetRecentAsync/GetShiftStatsAsync）+ DTO（`WorkRecordStartArgs`/`WorkRecordRow`/`WorkShiftStats`）。
+- Data（新增 `Repositories/WorkRecordService.cs`）：写 `MAS_AUTO_WORK_RECORD`——RecordStart 时同加工位若有未结束记录（WORK_RESULT 空）→ 自动补结为异常(2)防重启残留；RecordResult 写结果(0=OK/1=NG)+WORK_END_TIME+耗时由 start/end 算；REMARK 存 `rcsTask={taskId}` 溯源；当班统计按今天 WORK_START_DATE 计 OK/NG/总数。
+- Communication：`PositionScheduler` 注入 `IWorkRecordService`——ExecuteActions `Loaded` 案（写 POS_TEST_START=1 后）调 `RecordStartAsync`（关联 ctx.CurrentTaskId 上料 taskId，存 ctx.WorkRecordId）；`DoneOk`/`DoneNg` 案调 `RecordResultAsync("0"/"1")`。`PositionContext` 加 `WorkRecordId`。
+- UI：`DashboardViewModel`（独立文件，替换 PageViewModels 占位）注入 `ISignalStateStore`+`IWorkRecordService`+`IAlarmEventService`，订阅 `PositionChanged`/`MachineChanged`——`Positions` ObservableCollection<PositionCardVm>（EquipmentText/PositionText/StateDisplay/StateBadge）+ `RecentRecords` ObservableCollection<WorkRecordRow> + `OkCount`/`NgCount`/`TotalCount`/`AlarmCount`/`OnlineMachines`；`RefreshCommand`。`PageTemplates` 监控看板模板从静态骨架改为实时绑定：4 统计卡（在线机台/当班OK/当班NG/未处理告警）+ 加工位 ItemsControl（状态徽标 Ellipse + 中文态）+ 最近加工记录 DataGrid（机台/工位/电极/结果/耗时/开始）。新增 `StateBadgeToBrushConverter`（offline/alarm/run/ok/ng/idle → 对应 Brush）。
+- DI：`AddCncData` 注册 `IWorkRecordService → WorkRecordService` 单例。
+- 验证：`dotnet build` 0 警告 0 错误；harness 真 WorkRecordService + EF InMemory 5 项全 PASS：RecordStart 返回主键+FindOpenByPosition 命中进行中+RecordResult 写 OK+耗时+当班统计 OK=2 NG=1 总数=3+重启残留自动补结异常(2)；harness 已清理。
+- 待用户人工确认 UI（需先连库 + 跑节拍）：监控看板加工位卡片状态随节拍变化（WAIT_LOAD→DISPATCHING→...→PROCESSING→DONE_OK），当班 OK/NG 计数递增，最近加工记录列表刷新。
+- **Phase 4 全部 7 步完成**（①通信层 ②回调宿主 ③模拟器 ④任务跟踪器 ⑤状态机改造 ⑥槽位账目/换架/盘点 ⑦加工记录/看板）。下一步 Phase 5（外设测试页，已完成）→ Phase 6（现场联调）。
+
+### Session 30 — 2026-07-07 第四阶段代码复审与安全语义修复（代码）
+- 起因：用户要求复审 Phase 4 实际代码（非文档）找出偏差与 bug。通读核心代码 + 构建验证后，修 5 处（安全相关优先）：
+- **bug#1 Alarm 不粘滞（安全底线失效）**：`PositionScheduler.ComputeNextState` 的 `case Alarm` 原 `return WaitLoad`（一 tick 就自动离开 Alarm），改为 `return Alarm` 粘滞——只能经 `ResetAlarmAsync` 人工恢复退出。`ExecuteActionsAsync` 结尾报警标记重置由 `next==WaitLoad||Alarm` 收窄为仅 `next==WaitLoad`（Alarm 期间保持标记，不每 tick 重复告警）。`ResetAlarmAsync` 补 `SetState(WaitLoad)` 刷看板 + 清 `AlarmRaised`。
+- **bug#2 派工失败重试风暴**：`DispatchOneAsync` 失败分支原 `ctx.State = Alarm`（不刷看板 + 下一 tick 因 bug#1 回 WaitLoad 重新入队 → 500ms 节拍疯狂重发/告警），改为 `SetState(ctx, Alarm)` + `AlarmRaised=true`，配合 bug#1 粘滞收敛。
+- **bug#3 水位监视器误触发（生产危险）**：`WaterMonitorService.FindBindingAsync` 原写死返回 `(1, FrameRole.Unload)`——种子空料架启动即误触发对机台1下料架换架（接真机会真指挥 AGV）。改为拿不到真实绑定 `return null`（跳过）。`RcsOptions` 加 `WaterMonitorEnabled`（默认 false）+ `StartAsync` 守卫；`appsettings.json` Rcs 节显式加 `"WaterMonitorEnabled": false`。绑定精确反查（IEquipmentConfigService.GetBindingByFrameAsync）仍留现场。
+- **bug#4 CncMachineSimulator 无守卫**（与 findings 声称"生产不注册"不符，实为无条件注册 HostedService+IPlcWriteHook）：注入 `IOptions<AppOptions>`，`StartAsync` 加 `Plc.UseSimulator=false` 直接返回（不装载/不订阅/不起循环；behaviors 空则 IPlcWriteHook 回调自然 no-op）。
+- **bug#5 加工记录串位**：`WorkRecordService.FindOpenByPositionAsync` 原只按 EquipmentId 过滤（双工位机台串位），加 `PositionCode == "POS-{positionId}"` 精确匹配。注：PositionCode 目前是调度器合成串，真实 POSITION_CODE 载入留现场。
+- 验证：`dotnet build` 0 警告 0 错误。运行态节拍（Alarm 粘滞/失败停下/模拟器不启动）需人工跑 App 确认。
+- **未动（待用户明确）**：① appsettings 明文库口令（命中密钥自主边界）；② bug#6 线体硬编码 `WorkLineId=1/"LINE"`；③ bug#7 调度器 ctx 跨线程竞态（需加锁/plumbing）。
+
+### Session 31 — 2026-07-07 第四阶段 bug#6/#7 修复（代码）
+- **bug#6 线体硬编码**：Core `IEquipmentConfigService` 加 `GetWorkLineByEquipmentAsync(equipmentId)→WorkLineRef?`（机台→工序→线体反查）+ `WorkLineRef(WorkLineId, LineCode)` 记录；Data `EquipmentConfigService` 实装（Equipment.CraftworkId→Craftwork.WorkLineId→WorkLineConfig.WorkLineCode）。`PositionScheduler` 注入 `IEquipmentConfigService` + `_lineCache`（机台→线体缓存），`EnqueueUpload/UnloadAsync` 用 `ResolveLineAsync` 替换写死 `WorkLineId=1/"LINE"`（反查失败回退 (1,"LINE") 防 NPE）。`ChangeFrameOrchestrator` 同步改（ChangeFrameAsync 起始解析线体存入 ctx，两发共用）。InventoryService 仅有 frameId 无 equipmentId，暂留（同料架→机台反查缺口）。
+- **bug#7 ctx 跨线程竞态**：`PositionScheduler` 加 `_posGates`（每加工位一把 SemaphoreSlim）。主循环 `DrivePositionAsync` 拆出 `DrivePositionCoreAsync` 在 gate 内执行；派工回填 `DispatchOneAsync` 的 ctx 写入块（网络下发在锁外、仅结果写入在锁内）与 `ResetAlarmAsync`（UI 线程）均取同一 gate，串行化对单个 ctx 的读写；不同加工位仍并行。
+- 验证：`dotnet build` 0 警告 0 错误；ReadLints 无错。运行态需人工跑 App 确认（taskId 前缀为真实线体 code、双工位并发无错乱）。
+- **仍未动**：appsettings 明文库口令（命中密钥自主边界，待用户明确处理方式）。
+
+### Session 32 — 2026-07-07 新增日志/告警页 + 看板性能优化 + 告警角标修复（代码）
+- **新增「日志/告警」页**（导航 key=`log`，分组"运行"，原型未含、缺口补齐）：一页两 tab。
+  - 告警明细：`IAlarmEventService` 加 `GetAlarmsAsync(unhandledOnly,limit)`/`MarkHandledAsync(id,author)`/`DeleteAllAsync()`（物理删除 ExecuteDeleteAsync）/`GetUnhandledCountAsync()`；`AlarmRow` 加 `AlarmType`（4 处构造 + ToRow 统一）。UI：`LogViewModel` 列 时间/级别/类型/消息/状态 + "只看未处理"筛选 + 条数下拉(默认50) + 刷新 + "标记已处理" + "全部删除"(二次确认物理删) + 订阅 `AlarmRaised` 实时追加。
+  - 应用日志：新增 `ILogFileReader`/`LogFileReader`（Common，读最新 `logs/cncloader-*.log` 尾部、级别筛选、异常续行并入上一条、FileShare.ReadWrite 不抢 Serilog 文件锁）；条数下拉默认 50。Common DI 注册。
+  - 页面接入：UI DI 注册 `LogViewModel`；`ShellViewModel` 导航加项；`PageTemplates.xaml` 加 TabControl DataTemplate。
+- **监控看板性能优化**（用户反馈卡顿）：`DashboardViewModel` 原每次状态变化全量 `Positions.Clear()`+重建 + 同步 `Dispatcher.Invoke` + 后台常驻刷新 → 改为 200ms `DispatcherTimer` 节流（UI 线程合并刷新，无跨线程同步 Invoke）+ 卡片**原地增量更新**（`PositionCardVm` 的 State/PlcOnline/Safe/DoorOpen 改为可观察属性，StateDisplay/StateBadge 联动）+ 最近记录改 `BeginInvoke`。
+- **顶部告警角标修复**：`ShellViewModel.UnhandledAlarms` 原声明未赋值恒为 0 → 注入 `IAlarmEventService`，启动加载一次 + `OnTick` 每 5s 刷新 `GetUnhandledCountAsync`（覆盖告警产生/标记已处理/清空各来源，UI 线程统一刷新）。
+- 验证：`dotnet build` 0 警告 0 错误；ReadLints 无错。运行态（页面渲染/卡顿缓解/角标计数/全部删除二次确认）需人工跑 App 确认。
+- 备注：应用日志仍是文件只读展示，不入库；「全部删除」为物理硬删不可恢复。
+
+### Session 33 — 2026-07-07 演示实操手册 + 端到端跑通节拍时发现并修复 3 处真 bug（代码 + 文档）
+- 起因：用户要演示实操手册并首次真机跑闭环。写好 `docs/演示实操手册.md`（零真机、纯模拟器）+ 一键种子脚本 `docs/sql/demo_seed_location_map.sql`（幂等，全 5 加工位 cell + 上下料区 + 缓存/回收区 + 料架 shelf），已执行入库校验 13 条。跑 App 时节拍停在 WaitLoad 不动，排查出 3 处「从没端到端跑过节拍」才暴露的 bug：
+- **bug#8 CncMachineSimulator 只驱动 Modbus 模拟器**：现场 PLC 走 FINS（DB 里 3 台 PLC_READ_WAY=FINS），App 起的是 FINS 模拟器；但机台行为模拟器只写 `ModbusTcpSimulator` 的寄存器存储，两个模拟器各自独立 → 调度器经 FINS 客户端读不到「允许上料/工件到位」。修：抽 `ISimulatorRegisterStore`（WriteRegister）接口，`ModbusTcpSimulator`/`OmronFinsUdpSimulator` 均实现（FINS 补 WriteRegister 写 DM 字存储）；`CncMachineSimulator` 依赖 `IEnumerable<ISimulatorRegisterStore>`，写入向所有模拟器广播（只对登记了该 PLC 的模拟器生效）；DI 把两模拟器注册为 `ISimulatorRegisterStore`。
+- **bug#9 初始 AllowLoad=ON 写入被启动时序丢弃**：`CncMachineSimulator`（HostedService）在 `Host.StartAsync` 阶段写初始 AllowLoad=ON，但 `PlcRuntimeBootstrapper.AddPlc` 在窗口显示后才登记 PLC，早于此的写入全 no-op 丢失，随后种子把 AllowLoad 置 OFF → 永远等待上料。修：`CncMachineSimulator` 内部维护 `PositionBehavior.HasMaterial`（上料完成置 true / 下料完成置 false），循环里对「空闲加工位(无料且非检测中)」每拍幂等重置 AllowLoad=ON，不受时序影响；有料/检测中不触碰，交回调驱动。
+- **bug#10 持续轮询从未启动**：`PlcPollingService.StartAsync`（持续循环）无人调用，App 仅在自检调 `PollOnceAsync` 一次 → 信号仓只填一次即陈旧，调度器读不到实时信号。修：`PlcPollingService` 实现 `IHostedService`（其 Start/Stop 签名天然符合，内部 Task.Run 立即返回不阻塞启动），DI 注册 `AddHostedService`。
+- 验证：`dotnet build` 0 警告 0 错误；启动 App 后端到端闭环跑通——EQ1-POS2 与 EQ2-POS3 并行，多轮完整节拍（WaitLoad→Dispatching→Transporting→Loaded→Processing→PosOk→Dispatching→Transporting→Unloaded→WaitLoad），taskId 前缀真实线体码 LINE01（bug#6 修复生效），全程无 ALARM。FINS 与 Modbus 两协议节拍均通。
+- 文档：`docs/演示实操手册.md` 修正 §1.2 PLC 表名（MAS_AUTO_PLC→MAS_AUTO_WORKLINE_PLC）+ 端口/协议说明（FINS 也可跑）。
+- 待办：新增文件（手册、种子脚本、ISimulatorRegisterStore）与既有未提交文件均待 commit（需用户确认）；水位监视器料架→机台绑定反查仍留现场（bug#3 已安全化）。
+
+### Session 34 — 2026-07-07 手动调试开关 + RCS 轮询事件显示码修正（代码）
+- **新增 `Plc.PollingEnabled` 开关**（`AppOptions`+`PlcPollingService` 托管启动守卫+DI 传参）：false 时不启动持续轮询循环（信号仓不自动刷新），供手动单步调试；自检单轮读、PLC 页手动读不受影响。`appsettings.json` 演示态设 false。改配置无需重编、重启即生效。
+- **修 RCS 轮询事件假错误码**：`RcsTaskTracker.ErrorCodeFrom` 原对非完成/非取消的所有态（含进行中 EXECUTING）返回 Error(1)，致 RCS 页终端显示 `↩ poll ... error_code=1 → EXECUTING` 误导为失败。改为仅 FAILED→1、Canceled→9、其余→0（Success）。纯展示修正，不影响自动 redo（redo 只看 TaskState==FAILED）。
+- 排障提醒（记入现场文档）：`SimulatorFailureRate`/`SimulatorCancelRate`/`SimulatorMinDelayMs` 等模拟器项在 RcsSimulator 构造时读取、**不热加载**，改后必须重启 App；启动日志「失败率 N % 取消率 N %」为准。
+- 验证：`dotnet build` 0 警告 0 错误。运行态（失败率 100% → FAILED→自动 redo→RCS_REDO_LIMIT 告警）待用户重启后确认。
+
+### Session 35 — 2026-07-07 修 RcsSimulator queryTask 把失败任务误报 completed（代码）
+- 起因：用户 SimulatorFailureRate=1.0 下发搬运，任务先 FAILED（首次回调）触发自动 redo，但随后 poll 把它推成 EXECUTING→COMPLETED，redo/告警链被打断。查日志坐实：redo 重发的二次失败回调因 `push:{taskId}:{error_code}` 幂等去重被吞，且 `queryTask` 把该任务报成 completed → poll 以 queryTask 为准覆盖 FAILED。
+- 根因：`RcsSimulator.ScheduleCallback` 回推后 `_tasks.TryRemove(taskId)` 删除任务；`queryTask` 对"找不到的任务"一律返回 `completed`（"已回推完成移除→视为completed"）。于是**任何**回推过的任务（含失败）被删后都被 queryTask 报 completed。
+- 修：`SimTask` 加 `FinalErrorCode`（-1=未回推）；回推 finally 不再删除、改记 `FinalErrorCode=errorCode`（redo 重发同 taskId 由新 SimTask 覆盖重置）；`queryTask` 按真实终态返回——Canceled→canceled / FinalErrorCode<0→underway / 0→completed / 9→canceled / 其它(1)→failed；未知任务仍兜底 completed。这样 poll 会看到 failed→FAILED→（poll 源事件驱动）继续自动 redo→REDO_COUNT 到 MaxAutoRedo(3)→RaiseRcsRedoLimit 告警（RCS_REDO_LIMIT）。回调侧 (taskId,error_code) 去重仍在，但设计上"poll 以 queryTask 为准"，poll 修正后链路正常，故未改去重（真机 queryTask 报真实态，同样成立）。
+- 顺带修显示：`RcsTaskTracker.ErrorCodeFrom` 非终态不再假返回 Error(1)（Session 34）。
+- 验证：`dotnet build` 0 警告 0 错误；启动 App（失败率 100%、轮询关）就绪，待 UI 手动下发搬运确认 FAILED→redo×3→RCS_REDO_LIMIT 告警全链（UI 点击项，代码无法代触发）。
+
+### Session 36 — 2026-07-07 修 RCS 页调用终端撑高页面（UI）
+- 起因：自动闭环下 RCS 页「调用终端」越跑越长、整页底部被拉长。
+- 根因：`PageTemplates.xaml` RCS 页调用终端 Border 无高度约束（对比 AGV 页终端有 `Height=160`），TerminalLines 虽代码限 200 行但无高度上限，ScrollViewer 不生效，200 行全渲染撑高页面。
+- 修：调用终端 Border 加 `VerticalAlignment=Top` + `MaxHeight=440`，ScrollViewer 内部滚动（AutoScroll.ToEnd 自动滚底）。
+- **全局根因**：`ShellWindow.xaml` 页面宿主是 `ScrollViewer`>`ContentControl`，给页面无限高，导致所有 `Height="*"`/DockPanel 填充的列表拿到无限高、把所有行渲染出来撑高整页（内部滚动失效）。开发时已对多数列表加 `MaxHeight`（扫码220/换架120/机台220/工序260/料架200/PLC列表240/点位360/PLC操作流水200/AGV终端160）兜底，但漏了 7 处会持续增长的。
+- 全量补齐 `MaxHeight`+`VerticalAlignment=Top`：RCS 任务(360)/报文(360)/位置映射(360)、日志-告警(460)/应用日志(460)、PLC 读结果(320)、看板最近记录(320)。保留页面级 ScrollViewer 作整体兜底（与既有做法一致，不动宿主避免影响表单页）。
+- 验证：`dotnet build` 0 警告 0 错误。运行态待重启确认。
+
+### Session 37 — 2026-07-07 RCS 列表填满贴底 + 页面按视口限高（UI）
+- 起因：用户反馈 RCS 页任务列表/报文流水/位置映射「有点矮、要跟底部对齐」（Session 36 加的 MaxHeight=360 太矮且顶对齐）。
+- 关键认识：宿主 `ScrollViewer` 以无限高测量内容，去掉 MaxHeight 列表又会撑长页面；「填满视口+贴底+内部滚动」必须把页面**限定为视口高度**。
+- 修：`ShellWindow.xaml` 页面宿主 `ContentControl` 由无约束改为 `Height={Binding ViewportHeight, ElementName=PageHost}`（精确等于视口）——页内 `Grid *` 行/DockPanel 填充列表得以填满并内部滚动、贴底，整页不再被长列表撑高（全屏 HMI，表单页内容均短于视口）。
+- 去掉 RCS 任务/报文/位置映射 三处 Session 36 加的 MaxHeight（改回填充）。其余页（日志/PLC读/看板）保持 Session 36 的 MaxHeight（用户未要求改，功能正常，无回归；如需一致填满可后续同法处理）。
+- 验证：`dotnet build` 0 警告 0 错误；启动 App 渲染正常、无 XamlParse/未处理异常、双工位节拍照常。
+
+### Session 38 — 2026-07-07 全页面布局统一：填满贴底自适应（UI）
+- 需求：用户要求所有页面统一「跟底部对齐、自适应填满」。
+- 基础：Session 37 已把页面宿主限定为视口高度（`ContentControl.Height=ViewportHeight`），页内 `Grid *`/DockPanel 填充列表得以填满并内部滚动。
+- 逐页处理（`PageTemplates.xaml`）：
+  - AGV/扫码枪：主面板去 `VerticalAlignment=Top`（撑满贴底）；终端/最近扫码表改为 DockPanel 填充子（去 `Dock=Top`/固定 `Height`/`MaxHeight`），终端加 AutoScroll。
+  - 日志/告警（告警明细/应用日志）、PLC 读结果、看板最近记录：去掉 Session 36 加的 `MaxHeight` → DataGrid 填充+内部滚动。
+  - 工序页：行定义由 `[Auto,Auto,*(空),Auto]` 改为 `[*(列表),Auto(表单),Auto(状态)]`，列表去 `MaxHeight` 填满，状态条移到 Row2。
+  - 机台页：加工位/关联料架详情区 Grid 及两 Border 去 `VerticalAlignment=Top` → 详情区填充贴底。
+  - 料架页：槽位区 Border 去 `VerticalAlignment=Top` 填满；槽位内容（层+人工校正+发起盘点）包 `ScrollViewer` 防裁切。
+  - 点位映射页：行定义中间行由 `Auto` 改 `*`、主表去 `MaxHeight` → 主表填满内部滚动。
+  - RCS 页（Session 37 已改）：三列表填充、左栏表单包 ScrollViewer。
+  - PLC 页：主区 Row1(*) TabControl 本就填充；读结果表已填充；写操作 tab 为表单（保持）。
+- 保留的既有 `MaxHeight`：换架事务(120)、PLC 列表(240)、机台/料架/工序等主列表按 master 列表定位处（视觉需要）——未强改。
+- 验证：`dotnet build` 0 警告 0 错误；启动渲染正常、无 XamlParse/未处理异常、3/3 在线、节拍照常。逐页观感待用户确认（无法代看）。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - 本机环境：MySQL 8.4（服务 MySQL84），root 口令 `2580.wxr`；appsettings 用明文口令开发（PasswordProtected=false，勿提交明文进 git）。
