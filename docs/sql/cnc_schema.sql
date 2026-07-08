@@ -463,8 +463,9 @@ CREATE TABLE MAS_AUTO_EQUIMENT_WORKDATA (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='[本期不实现]加工数据写入配置';
 
 -- =============================================================
--- 六、初始化数据（示例：1线体 → 1检测工序 → 3机台，每机台2加工位）
---     点位地址取自 docs/测试机信号表.md（现场实际可用数据）
+-- 六、初始化数据（1线体 → 三道串行工序：内长宽→平面度→A基准 → 3机台）
+--     业务链：电极依次经三台机台，每道 OK 看下游有空位则直接交接/无则进该台中转架等位，NG→NG架人工处理，末道→下料架。
+--     点位地址取自 docs/测试机信号表.md；LOCATION_MAP 的 RCS_CODE 为演示编码（接真机按现场替换）。
 -- =============================================================
 
 -- 线体（PLC_ID 仅作"启用PLC"标记；实际连接为一机一PLC，见机台 PLC_ID）
@@ -481,19 +482,21 @@ VALUES
   (2, '平面度PLC', '客户端', '192.168.1.12', 502, 'ModbusTCP', '0', 'system'),
   (3, 'A基准PLC',  '客户端', '192.168.1.13', 502, 'ModbusTCP', '0', 'system');
 
--- 工序（检测）
+-- 工序（三道串行，CRAFTWORK_NODE 决定先后：内长宽1 → 平面度2 → A基准3）
 INSERT INTO MAS_AUTO_WORKLINE_CRAFTWORK
   (ID1, WORKLINE_ID, CRAFTWORK_NO, CRAFTWORK_NAME, SF_QUALITY, SF_AUTO_SEND, SF_COST_STAT, CRAFTWORK_NODE, CRAFTWORK_PRIOR, STATE, AUTHOR)
 VALUES
-  (1, 1, 'CW01', '检测', '1', '1', '1', 1, 0, '0', 'system');
+  (1, 1, 'CW01', '内长宽', '1', '1', '1', 1, 0, '0', 'system'),
+  (2, 1, 'CW02', '平面度', '1', '1', '1', 2, 0, '0', 'system'),
+  (3, 1, 'CW03', 'A基准', '1', '1', '1', 3, 0, '0', 'system');
 
--- 机台（3台：内长宽 / 平面度 / A基准），各绑定自己的独立 PLC（PLC_ID 1/2/3）
+-- 机台（3台各挂对应工序 node1/2/3 + 各绑定独立 PLC 1/2/3）
 INSERT INTO MAS_AUTO_WORKLINE_EQUIMENT
   (ID1, CARFTWORK_ID, PLC_ID, EQUIMENT_NO, EQUIMENT_NAME, EQUIMENT_CODE, EQUIMENT_TYPE, EQUIMENT_TYPE_NAME, EQUIMENT_WORK_TYPE, STATE, AUTHOR)
 VALUES
   (1, 1, 1, 'EQ01', '内长宽', 'M-NCK', '检测', '内长宽测试机', '产品', '0', 'system'),
-  (2, 1, 2, 'EQ02', '平面度', 'M-PMD', '检测', '平面度测试机', '产品', '0', 'system'),
-  (3, 1, 3, 'EQ03', 'A基准', 'M-ABASE', '检测', 'A基准测试机', '产品', '0', 'system');
+  (2, 2, 2, 'EQ02', '平面度', 'M-PMD', '检测', '平面度测试机', '产品', '0', 'system'),
+  (3, 3, 3, 'EQ03', 'A基准', 'M-ABASE', '检测', 'A基准测试机', '产品', '0', 'system');
 
 -- 加工位（内长宽/A基准各2个；平面度仅工位1——工位2按现场确认取消 2026-06-30）
 INSERT INTO MAS_AUTO_EQUIMENT_POSITION
@@ -558,45 +561,88 @@ INSERT INTO MAS_AUTO_PLC_POINT
   (3, 3,5,    'POS_TEST_START', '1', 'D1500', 'Q0.2'),
   (3, 3,6,    'POS_TEST_START', '1', 'D1502', 'Q0.3');
 
--- 料架：3个（上料总架 2层×5 / 中转架 1层×4 / 下料总架 2层×4）
+-- 料架：5个（上料总架 / EQ2中转架 / 下料总架 / NG专用架 / EQ3中转架），槽位统一 2层×6=12
+--   容量 12 保证一轮演示各料架不溢出（满架时系统告警「料架满,请人工换架/清架」，不静默丢件）。
 INSERT INTO MAS_AUTO_FRAME
   (ID1, FRAME_NAME, FRAME_CODE, FRAME_IDENTIFY_CODE, LAYER_TOTAL, SLOTS_PER_LAYER, SLOT_TOTAL, STATE, AUTHOR) VALUES
-  (1, '上料总架', 'FR-IN',  'FR-IN-01',  2, 5, 10, '0', 'system'),
-  (2, '中转架',   'FR-MID', 'FR-MID-01', 1, 4, 4,  '0', 'system'),
-  (3, '下料总架', 'FR-OUT', 'FR-OUT-01', 2, 4, 8,  '0', 'system');
+  (1,  '上料总架',   'FR-IN',  'FR-IN-01',  2, 5, 10, '0', 'system'),
+  (2,  'EQ2中转架',  'FR-TR2', 'FR-TR2-01', 2, 6, 12, '0', 'system'),
+  (3,  '下料总架',   'FR-OUT', 'FR-OUT-01', 2, 6, 12, '0', 'system'),
+  (91, 'NG专用架',   'FR-NG',  'FR-NG-01',  2, 6, 12, '0', 'system'),
+  (92, 'EQ3中转架',  'FR-TR3', 'FR-TR3-01', 2, 6, 12, '0', 'system');
 
--- 料架绑定：演示「一架两用」——中转架(ID=2)既是内长宽(EQ1)的下料架，又是A基准(EQ3)的上料架
+-- 料架绑定（角色 0上料/1下料/2中转/3NG）：三道串行产线布局
+--   EQ01 内长宽(首道)：上料架 frame1 + NG架 frame91
+--   EQ02 平面度(中道)：中转架 frame2  + NG架 frame91   （无上料架，靠上游交接/中转回流）
+--   EQ03 A基准 (末道)：中转架 frame92 + 下料架 frame3 + NG架 frame91
 INSERT INTO MAS_AUTO_FRAME_BIND
   (FRAME_ID, EQUIMENT_ID, FRAME_ROLE, STATE, AUTHOR) VALUES
-  (1, 1, '0', '0', 'system'),   -- 上料总架 → 内长宽 上料架
-  (2, 1, '1', '0', 'system'),   -- 中转架   → 内长宽 下料架
-  (2, 3, '0', '0', 'system'),   -- 中转架   → A基准  上料架  （同一料架两用）
-  (3, 3, '1', '0', 'system');   -- 下料总架 → A基准  下料架
+  (1,  1, '0', '0', 'system'),   -- 上料总架 → 内长宽 上料架
+  (91, 1, '3', '0', 'system'),   -- NG专用架 → 内长宽 NG架
+  (2,  2, '2', '0', 'system'),   -- EQ2中转架 → 平面度 中转架
+  (91, 2, '3', '0', 'system'),   -- NG专用架 → 平面度 NG架
+  (92, 3, '2', '0', 'system'),   -- EQ3中转架 → A基准 中转架
+  (3,  3, '1', '0', 'system'),   -- 下料总架 → A基准 下料架
+  (91, 3, '3', '0', 'system');   -- NG专用架 → A基准 NG架
 
--- 槽位预建：料架的物理槽位在建档时即按 层×每层数 全部预建（空槽 SLOT_STATE='0'）。
--- 初始入库时只占用其中一部分——演示「初始料架不放满」。
-
--- 上料总架(ID=1)：2层×5=10槽，初始入库 6 个电极（E01..E06），其余 4 槽为空
+-- 槽位预建（按 层×每层数 全部预建空槽 SLOT_STATE='0'）。
+-- 上料总架(ID=1)：10 槽全部入库原料电极 EL-001..EL-010（演示可连跑 ~10 件；见底后重跑本脚本补满）。
 INSERT INTO MAS_AUTO_FRAME_SLOT
-  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_TIME) VALUES
-  (1, 1, 1, 1, '1', 'E01', NOW()),
-  (1, 2, 1, 2, '1', 'E02', NOW()),
-  (1, 3, 1, 3, '1', 'E03', NOW()),
-  (1, 4, 1, 4, '1', 'E04', NOW()),
-  (1, 5, 1, 5, '1', 'E05', NOW()),
-  (1, 6, 2, 1, '1', 'E06', NOW()),
-  (1, 7, 2, 2, '0', NULL,  NULL),
-  (1, 8, 2, 3, '0', NULL,  NULL),
-  (1, 9, 2, 4, '0', NULL,  NULL),
-  (1, 10,2, 5, '0', NULL,  NULL);
+  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_SOURCE, BIND_TIME) VALUES
+  (1, 1, 1, 1, '1', 'EL-001', 'MANUAL', NOW()),
+  (1, 2, 1, 2, '1', 'EL-002', 'MANUAL', NOW()),
+  (1, 3, 1, 3, '1', 'EL-003', 'MANUAL', NOW()),
+  (1, 4, 1, 4, '1', 'EL-004', 'MANUAL', NOW()),
+  (1, 5, 1, 5, '1', 'EL-005', 'MANUAL', NOW()),
+  (1, 6, 2, 1, '1', 'EL-006', 'MANUAL', NOW()),
+  (1, 7, 2, 2, '1', 'EL-007', 'MANUAL', NOW()),
+  (1, 8, 2, 3, '1', 'EL-008', 'MANUAL', NOW()),
+  (1, 9, 2, 4, '1', 'EL-009', 'MANUAL', NOW()),
+  (1, 10,2, 5, '1', 'EL-010', 'MANUAL', NOW());
 
--- 中转架(ID=2)：1层×4=4槽，4号位放入电极 'A'（保留反查演示）
-INSERT INTO MAS_AUTO_FRAME_SLOT
-  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_TIME, REMARK) VALUES
-  (2, 1, 1, 1, '0', NULL, NULL, NULL),
-  (2, 2, 1, 2, '0', NULL, NULL, NULL),
-  (2, 3, 1, 3, '0', NULL, NULL, NULL),
-  (2, 4, 1, 4, '1', 'A',  NOW(), '电极A当前位置：中转架 1层4位');
+-- 中转架/下料架/NG架（frame 2/3/91/92）：各 2层×6=12 全部空槽，待运行时入库
+INSERT INTO MAS_AUTO_FRAME_SLOT (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE) VALUES
+  (2,1,1,1,'0'),(2,2,1,2,'0'),(2,3,1,3,'0'),(2,4,1,4,'0'),(2,5,1,5,'0'),(2,6,1,6,'0'),
+  (2,7,2,1,'0'),(2,8,2,2,'0'),(2,9,2,3,'0'),(2,10,2,4,'0'),(2,11,2,5,'0'),(2,12,2,6,'0'),
+  (3,1,1,1,'0'),(3,2,1,2,'0'),(3,3,1,3,'0'),(3,4,1,4,'0'),(3,5,1,5,'0'),(3,6,1,6,'0'),
+  (3,7,2,1,'0'),(3,8,2,2,'0'),(3,9,2,3,'0'),(3,10,2,4,'0'),(3,11,2,5,'0'),(3,12,2,6,'0'),
+  (91,1,1,1,'0'),(91,2,1,2,'0'),(91,3,1,3,'0'),(91,4,1,4,'0'),(91,5,1,5,'0'),(91,6,1,6,'0'),
+  (91,7,2,1,'0'),(91,8,2,2,'0'),(91,9,2,3,'0'),(91,10,2,4,'0'),(91,11,2,5,'0'),(91,12,2,6,'0'),
+  (92,1,1,1,'0'),(92,2,1,2,'0'),(92,3,1,3,'0'),(92,4,1,4,'0'),(92,5,1,5,'0'),(92,6,1,6,'0'),
+  (92,7,2,1,'0'),(92,8,2,2,'0'),(92,9,2,3,'0'),(92,10,2,4,'0'),(92,11,2,5,'0'),(92,12,2,6,'0');
+
+-- =============================================================
+-- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（演示编码，接真机按现场替换）
+--   匹配规则（代码）：上/下料区 LOC_TYPE='AREA'+LOC_NAME；加工位 RCS_TYPE='cell'+EQ+POS；
+--   料架站点 RCS_TYPE='shelf'+FRAME_ID；料架 cell（分流入库）RCS_TYPE='cell'+FRAME_ID；换架/回收区 LOC_TYPE='AREA'。
+-- =============================================================
+-- 命名区域：上料区/下料区 + 换架缓存区/空托盘回收区
+INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
+  ('AREA', 'LOAD_AREA',     '601001', 'station', '0', 'system'),
+  ('AREA', 'UNLOAD_AREA',   '609001', 'station', '0', 'system'),
+  ('AREA', 'FULL_BUFFER',   '650001', 'station', '0', 'system'),
+  ('AREA', 'EMPTY_BUFFER',  '650002', 'station', '0', 'system'),
+  ('AREA', 'PALLET_RETURN', '650003', 'station', '0', 'system');
+-- 加工位 cell（5 个加工位）
+INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, POSITION_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
+  ('POSITION', 1, 1, '601203', 'cell', '0', 'system'),
+  ('POSITION', 1, 2, '601204', 'cell', '0', 'system'),
+  ('POSITION', 2, 3, '602203', 'cell', '0', 'system'),
+  ('POSITION', 3, 5, '603203', 'cell', '0', 'system'),
+  ('POSITION', 3, 6, '603204', 'cell', '0', 'system');
+-- 料架站点 shelf（换架/盘点用）
+INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
+  ('FRAME', 1,  '上料总架',  '651001', 'shelf', '0', 'system'),
+  ('FRAME', 2,  'EQ2中转架', '651002', 'shelf', '0', 'system'),
+  ('FRAME', 3,  '下料总架',  '651003', 'shelf', '0', 'system'),
+  ('FRAME', 91, 'NG专用架',  '651091', 'shelf', '0', 'system'),
+  ('FRAME', 92, 'EQ3中转架', '651092', 'shelf', '0', 'system');
+-- 料架 cell（下料/中转/NG 分流入库按此解析；缺失则回退 FRAME-{id}）
+INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
+  ('FRAME', 2,  'EQ2中转架cell', '653002', 'cell', '0', 'system'),
+  ('FRAME', 3,  '下料总架cell',  '653003', 'cell', '0', 'system'),
+  ('FRAME', 91, 'NG架cell',      '653091', 'cell', '0', 'system'),
+  ('FRAME', 92, 'EQ3中转架cell', '653092', 'cell', '0', 'system');
 
 -- =============================================================
 -- 七、常用查询示例

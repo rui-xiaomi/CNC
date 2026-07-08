@@ -452,6 +452,12 @@
 - 多次误起重复实例（进程查询偶发假空）导致抢端口——务必单实例，`COUNT=` 方式确认。
 - 偶发「写 POS_TEST_START 失败」→工位告警（FINS 写寄存器瞬时超时，非代码引入）；如需可给 `WriteTestStart` 加一次重试（待定）。
 
+**I. SQL 文件整合（本 session 末，用户要求）**：
+- 提交代码后，把演示所需 SQL 全部并入单一权威建库脚本 `docs/sql/cnc_schema.sql`：三道工序 node1/2/3 + 机台挂序、5 料架（含 NG91/EQ2中转2/EQ3中转92，各 12 槽）+ 7 条 3-stage 绑定、上料架补满 EL-001..010、全套 LOCATION_MAP（区域/加工位 cell/料架 shelf+cell）。EQ03 机台安全点位保留。
+- **删除**其余 SQL：`demo_seed_location_map.sql`、`test_routing_seed.sql`、`three_stage_line_seed.sql`、`migration_phase4_rcs.sql`、`migration_2026-06-30_*.sql`、`migration_2026-07-08_*.sql`（`docs/sql/` 现仅剩 cnc_schema.sql）。
+- 验证：整库重建无报错，工序 node1/2/3、7 绑定、frame1=10 电极其余各 12 空槽、LOCATION_MAP 19 行、MACHINE_SAFE 保留 1 条 全部正确。`演示实操手册.md` §4.1 改为「建库即就绪，无需额外种子」。
+- 注意：删迁移脚本后仅支持**全新建库**（cnc_schema.sql 已含全部效果），不再有对既有库的增量迁移路径。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - 本机环境：MySQL 8.4（服务 MySQL84），root 口令 `2580.wxr`；appsettings 用明文口令开发（PasswordProtected=false，勿提交明文进 git）。
