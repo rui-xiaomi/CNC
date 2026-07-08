@@ -386,6 +386,72 @@
 - 保留的既有 `MaxHeight`：换架事务(120)、PLC 列表(240)、机台/料架/工序等主列表按 master 列表定位处（视觉需要）——未强改。
 - 验证：`dotnet build` 0 警告 0 错误；启动渲染正常、无 XamlParse/未处理异常、3/3 在线、节拍照常。逐页观感待用户确认（无法代看）。
 
+## 上线缺口补齐（7 项，本次）
+
+按批准计划 `补齐上位机上线缺口` 完成 7 个上线前缺口，全部 `dotnet build` 0 警告 0 错误。
+
+- **Step1 绑定反查**：`IEquipmentConfigService` 加 `GetBindingByFrameAsync`/`GetFrameBindingByRoleAsync`/`GetNextProcessEquipmentsAsync`（Data 实现，FRAME_ROLE "0/1/2/3"↔`FrameRole`）；`WaterMonitorService.FindBindingAsync` 改真实反查（空架偏上料角色、满架偏非上料），删占位 TODO。
+- **Step2 上料前校验**：`EnqueueUploadAsync` 返回三态（Queued/WaitMaterial/Failed），上料架账面 `occupied=0` → 保持 WaitLoad 等料（水位/人工补），不误告警。
+- **Step3 槽位账双向**：`ISlotAccountService` 加 `ReserveTake/ConfirmTake/RollbackTake`（占用→预记→空/回占用）+ `RollbackStaleReservationsAsync`；`ReservedSlot` 带 electrodeId；`BIND_SOURCE` 记 `RESERVE_PUT/RESERVE_TAKE`。调度器：上料 LOADED→ConfirmTake、下料 UNLOADED→Confirm、Alarm 按 phase 回滚；下发成功即按方向预记（`ApplySlotReservationAsync`）。
+- **Step4 OK/NG 全量分流**：`DispatchItem` 加 `UnloadTarget`+目标料架/机台工位/电极；`IRouteResolver` 加 `ResolvePositionCellAsync`/`ResolveFrameCellAsync`；`ResolveUnloadTargetAsync`——NG→NG架(role3)，OK→下一工序空闲工位直接交接（`_expectedInbound` 登记，下游见料走 Loaded；上料触发已排除待交接工位避免抢占）/下一工序全忙→中转架(role2)/末道→下料架(role1，回退 UNLOAD_AREA)。上料源优先中转架回流(`FindIdlePositionAmong` 判空闲)。
+- **Step5 定期盘点**：`InventorySchedulerService`（HostedService，RCS 空闲=队列空+无在盘点+无换架事务时逐架 identifyQR，串行等完成/超时8min）；`RcsOptions.InventoryAutoEnabled`(默认关)/`InventoryIntervalMinutes`(60)；DI 注册。
+- **Step6 重启三方对账**：`ReconcileAsync` ①RCS 未完结绑定 ②`RollbackStaleReservationsAsync(unfinished)` 按方向回滚陈旧预记 ③逐工位 fresh 读 HasMat，有料无任务无待交接→ALARM+`RaiseRcsTaskNotFound`（三方对完账才开闸）。
+- **Step7 模拟器/验证**：`CncMachineSimulator` 下料完成时若 `ToCode` 经 `ILocationMapService.ResolveByRcsCodeAsync` 映射到某工位→目标 HasMat=ON（演示工序间交接闭环）。临时 harness（EF InMemory，Data+Config 服务真实实例）18 项全 PASS（绑定反查/下一工序/取放双向/陈旧预记按方向回滚/active 不回滚），跑通已删。
+- **未做运行态端到端**：调度器路由/交接/盘点定时/PLC 对账需真实 `LOCATION_MAP`（加工位/料架 cell）+ `FRAME_BIND`（中转 role2/NG role3）种子才能跑通，当前种子仅 role0/1，属 Phase 6 现场；`WaterMonitorEnabled`/`InventoryAutoEnabled` 默认关，由运维开启。
+
+## 业务流程测试（本次）
+
+- **自动化端到端 harness（EF InMemory + 真 PositionScheduler/队列/路由/槽位账/配置/加工记录/告警 + 可控假 RCS/PLC 模拟机台节拍）**：13 项断言全 PASS，跑通已删。覆盖：
+  - S1 上料架空 → 不下发、保持 WaitLoad；S2 OK → 下一工序空闲工位直接交接 + 上料取料落账(F1 3→2) + 下游接收；S3 NG → NG架 cell + 入库落账；S4 下游忙 → 中转架 cell；S5 中转架有件 → 下游回流取件(from=中转架)；S6 重启三方对账（TAKE 陈旧预记→占用、PUT→空、PLC 有料无任务→ALARM+告警）。
+- **测试中发现并修复的逻辑缺口**：`PositionScheduler.EnqueueUploadAsync` 原对「无上料架(role0)绑定」的机台会回退从 LOAD_AREA 自取原料——纯下游机台（只有中转/下料架）会误自取。改为：无 role0 绑定 → 返回 WaitMaterial（只接收上游交接/中转回流）。`dotnet build` 0/0。
+- **手动集成测试支撑**：`docs/sql/demo_seed_location_map.sql`（基础闭环路由）+ 新增 `docs/sql/test_routing_seed.sql`（叠加：双工序 + NG架(role3)/中转架(role2) 绑定 + 料架 cell，含 CLEANUP 回滚段）。已对本机 cnc_auto 只读核对：表名/列名/ID(91,92空闲)/NOT NULL/自增/唯一键/RCS_CODE 无冲突全部匹配，可直接跑。跑 App（双模拟器全开）后在监控看板/日志/`MAS_AUTO_AGV_TASK`/`FRAME_SLOT` 观察各流程。
+- **模拟器 NG 率**：`CncMachineSimulator` 加 `RcsOptions.SimulatorNgRate`（默认 0=全 OK），检测按概率出 `POS_NG=ON` → 走 NG→NG架 分流，使 App 里可稳定演示 NG 流程；appsettings 加 `SimulatorNgRate: 0.0`。焦点 harness 4 项 PASS（NgRate=1.0→PosNg、=0.0→PosOk），跑通已删。`dotnet build` 0/0。
+- **真机联跑修复的代码 bug（重要）**：`SlotAccountService` 的 `BIND_SOURCE` 值 `RESERVE_PUT`(11)/`RESERVE_TAKE`(12)/`RCS_CONFIRMED`(13) 超过列宽 `BIND_SOURCE VARCHAR(10)`，真 MySQL 写槽位账时抛 `DbUpdateException`（EF InMemory 不校验列宽，故 harness 未暴露）。改短为 `RSV_PUT`/`RSV_TAKE`/`CONFIRMED`（均 ≤10）。
+- **App 真机联跑观察排障（本机）**：观察不到流程的叠加原因 = ①多僵尸实例占 RCS 端口 8090/9080；②bin 陈旧 appsettings 取消率 30% 致频繁 ALARM；③上述 BIND_SOURCE 超长；④数据：`POS_HAS_MAT`/EQ1-POS1 点位被误设 `RW=1`（应为读 0）致 hasMat 不轮询、POS1 不触发（已 UPDATE 修回）；⑤上料架 F1 被前一实例吃空、空架保护挡上料（已补料）。修完实测 45s：Dispatching/Transporting/COMPLETED 持续、PosOk/PosNg 均出、F1 取料落账、NG架/中转架入库、当班 OK/NG 记录齐全。运行约束：只跑单实例（端口独占）；F1 ~10 轮耗尽需补料或启水位换架。
+
+### Session 39 — 2026-07-08 演示手册同步 + 三道串行产线 + 料架页增强 + 一批真 bug 修复（代码 + SQL + 文档）
+> 本 session 全程「带用户在本机模拟器上跑通并熟悉全部功能」，边跑边发现问题边修。所有改动 `dotnet build` 0 警告 0 错误；App 单实例本机实跑验证（FINS 3 PLC）。
+
+**A. 演示手册同步到代码现状**（`docs/演示实操手册.md`，之前停在 Session 33）：
+- §1.3 配置补全 `SimulatorNgRate`(0.3)/`PollingEnabled`/`SchedulerEnabled`/`InventoryAutoEnabled`；注明模拟器四项不热加载、改后必重启。
+- §4.1 增 `test_routing_seed.sql`/`three_stage_line_seed.sql` 说明；§4.2 下料改为完整分流表（交接/中转/NG/末道下料）；§4.3 异常清单对齐第二层四项；§5 水位反查纠正（已实装）；§2.3 协议改为跟随 `PLC_READ_WAY`。
+
+**B. 三道串行产线种子**（新增 `docs/sql/three_stage_line_seed.sql`，幂等可重复=重置演示态）：
+- 起因：用户确认真实业务是「内长宽(EQ01)→平面度(EQ02)→A基准(EQ03) 依次串行」，每道 OK 看下游有空位则直接交接/无则进该台中转架等位，NG→NG架人工处理。原 test_routing 只串了 EQ01→EQ03 两道、EQ02 孤立。
+- 内容：工序 node 1/2/3（craft1 内长宽 / 新建 craft92 平面度 / craft91 改 A基准 node3）；绑定 frame1→EQ1 上料、frame2→EQ2 中转、frame92→EQ3 中转、frame3→EQ3 下料、frame91→EQ1/EQ2/EQ3 共用 NG；补 frame2 cell(653002)；frame1 补满 10 电极；**下料/NG/两个中转架统一重建为 12 空槽**（避免一轮溢出，见 F）。
+- 实跑验证：件流经三道全路径（直接交接 NextMachineCell / 中转架 TransitFrame / NG架 NgFrame / 末道下料 DownloadFrame），电极码全程可追。
+
+**C. 机台安全信号（现场决策：保留信号、测试期置安全）**：
+- 现象：EQ03 保留「机台安全」点位（Session 17 只删了 EQ01/EQ02），模拟器从不驱动机台级信号→读默认 OFF→EQ03 静默卡 Offline/Alarm，件堆在其中转架不被取。
+- 修：`CncMachineSimulator` 捕获机台级 `MACHINE_SAFE/DOOR` 点位（PositionId=null），启动+每拍幂等置「安全=ON/门=关」（`MachineBehavior`/`WriteMachineSafety`）；避免 Session 33 时序坑。
+- 修 `PositionScheduler`：机台在 **Offline（启动未就绪）** 态读到不安全→保持 Offline 等就绪，不 latch 粘滞告警；仅**运行中**安全掉线才 Alarm（安全底线不变）。
+- 曾误删 EQ03 机台安全（`migration_2026-07-08_remove_eq3_machinesafe.sql`），后按用户「保留信号、测试期置安全」**已回滚**（该迁移脚本保留在库未采用，可删）。
+
+**D. 料架页绑定机台 CRUD**（`FrameViewModel`/`ConfigModels.FrameBindRow`/`IConfigServices`/`ConfigServices`/`PageTemplates`）：
+- `FrameBindRow` 扩 `BindId/EquipmentId/RoleCode`；`IFrameService` 加 `GetEquipmentOptionsAsync/BindEquipmentAsync(一机一角色一料架,替换旧)/UnbindAsync`；修 `GetDetailAsync` 角色文本原只映射上料/下料→补全中转/NG。
+- 绑定面板加「机台+角色(四种)+绑定」表单 + 每行「解绑」（二次确认）。
+
+**E. 料架页动态刷新**（修「显示不正确/不刷新」）：
+- 根因：`FrameViewModel` 只在切料架/手动操作后加载一次，不订阅槽位变化→线体跑时列表占用数/槽位停在旧值。
+- 修：1.5s `DispatcherTimer` **原地刷新**（`FrameRowVm.Occupied`/`SlotVm.ElectrodeId/SlotState` 改可观察），不丢选中槽/校正框焦点。
+
+**F. 电极账目两个真 bug（用户「为什么少几个电极」查出）**：
+- **bug①满架静默丢件**：`SlotAccountService.ReserveAsync` 目标料架无空槽 `return null`，`ApplySlotReservationAsync` 忽略返回值→件不入账、不告警、不日志。修：满架→`LogWarning` + `RaiseRcsWarnAsync`「料架N已满,请人工换架/清架」，不静默丢。
+- **bug②电极码没随件流转**：下料/NG架 `ELECTRODE_ID=NULL`、加工记录电极 null。修：`PositionContext` 加 `ElectrodeId`；上料取料时从 `ReserveTakeAsync` 捕获→下料 `DispatchItem.ElectrodeId`/交接 `InboundHandoff`/下游接收/`RecordStartAsync` 全链路传递，下料完成清空。
+- 演示数据：NgRate=0.3 三道累积 NG≈66%，原 NG架/中转架各 4 槽会溢出→统一扩到 12。修后一轮 10 件账目守恒（落料架 + 在制/告警件 = 10），电极码全程可追。
+
+**G. 告警人工恢复入口**（`DashboardViewModel`/`PageTemplates` 看板）：
+- 之前 `IPositionScheduler.ResetAlarmAsync` 未接 UI。加：看板注入 `IPositionScheduler` + `ResetAlarmCommand`；`PositionCardVm.IsAlarm`；告警工位卡片显示红色「恢复」按钮（仅告警态可见）→二次确认→`ResetAlarmAsync`→回 WaitLoad。
+
+**H. 料架编辑/删除**（`ConfigModels.FrameEditModel`/`IFrameService`/`ConfigServices`/`FrameEditDialog`/`FrameViewModel`/`PageTemplates`）：
+- `GetFrameForEditAsync/UpdateFrameAsync(改层数/每层槽数则重建空槽——有非空槽位拒绝)/CheckDeleteFrameAsync(被绑定或有占用则拒删)/DeleteFrameAsync(软删 STATE='1')`。
+- `FrameEditDialog` 加编辑模式（预填+编辑标题）；料架列表头加 新增/编辑/删除 按钮。
+
+**排障经验（记录）**：
+- 构建曾因 `NUGET_PACKAGES` 指向残缺沙箱缓存报 NU5037/CS0006；改用 `$env:NUGET_PACKAGES=~/.nuget/packages` 后正常。
+- 多次误起重复实例（进程查询偶发假空）导致抢端口——务必单实例，`COUNT=` 方式确认。
+- 偶发「写 POS_TEST_START 失败」→工位告警（FINS 写寄存器瞬时超时，非代码引入）；如需可给 `WriteTestStart` 加一次重试（待定）。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - 本机环境：MySQL 8.4（服务 MySQL84），root 口令 `2580.wxr`；appsettings 用明文口令开发（PasswordProtected=false，勿提交明文进 git）。

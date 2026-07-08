@@ -1039,8 +1039,14 @@
                     <DockPanel>
                         <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
                             <TextBlock Text="料架列表" Style="{StaticResource PanelTitle}" Margin="12,0"/>
-                            <Button Content="+ 新增" Style="{StaticResource PrimaryButton}" Padding="10,0" Height="24"
-                                    FontSize="12" HorizontalAlignment="Right" Margin="12,0" Command="{Binding AddFrameCommand}"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="12,0" VerticalAlignment="Center">
+                                <Button Content="+ 新增" Style="{StaticResource PrimaryButton}" Padding="10,0" Height="24"
+                                        FontSize="12" Command="{Binding AddFrameCommand}"/>
+                                <Button Content="编辑" Style="{StaticResource GhostButton}" Padding="10,0" Height="24"
+                                        FontSize="12" Margin="6,0,0,0" Command="{Binding EditFrameCommand}"/>
+                                <Button Content="删除" Style="{StaticResource DangerButton}" Padding="10,0" Height="24"
+                                        FontSize="12" Margin="6,0,0,0" Command="{Binding DeleteFrameCommand}"/>
+                            </StackPanel>
                         </Grid>
                         <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
                         <DataGrid ItemsSource="{Binding Frames}" SelectedItem="{Binding SelectedFrame}"
@@ -1078,11 +1084,27 @@
                             <TextBlock Text="{Binding BindingsTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"/>
                         </Grid>
                         <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                        <!-- 绑定编辑表单：选机台 + 角色 → 绑定（一机一角色一料架） -->
+                        <Border DockPanel.Dock="Top" Background="{StaticResource Surface2Brush}" Padding="10,7">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="机台" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <ComboBox ItemsSource="{Binding EquipmentOptions}" SelectedItem="{Binding SelectedBindEquipment}"
+                                          DisplayMemberPath="DisplayName" Style="{StaticResource FormCombo}"
+                                          Foreground="{StaticResource FgBrush}" Width="150" Height="26"/>
+                                <TextBlock Text="角色" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="10,0,6,0"/>
+                                <ComboBox ItemsSource="{Binding BindRoleOptions}" SelectedItem="{Binding SelectedBindRole}"
+                                          DisplayMemberPath="Label" Style="{StaticResource FormCombo}"
+                                          Foreground="{StaticResource FgBrush}" Width="100" Height="26"/>
+                                <Button Content="绑定" Style="{StaticResource PrimaryButton}" Height="26" Padding="14,0"
+                                        Margin="10,0,0,0" Command="{Binding BindEquipmentCommand}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
                         <DataGrid ItemsSource="{Binding Bindings}" Style="{StaticResource DataGridCompact}"
-                                  RowHeight="34" IsHitTestVisible="False">
+                                  RowHeight="34" MaxHeight="160">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="机台" Binding="{Binding EquipmentDisplay}" Width="*"/>
-                                <DataGridTemplateColumn Header="角色" Width="130">
+                                <DataGridTemplateColumn Header="角色" Width="110">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
@@ -1093,6 +1115,16 @@
                                                     <TextBlock Text="{Binding RoleText}" FontSize="12"/>
                                                 </StackPanel>
                                             </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn Header="操作" Width="72">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Content="解绑" Style="{StaticResource DangerButton}" Height="24" Padding="8,0"
+                                                    FontSize="12" Margin="8,0" VerticalAlignment="Center"
+                                                    Command="{Binding DataContext.UnbindCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
@@ -1683,7 +1715,23 @@
                                                     <Ellipse Width="9" Height="9" Margin="0,0,6,0" Fill="{Binding StateBadge, Converter={StaticResource StateBadgeBrushConv}}"/>
                                                     <TextBlock Text="{Binding StateDisplay}" Style="{StaticResource BodyText}"/>
                                                 </StackPanel>
-                                                <TextBlock Grid.Column="2" Text="{Binding State, StringFormat='[{0}]'}" Style="{StaticResource MutedText}" FontFamily="{StaticResource FontMono}" VerticalAlignment="Center"/>
+                                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Button Content="恢复" Height="24" Padding="10,0" FontSize="12" Margin="0,0,8,0"
+                                                            Command="{Binding DataContext.ResetAlarmCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource DangerButton}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsAlarm}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                    </Button>
+                                                    <TextBlock Text="{Binding State, StringFormat='[{0}]'}" Style="{StaticResource MutedText}" FontFamily="{StaticResource FontMono}" VerticalAlignment="Center"/>
+                                                </StackPanel>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>

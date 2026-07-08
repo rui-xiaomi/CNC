@@ -10,15 +10,29 @@ namespace CncLoader.Core.Rcs;
 /// </summary>
 public interface ISlotAccountService
 {
-    /// <summary>预记：在 source 料架选一个空槽位（按层+层内位顺序首个空位），置预记态 + 绑定 taskId + electrodeId。
+    /// <summary>入库预记（PUT 方向）：在 dest 料架选一个空槽位（按层+层内位顺序首个空位），置预记态 + 绑定 taskId + electrodeId。
     /// 返回选中的 (slotNo, layerNo, posInLayer)；无空槽或并发冲突返回 null。同架互斥保证不会两任务选同一槽。</summary>
     Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? electrodeId, CancellationToken ct = default);
 
-    /// <summary>落账：按 taskId 找到预记槽位，置占用（源槽位：电极落账）。redo 同 taskId 幂等（已落账不再重复）。</summary>
+    /// <summary>入库落账（PUT）：按 taskId 找到预记槽位，置占用（电极落账）。redo 同 taskId 幂等（已落账不再重复）。</summary>
     Task<bool> ConfirmAsync(string taskId, CancellationToken ct = default);
 
-    /// <summary>回滚预记：按 taskId 找到预记槽位，恢复为空（取消/失败时调用）。已落账的不回滚。</summary>
+    /// <summary>入库回滚（PUT）：按 taskId 找到预记槽位，恢复为空（取消/失败时调用）。已落账的不回滚。</summary>
     Task<bool> RollbackAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>取料预记（TAKE 方向）：在 source 料架选首个占用槽位，置预记态 + 绑定 taskId，保留电极码。
+    /// 返回选中的槽位（含 electrodeId）；无占用槽或并发冲突返回 null。用于上料/中转架回流从料架取件。</summary>
+    Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default);
+
+    /// <summary>取料落账（TAKE）：按 taskId 找到预记槽位，清空（电极已被取走）。redo 同 taskId 幂等。</summary>
+    Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>取料回滚（TAKE）：按 taskId 找到预记槽位，恢复为占用（取消/失败时调用）。</summary>
+    Task<bool> RollbackTakeAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>重启对账：回滚全部陈旧预记（Reserved 且 Remark 不在 activeTaskIds 内）——
+    /// 按 BindSource 方向还原（RESERVE_PUT→空、RESERVE_TAKE→占用）。返回回滚数。</summary>
+    Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default);
 
     /// <summary>料架占用统计（total/occupied/reserved/empty），供水位监视器与 UI。</summary>
     Task<FrameOccupancy> GetOccupancyAsync(long frameId, CancellationToken ct = default);
@@ -39,8 +53,8 @@ public interface ISlotAccountService
 /// <summary>槽位记录（盘点/NG 处理/UI 共用）。</summary>
 public sealed record SlotRecord(long FrameId, int SlotNo, int LayerNo, int PosInLayer, string SlotState, string? ElectrodeId, DateTime? LastVerifyTime);
 
-/// <summary>预记选中的槽位。</summary>
-public sealed record ReservedSlot(long FrameId, int SlotNo, int LayerNo, int PosInLayer);
+/// <summary>预记选中的槽位（TAKE 方向带出被取电极码）。</summary>
+public sealed record ReservedSlot(long FrameId, int SlotNo, int LayerNo, int PosInLayer, string? ElectrodeId = null);
 
 /// <summary>料架占用统计。</summary>
 public sealed record FrameOccupancy(int Total, int Occupied, int Reserved, int Empty);

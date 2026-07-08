@@ -49,4 +49,16 @@ public sealed class RouteResolver : IRouteResolver
         }
         return (from.RcsCode, to.RcsCode);
     }
+
+    public async Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        var cell = await _locationMap.ResolvePositionAsync(equipmentId, positionId, "cell", ct);
+        return cell?.RcsCode;
+    }
+
+    public async Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default)
+    {
+        var cell = await _locationMap.ResolveFrameAsync(frameId, "cell", ct);
+        return cell?.RcsCode ?? $"FRAME-{frameId}";
+    }
 }

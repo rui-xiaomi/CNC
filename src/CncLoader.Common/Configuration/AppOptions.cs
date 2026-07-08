@@ -72,6 +72,12 @@ public sealed class RcsOptions
     /// <summary>托盘回收区命名点（空托盘回收任务终点）。</summary>
     public string PalletReturnArea { get; set; } = "PALLET_RETURN";
 
+    /// <summary>是否启用定期后台盘点（班前/班后自动扫码核账）。默认关：盘点期间搬运任务排队，需运维明确开启。</summary>
+    public bool InventoryAutoEnabled { get; set; }
+
+    /// <summary>定期盘点间隔（分钟）。到点且 RCS 空闲时逐料架发起 identifyQR。</summary>
+    public int InventoryIntervalMinutes { get; set; } = 60;
+
     /// <summary>是否启用本机 RCS 模拟器（第四阶段③启用）。</summary>
     public bool UseSimulator { get; set; } = true;
 
@@ -86,6 +92,9 @@ public sealed class RcsOptions
 
     /// <summary>模拟器：任务自发取消率 0~1（命中则回推 error_code=9）。</summary>
     public double SimulatorCancelRate { get; set; }
+
+    /// <summary>CNC 机台模拟器：检测出 NG 的概率 0~1（默认 0=全 OK）。命中则置 POS_NG=ON 走 NG 分流，用于演示 NG→NG架。</summary>
+    public double SimulatorNgRate { get; set; }
 }
 
 /// <summary>数据库连接配置。Password 可为明文（开发）或 DPAPI 密文（PasswordProtected=true）。</summary>

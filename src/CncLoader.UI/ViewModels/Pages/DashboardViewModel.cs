@@ -18,16 +18,18 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     private readonly ISignalStateStore _store;
     private readonly IWorkRecordService _workRecords;
     private readonly IAlarmEventService _alarms;
+    private readonly IPositionScheduler _scheduler;
 
     private readonly Dictionary<(long Eq, long Pos), PositionCardVm> _cards = new();
     private readonly DispatcherTimer _throttle;
     private volatile bool _positionsDirty;
 
-    public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms)
+    public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms, IPositionScheduler scheduler)
     {
         _store = store;
         _workRecords = workRecords;
         _alarms = alarms;
+        _scheduler = scheduler;
         Positions = new ObservableCollection<PositionCardVm>();
         RecentRecords = new ObservableCollection<WorkRecordRow>();
         _store.PositionChanged += OnStoreChanged;
@@ -75,6 +77,23 @@ public sealed partial class DashboardViewModel : PageViewModelBase
         _positionsDirty = true; // 位置由节流器刷新
         await RefreshStatsAsync();
         await RefreshRecordsAsync();
+    }
+
+    /// <summary>人工恢复告警：确认现场处理完毕后，把该加工位从 ALARM 重置回 WAIT_LOAD。</summary>
+    [RelayCommand]
+    private async Task ResetAlarmAsync(PositionCardVm? card)
+    {
+        if (card is null) return;
+        var confirm = System.Windows.MessageBox.Show(
+            $"确认已现场处理 {card.EquipmentText} {card.PositionText} 的告警并恢复运行？",
+            "恢复告警", System.Windows.MessageBoxButton.OKCancel, System.Windows.MessageBoxImage.Warning);
+        if (confirm != System.Windows.MessageBoxResult.OK) return;
+        try
+        {
+            await _scheduler.ResetAlarmAsync(card.EquipmentId, card.PositionId);
+            HandyControl.Controls.Growl.Success($"{card.EquipmentText} {card.PositionText} 已恢复，等待上料。");
+        }
+        catch (Exception ex) { HandyControl.Controls.Growl.Error($"恢复失败：{ex.Message}"); }
     }
 
     /// <summary>增量更新加工位卡片（在 UI 线程调用）：存在则原地改状态，新增则追加，消失则移除。</summary>
@@ -157,7 +176,11 @@ public sealed partial class PositionCardVm : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StateDisplay))]
     [NotifyPropertyChangedFor(nameof(StateBadge))]
+    [NotifyPropertyChangedFor(nameof(IsAlarm))]
     private PositionState _state;
+
+    /// <summary>是否处于告警态（供看板显示「恢复」按钮）。</summary>
+    public bool IsAlarm => State == PositionState.Alarm;
 
     [ObservableProperty] private bool _plcOnline;
     [ObservableProperty] private bool? _safe;

@@ -21,10 +21,35 @@ public sealed record DispatchItem
     public required long WorkLineId { get; init; }
     public required string LineCode { get; init; }
     public string? Author { get; init; }
+
+    /// <summary>下料终点类型（决定槽位账与交接处理）。上料忽略。</summary>
+    public UnloadTarget UnloadTarget { get; init; } = UnloadTarget.DownloadFrame;
+    /// <summary>上料取料源料架 ID（上料架/中转架）；无则从命名区取，不记料架账。</summary>
+    public long? SourceFrameId { get; init; }
+    /// <summary>下料入库目标料架 ID（下料/中转/NG 架）；直接交接到下一台机时为 null。</summary>
+    public long? DestFrameId { get; init; }
+    /// <summary>直接交接到下一台机时的目标机台/工位（登记待入库）。</summary>
+    public long? DestEquipmentId { get; init; }
+    public long? DestPositionId { get; init; }
+    /// <summary>随件电极码（供入库落账/交接溯源）。</summary>
+    public string? ElectrodeId { get; init; }
 }
 
 /// <summary>上料/下料阶段。</summary>
 public enum PositionPhase { Upload, Unload }
+
+/// <summary>下料终点类型（§6.2 OK/NG 分流）。</summary>
+public enum UnloadTarget
+{
+    /// <summary>下料架（末道工序，role1）。</summary>
+    DownloadFrame,
+    /// <summary>中转架排队（下一工序繁忙，role2）。</summary>
+    TransitFrame,
+    /// <summary>NG 专用架（role3，不再流转）。</summary>
+    NgFrame,
+    /// <summary>直接交接到下一工序机台 cell（下一工序有空闲工位）。</summary>
+    NextMachineCell,
+}
 
 /// <summary>
 /// 优先级派工队列（Core 抽象）。Communication 提供基于优先级的并发安全实现。
@@ -49,4 +74,8 @@ public interface IRouteResolver
     Task<(string from, string to)?> ResolveUploadAsync(long equipmentId, long positionId, CancellationToken ct = default);
     /// <summary>下料：起点=加工位 cell，终点=下料区/下料架 cell。</summary>
     Task<(string from, string to)?> ResolveUnloadAsync(long equipmentId, long positionId, CancellationToken ct = default);
+    /// <summary>解析加工位 cell 编码（LOCATION_MAP rcsType="cell"）；失败返回 null。</summary>
+    Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default);
+    /// <summary>解析料架 cell 编码（LOCATION_MAP FrameId + rcsType="cell"，回退 FRAME-{id}）。</summary>
+    Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default);
 }

@@ -27,23 +27,28 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
     private readonly IPlcPointSource _points;
     private readonly RcsCallbackNotifier _notifier;
     private readonly IRcsTaskStore _taskStore;
+    private readonly ILocationMapService _locationMap;
     private readonly bool _useSimulator;
+    private readonly double _ngRate;
     private readonly ILogger<CncMachineSimulator> _logger;
     private readonly ConcurrentDictionary<(long Plc, long Pos), PositionBehavior> _behaviors = new();
     private readonly ConcurrentDictionary<(long Eq, long Pos), PositionBehavior> _byEquipment = new();
+    private readonly ConcurrentDictionary<long, MachineBehavior> _machines = new();
     private readonly ConcurrentDictionary<string, RcsTaskRow> _taskCache = new();
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
 
     public CncMachineSimulator(IEnumerable<ISimulatorRegisterStore> simulators, IPlcPointSource points,
-        RcsCallbackNotifier notifier, IRcsTaskStore taskStore, IOptions<AppOptions> options,
-        ILogger<CncMachineSimulator> logger)
+        RcsCallbackNotifier notifier, IRcsTaskStore taskStore, ILocationMapService locationMap,
+        IOptions<AppOptions> options, ILogger<CncMachineSimulator> logger)
     {
         _sims = simulators.ToArray();
         _points = points;
         _notifier = notifier;
         _taskStore = taskStore;
+        _locationMap = locationMap;
         _useSimulator = options.Value.Plc.UseSimulator;
+        _ngRate = Math.Clamp(options.Value.Rcs.SimulatorNgRate, 0.0, 1.0);
         _logger = logger;
     }
 
@@ -62,12 +67,23 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
             var all = await _points.GetAllAsync(cancellationToken);
             foreach (var p in all)
             {
-                if (p.PositionId is null) continue;
+                var offset = RegisterAddress.ToRegisterIndex(p.RegisterAddress);
+                // 机台级信号（门/安全，PositionId=null）：测试期模拟机台上报「安全、门关」，
+                // 让保留了「机台安全」点位的机台（如 A基准）能正常上线。
+                if (p.PositionId is null)
+                {
+                    if (p.Signal == SignalKey.MachineSafe || p.Signal == SignalKey.Door)
+                    {
+                        var mb = _machines.GetOrAdd(p.PlcId, k => new MachineBehavior { PlcId = k });
+                        if (p.Signal == SignalKey.MachineSafe) { mb.SafeOffset = offset; mb.SafeOn = p.OnValue; }
+                        else { mb.DoorOffset = offset; mb.DoorClosed = p.OffValue; }
+                    }
+                    continue;
+                }
                 var key = (p.PlcId, p.PositionId.Value);
                 var b = _behaviors.GetOrAdd(key, k => new PositionBehavior { PlcId = k.Plc, PositionId = k.Pos });
                 b.EquipmentId = p.EquipmentId;
                 _byEquipment[(p.EquipmentId, p.PositionId.Value)] = b;
-                var offset = RegisterAddress.ToRegisterIndex(p.RegisterAddress);
                 switch (p.Signal)
                 {
                     case SignalKey.PosTestStart: b.TestStartOffset = offset; b.TestStartOn = p.OnValue; b.TestStartOff = p.OffValue; break;
@@ -87,7 +103,10 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
                 WriteRegister(b.PlcId, b.NgOffset, (ushort)b.NgOff);
                 WriteRegister(b.PlcId, b.TestStartOffset, 0);
             }
-            _logger.LogInformation("CNC 机台行为模拟器装载 {N} 个加工位", _behaviors.Count);
+            // 初始：机台安全=ON、门=关（测试期让保留机台安全点位的机台正常上线）
+            foreach (var mb in _machines.Values)
+                WriteMachineSafety(mb);
+            _logger.LogInformation("CNC 机台行为模拟器装载 {N} 个加工位、{M} 台机台级信号", _behaviors.Count, _machines.Count);
         }
         catch (Exception ex) { _logger.LogWarning(ex, "CNC 机台行为模拟器装载失败"); }
 
@@ -126,6 +145,8 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
                 WriteRegister(b.PlcId, b.OkOffset, (ushort)b.OkOff);
                 WriteRegister(b.PlcId, b.NgOffset, (ushort)b.NgOff);
                 _logger.LogInformation("CNC-sim EQ{Eq} POS{Pos} 下料完成 → HasMat=OFF/AllowLoad=ON", row.EquipmentId, row.PositionId);
+                // 工序间直接交接：若下料终点 cell 映射到另一加工位，模拟件落到该工位 → 目标 HasMat=ON
+                await PlaceHandoffAsync(row.ToCode);
             }
             else // 上料完成 → 工件到位
             {
@@ -148,10 +169,34 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
     private PositionBehavior? FindBehavior(long equipmentId, long positionId)
         => _byEquipment.TryGetValue((equipmentId, positionId), out var b) ? b : null;
 
+    /// <summary>工序间直接交接：下料终点 cell 若为某加工位 → 模拟件落到该工位（目标 HasMat=ON / AllowLoad=OFF）。</summary>
+    private async Task PlaceHandoffAsync(string toCode)
+    {
+        try
+        {
+            var loc = await _locationMap.ResolveByRcsCodeAsync(toCode);
+            if (loc?.EquipmentId is not long dstEq || loc.PositionId is not long dstPos) return;
+            var target = FindBehavior(dstEq, dstPos);
+            if (target is null) return;
+            target.HasMaterial = true;
+            WriteRegister(target.PlcId, target.HasMatOffset, (ushort)target.HasMatOn);
+            WriteRegister(target.PlcId, target.AllowLoadOffset, (ushort)target.AllowLoadOff);
+            _logger.LogInformation("CNC-sim 工序间交接件落到 EQ{Eq} POS{Pos}（终点 {Cell}）→ HasMat=ON", dstEq, dstPos, toCode);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "CNC-sim 处理工序间交接落位异常 toCode={Cell}", toCode); }
+    }
+
     /// <summary>向所有模拟器广播写入；只对登记了该 PLC 的模拟器生效（不论 Modbus/FINS）。</summary>
     private void WriteRegister(long plcId, int offset, ushort value)
     {
         foreach (var sim in _sims) sim.WriteRegister(plcId, offset, value);
+    }
+
+    /// <summary>置该机台「安全=ON、门=关」（幂等，测试期让机台正常上线）。</summary>
+    private void WriteMachineSafety(MachineBehavior mb)
+    {
+        if (mb.SafeOffset != 0) WriteRegister(mb.PlcId, mb.SafeOffset, (ushort)mb.SafeOn);
+        if (mb.DoorOffset != 0) WriteRegister(mb.PlcId, mb.DoorOffset, (ushort)mb.DoorClosed);
     }
 
     private async Task LoopAsync(CancellationToken ct)
@@ -160,6 +205,9 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
         {
             try
             {
+                // 机台安全/门每拍幂等重置（同 AllowLoad，避免初始写入早于 PLC 登记而丢失）
+                foreach (var mb in _machines.Values)
+                    WriteMachineSafety(mb);
                 foreach (var b in _behaviors.Values)
                     DrivePosition(b);
             }
@@ -197,9 +245,17 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
         if (b.TestStartOffset == 0) return;
         if (b.Processing && (DateTime.UtcNow - b.ProcessStart).TotalMilliseconds >= 2000)
         {
-            WriteRegister(b.PlcId, b.OkOffset, (ushort)b.OkOn);
             b.Processing = false;
-            _logger.LogInformation("CNC-sim POS{Pos} 检测完成 → PosOk=ON", b.PositionId);
+            if (_ngRate > 0 && Random.Shared.NextDouble() < _ngRate)
+            {
+                WriteRegister(b.PlcId, b.NgOffset, (ushort)b.NgOn);
+                _logger.LogInformation("CNC-sim POS{Pos} 检测完成 → PosNg=ON（NG 分流）", b.PositionId);
+            }
+            else
+            {
+                WriteRegister(b.PlcId, b.OkOffset, (ushort)b.OkOn);
+                _logger.LogInformation("CNC-sim POS{Pos} 检测完成 → PosOk=ON", b.PositionId);
+            }
         }
     }
 
@@ -222,5 +278,13 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
         public int NgOffset; public int NgOn = 1; public int NgOff = 2;
         public bool Processing; public DateTime ProcessStart;
         public bool HasMaterial;
+    }
+
+    /// <summary>机台级信号（门/安全）模拟：置安全=ON、门=关，让机台正常上线。</summary>
+    private sealed class MachineBehavior
+    {
+        public long PlcId;
+        public int SafeOffset; public int SafeOn = 1;
+        public int DoorOffset; public int DoorClosed = 2;
     }
 }

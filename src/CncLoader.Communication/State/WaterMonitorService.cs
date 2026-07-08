@@ -84,8 +84,8 @@ public sealed class WaterMonitorService : IHostedService, IWaterMonitorService, 
             var isEmpty = occ.Total > 0 && occ.Empty == occ.Total;
             if (!isFull && !isEmpty) continue;
 
-            // 找该料架绑定的机台+角色（遍历机台列表取绑定）
-            var binding = await FindBindingAsync(frame.Id, ct);
+            // 找该料架绑定的机台+角色（空架需补料→上料角色；满架需清架→非上料角色）
+            var binding = await FindBindingAsync(frame.Id, isEmpty, ct);
             if (binding is null) continue;
 
             var key = (binding.Value.EquipmentId, binding.Value.Role);
@@ -112,15 +112,21 @@ public sealed class WaterMonitorService : IHostedService, IWaterMonitorService, 
         return events;
     }
 
-    /// <summary>找料架绑定的机台+角色。当前绑定行不含 EquipmentId，无法精确反查 → 返回 null（跳过，不触发换架）。</summary>
-    private async Task<(long EquipmentId, FrameRole Role)?> FindBindingAsync(long frameId, CancellationToken ct)
+    /// <summary>找料架绑定的机台+角色（精确反查 FRAME_BIND）。满架优先取下料/中转/NG 角色，空架优先取上料角色；无绑定返回 null 跳过。</summary>
+    private async Task<(long EquipmentId, FrameRole Role)?> FindBindingAsync(long frameId, bool preferUpload, CancellationToken ct)
     {
-        // TODO 现场：IEquipmentConfigService 加 GetBindingByFrameAsync(frameId) → (equipmentId, role) 后启用精确反查。
-        // 在此之前不返回写死值（曾固定 (1, Unload) 会误触发到错误机台/角色），拿不到真实绑定一律跳过。
-        var detail = await _frames.GetDetailAsync(frameId, ct);
-        if (detail is null || detail.Bindings.Count == 0) return null;
-        _logger.LogDebug("料架 {Frame} 满/空但绑定反查未落地，跳过自动换架（需 GetBindingByFrameAsync）", frameId);
-        return null;
+        var bindings = await _equipment.GetBindingByFrameAsync(frameId, ct);
+        if (bindings.Count == 0)
+        {
+            _logger.LogDebug("料架 {Frame} 满/空但无有效 FRAME_BIND 绑定，跳过自动换架", frameId);
+            return null;
+        }
+        // 空架（需补料）优先上料角色；满架（需清架）优先非上料角色（下料/中转/NG）。
+        var match = preferUpload
+            ? bindings.FirstOrDefault(b => b.Role == FrameRole.Upload)
+            : bindings.FirstOrDefault(b => b.Role != FrameRole.Upload);
+        var picked = match ?? bindings[0];
+        return (picked.EquipmentId, picked.Role);
     }
 
     public ValueTask DisposeAsync()

@@ -87,6 +87,16 @@ public sealed class LocationMapService : ILocationMapService
         return e is null ? null : Map(e);
     }
 
+    public async Task<LocationMapItem?> ResolveByRcsCodeAsync(string rcsCode, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(rcsCode)) return null;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var e = await db.LocationMaps.AsNoTracking()
+            .Where(x => x.State == "0" && x.RcsCode == rcsCode)
+            .FirstOrDefaultAsync(ct);
+        return e is null ? null : Map(e);
+    }
+
     private static LocationMapItem Map(LocationMap e) => new()
     {
         Id = e.Id,

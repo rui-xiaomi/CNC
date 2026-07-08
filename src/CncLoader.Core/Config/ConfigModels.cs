@@ -118,10 +118,13 @@ public sealed record FrameListItem(
     int SlotTotal,
     int Occupied);
 
-/// <summary>料架-机台绑定行（机台 + 角色：上料架/下料架）。</summary>
+/// <summary>料架-机台绑定行（机台 + 角色：0上料/1下料/2中转/3NG）。BindId 供解绑，EquipmentId/RoleCode 供编辑。</summary>
 public sealed record FrameBindRow(
+    long BindId,
+    long EquipmentId,
     string EquipmentDisplay,
     bool IsUpload,
+    string RoleCode,
     string RoleText);
 
 /// <summary>槽位（层 + 层内位 + 电极绑定 + 状态），按层分组渲染。
@@ -138,6 +141,17 @@ public sealed record SlotItem(
 /// <summary>新增料架（保存时按 层×每层数 预建空槽位）。</summary>
 public sealed class FrameCreateModel
 {
+    public string Name { get; set; } = "";
+    public string Code { get; set; } = "";
+    public string IdentifyCode { get; set; } = "";
+    public int LayerTotal { get; set; } = 1;
+    public int SlotsPerLayer { get; set; } = 1;
+}
+
+/// <summary>编辑料架（名称/编码/识别码 + 层数/每层槽数）。改层数/槽数时若有料需先清空。</summary>
+public sealed class FrameEditModel
+{
+    public long Id { get; set; }
     public string Name { get; set; } = "";
     public string Code { get; set; } = "";
     public string IdentifyCode { get; set; } = "";

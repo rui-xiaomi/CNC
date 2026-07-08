@@ -23,6 +23,10 @@ public sealed class SlotAccountService : ISlotAccountService
         _logger = logger;
     }
 
+    // 预记方向标记（写入 BIND_SOURCE，供重启对账按方向回滚）。BIND_SOURCE 为 VARCHAR(10)，值须 ≤10 字符。
+    private const string ReservePut = "RSV_PUT";
+    private const string ReserveTake = "RSV_TAKE";
+
     public async Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? electrodeId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;
@@ -40,12 +44,115 @@ public sealed class SlotAccountService : ISlotAccountService
             slot.SlotState = SlotStates.Reserved;
             slot.ElectrodeId = electrodeId;
             slot.Remark = taskId;
+            slot.BindSource = ReservePut;
             slot.BindTime = DateTime.Now;
             await db.SaveChangesAsync(ct);
-            _logger.LogInformation("预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
-            return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer);
+            _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
+            return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, electrodeId);
         }
         finally { gate.Release(); }
+    }
+
+    public async Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return null;
+        var gate = _frameLocks.GetOrAdd(frameId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            await using var db = await _factory.CreateDbContextAsync(ct);
+            var slot = await db.FrameSlots.AsTracking()
+                .Where(s => s.FrameId == frameId && s.SlotState == SlotStates.Occupied)
+                .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
+                .FirstOrDefaultAsync(ct);
+            if (slot is null) return null;
+
+            var electrodeId = slot.ElectrodeId;
+            slot.SlotState = SlotStates.Reserved;
+            slot.Remark = taskId;
+            slot.BindSource = ReserveTake;
+            slot.BindTime = DateTime.Now;
+            await db.SaveChangesAsync(ct);
+            _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
+            return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, electrodeId);
+        }
+        finally { gate.Release(); }
+    }
+
+    public async Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return false;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var slot = await db.FrameSlots.AsTracking().FirstOrDefaultAsync(s => s.Remark == taskId, ct);
+        if (slot is null) return false;
+
+        if (slot.SlotState == SlotStates.Empty)
+        {
+            _logger.LogDebug("取料落账幂等：taskId={Task} 已清空槽 {Slot}", taskId, slot.SlotNo);
+            return true; // redo 同 taskId 不重复
+        }
+        if (slot.SlotState != SlotStates.Reserved)
+        {
+            _logger.LogWarning("取料落账失败：taskId={Task} 槽 {Slot} 状态={State} 非预记", taskId, slot.SlotNo, slot.SlotState);
+            return false;
+        }
+
+        slot.SlotState = SlotStates.Empty;
+        slot.ElectrodeId = null;
+        slot.Remark = null;
+        slot.BindTime = null;
+        await db.SaveChangesAsync(ct);
+        _logger.LogInformation("取料落账料架 {Frame} 槽 {Slot} taskId={Task}（电极已取走）", slot.FrameId, slot.SlotNo, taskId);
+        return true;
+    }
+
+    public async Task<bool> RollbackTakeAsync(string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return false;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var slot = await db.FrameSlots.AsTracking()
+            .FirstOrDefaultAsync(s => s.Remark == taskId && s.SlotState == SlotStates.Reserved, ct);
+        if (slot is null)
+        {
+            _logger.LogDebug("取料回滚：taskId={Task} 无预记槽（可能已落账或已回滚）", taskId);
+            return false;
+        }
+
+        slot.SlotState = SlotStates.Occupied; // 电极未取走，恢复占用
+        slot.Remark = null;
+        slot.BindTime = null;
+        await db.SaveChangesAsync(ct);
+        _logger.LogInformation("取料回滚料架 {Frame} 槽 {Slot} taskId={Task}（恢复占用）", slot.FrameId, slot.SlotNo, taskId);
+        return true;
+    }
+
+    public async Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var reserved = await db.FrameSlots.AsTracking()
+            .Where(s => s.SlotState == SlotStates.Reserved && s.Remark != null)
+            .ToListAsync(ct);
+        var active = new HashSet<string>(activeTaskIds);
+        var n = 0;
+        foreach (var slot in reserved)
+        {
+            if (slot.Remark != null && active.Contains(slot.Remark)) continue; // 仍在执行，不动
+            if (slot.BindSource == ReserveTake)
+            {
+                slot.SlotState = SlotStates.Occupied; // 取料未完成 → 电极还在
+            }
+            else
+            {
+                slot.SlotState = SlotStates.Empty; // 入库未完成 → 槽位仍空
+                slot.ElectrodeId = null;
+            }
+            slot.Remark = null;
+            slot.BindTime = null;
+            n++;
+        }
+        if (n > 0) await db.SaveChangesAsync(ct);
+        if (n > 0) _logger.LogInformation("重启对账：回滚陈旧预记 {N} 个槽位", n);
+        return n;
     }
 
     public async Task<bool> ConfirmAsync(string taskId, CancellationToken ct = default)
@@ -67,7 +174,7 @@ public sealed class SlotAccountService : ISlotAccountService
         }
 
         slot.SlotState = SlotStates.Occupied;
-        slot.BindSource = "RCS_CONFIRMED";
+        slot.BindSource = "CONFIRMED"; // ≤10 字符（BIND_SOURCE VARCHAR(10)）
         slot.BindTime = DateTime.Now;
         // REMARK 保留 taskId 作为幂等判定与审计
         await db.SaveChangesAsync(ct);

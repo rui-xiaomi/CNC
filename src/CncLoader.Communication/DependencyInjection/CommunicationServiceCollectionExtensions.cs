@@ -80,6 +80,9 @@ public static class CommunicationServiceCollectionExtensions
         services.AddHostedService<WaterMonitorService>();
         services.AddSingleton<IWaterMonitorService>(sp => sp.GetRequiredService<WaterMonitorService>());
 
+        // 定期盘点后台调度（"盘点管家"，RCS 空闲时逐料架扫码核账）。默认关，需 InventoryAutoEnabled=true。
+        services.AddHostedService<InventorySchedulerService>();
+
         services.AddSingleton(sp =>
         {
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;

@@ -110,8 +110,18 @@
   - UI：`DashboardViewModel` 实时化（注入 ISignalStateStore+IWorkRecordService+IAlarmEventService，订阅 PositionChanged/MachineChanged）——加工位卡片列表（状态徽标+中文态）+ 当班 OK/NG/总数 + 未处理告警数 + 最近加工记录 DataGrid；`PageTemplates` 监控看板模板从静态骨架改为绑定（4 统计卡 + 加工位 ItemsControl + 最近记录表）；新增 `StateBadgeToBrushConverter`。
   - **完成标志达成**：harness 真 WorkRecordService + EF InMemory 5 项全 PASS（RecordStart 写进行中/FindOpenByPosition 命中/RecordResult 写 OK+耗时/当班统计 OK=2 NG=1 总数=3/重启残留自动补结异常(2)）；构建 0 警告 0 错误；harness 已清理。
   - **Phase 4 全部 7 步完成**（①~⑦）。
+- [x] 4.8 上线缺口补齐（7 项）：
+  - **绑定反查**：`IEquipmentConfigService` 加 `GetBindingByFrameAsync`/`GetFrameBindingByRoleAsync`/`GetNextProcessEquipmentsAsync`；`WaterMonitorService.FindBindingAsync` 用真实 FRAME_BIND 反查（空架取上料角色、满架取非上料角色），删占位 TODO。
+  - **上料前校验**：`PositionScheduler.EnqueueUploadAsync` 入队前查上料架账面占用，`occupied=0` 保持 WaitLoad 等料（非告警）。
+  - **槽位账双向接入**：`ISlotAccountService` 加 `ReserveTake/ConfirmTake/RollbackTake`（取料方向）+ `RollbackStaleReservationsAsync`；`ReservedSlot` 带出 electrodeId；`BIND_SOURCE` 记 `RESERVE_PUT/RESERVE_TAKE` 方向。调度器上料 LOADED→ConfirmTake、下料 UNLOADED→Confirm、Alarm 按方向回滚。
+  - **OK/NG 全量分流**：`DispatchItem` 加 `UnloadTarget`/目标料架/目标机台工位/电极字段；`IRouteResolver` 加 `ResolvePositionCellAsync`/`ResolveFrameCellAsync`；`PositionScheduler.ResolveUnloadTargetAsync`——NG→NG架(role3)；OK→下一工序空闲工位直接交接（登记 `_expectedInbound`，下游见料走 Loaded）/ 下一工序全忙→中转架(role2)排队 / 末道→下料架(role1)。上料源优先中转架回流再取上料架。
+  - **定期盘点**：新增 `InventorySchedulerService`（RCS 空闲串行逐架 identifyQR）+ `RcsOptions.InventoryAutoEnabled`(默认关)/`InventoryIntervalMinutes`(默认60)。
+  - **重启三方对账**：`PositionScheduler.ReconcileAsync` 扩为 ①RCS 未完结任务绑定 ②槽位账陈旧预记按方向回滚 ③PLC 有料无任务→ALARM 等人工。
+  - **模拟器**：`CncMachineSimulator` 下料完成时若终点 cell 映射到某工位（工序间交接）→ 目标 HasMat=ON；`ILocationMapService.ResolveByRcsCodeAsync` 反查。
+  - **验证**：`dotnet build` 0 警告 0 错误；临时 harness（EF InMemory）18 项全 PASS（绑定反查/下一工序/取料放料双向/陈旧预记按方向回滚），跑通已删。**App 运行态受本机应用程序控制策略拦截，无法本地冒烟**。
+  - **现场遗留**：真实 LOCATION_MAP（加工位/料架 cell、各区命名点）与 FRAME_BIND（中转 role2/NG role3）录入；`WaterMonitorEnabled`/`InventoryAutoEnabled` 由运维开启；多机竞争的中转排队策略调优——均归 Phase 6。
 
-> 注：现场联调项（FINS 节点号、RCS 回调 IP/端口与防火墙、缓存区/备料区/托盘回收区点位编码）留待 Phase 6，本阶段以模拟器自测为准。
+> 注：现场联调项（FINS 节点号、RCS 回调 IP/端口与防火墙、缓存区/备料区/托盘回收区/中转架/NG架点位编码）留待 Phase 6，本阶段以模拟器自测 + 数据层 harness 为准。
 
 ### Phase 5 — 外设测试页　Status: 待用户确认（按原型一比一还原）
 AGV / 扫码枪连通性测试（仅测试，不纳入调度/来料校验）。

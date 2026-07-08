@@ -1,5 +1,6 @@
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
+using CncLoader.Core.Rcs;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -405,6 +406,62 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
             binds.FirstOrDefault(b => b.FrameRole == "1")?.FrameId);
     }
 
+    public async Task<IReadOnlyList<FrameBindingInfo>> GetBindingByFrameAsync(long frameId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var binds = await db.FrameBinds.AsNoTracking()
+            .Where(b => b.FrameId == frameId && b.State == ConfigFlags.Active).ToListAsync(ct);
+        return binds
+            .Where(b => TryParseRole(b.FrameRole, out _))
+            .Select(b => { TryParseRole(b.FrameRole, out var role); return new FrameBindingInfo(b.EquipmentId, role); })
+            .ToList();
+    }
+
+    public async Task<long?> GetFrameBindingByRoleAsync(long equipmentId, FrameRole role, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var roleFlag = ((int)role).ToString();
+        var bind = await db.FrameBinds.AsNoTracking()
+            .FirstOrDefaultAsync(b => b.EquipmentId == equipmentId && b.FrameRole == roleFlag && b.State == ConfigFlags.Active, ct);
+        return bind?.FrameId;
+    }
+
+    public async Task<IReadOnlyList<long>> GetNextProcessEquipmentsAsync(long equipmentId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var eq = await db.Equipments.AsNoTracking().FirstOrDefaultAsync(e => e.Id == equipmentId, ct);
+        if (eq is null) return Array.Empty<long>();
+        var craft = await db.Craftworks.AsNoTracking().FirstOrDefaultAsync(c => c.Id == eq.CraftworkId && c.State == ConfigFlags.Active, ct);
+        if (craft is null) return Array.Empty<long>();
+        var currentNode = craft.CraftworkNode ?? 0;
+
+        // 同线、启用、节点 > 当前节点的工序中，取节点最小者作为"下一道工序"
+        var laterCrafts = await db.Craftworks.AsNoTracking()
+            .Where(c => c.WorkLineId == craft.WorkLineId && c.State == ConfigFlags.Active && (c.CraftworkNode ?? 0) > currentNode)
+            .ToListAsync(ct);
+        if (laterCrafts.Count == 0) return Array.Empty<long>();
+        var nextNode = laterCrafts.Min(c => c.CraftworkNode ?? 0);
+        var nextCraftIds = laterCrafts.Where(c => (c.CraftworkNode ?? 0) == nextNode).Select(c => c.Id).ToHashSet();
+
+        var eqs = await db.Equipments.AsNoTracking()
+            .Where(e => e.State == ConfigFlags.Active && nextCraftIds.Contains(e.CraftworkId))
+            .Select(e => e.Id).ToListAsync(ct);
+        return eqs;
+    }
+
+    /// <summary>FRAME_ROLE 字符串("0"/"1"/"2"/"3") → FrameRole 枚举。非法值返回 false。</summary>
+    private static bool TryParseRole(string flag, out FrameRole role)
+    {
+        switch (flag)
+        {
+            case "0": role = FrameRole.Upload; return true;
+            case "1": role = FrameRole.Unload; return true;
+            case "2": role = FrameRole.Transit; return true;
+            case "3": role = FrameRole.NgFrame; return true;
+            default: role = FrameRole.Upload; return false;
+        }
+    }
+
     public async Task SetFrameBindingAsync(long equipmentId, long? uploadFrameId, long? downloadFrameId,
         string author, CancellationToken ct = default)
     {
@@ -492,14 +549,16 @@ public sealed class FrameService : IFrameService
             .Where(b => b.FrameId == frameId && b.State == ConfigFlags.Active).ToListAsync(ct);
         var equipments = await db.Equipments.AsNoTracking().ToListAsync(ct);
 
-        var bindRows = binds.OrderBy(b => b.EquipmentId).Select(b =>
+        var bindRows = binds.OrderBy(b => b.EquipmentId).ThenBy(b => b.FrameRole).Select(b =>
         {
             var eq = equipments.FirstOrDefault(e => e.Id == b.EquipmentId);
-            var isUpload = b.FrameRole == "0";
             return new FrameBindRow(
+                b.Id,
+                b.EquipmentId,
                 eq is null ? "—" : $"{eq.EquipmentName} ({eq.EquipmentNo})",
-                isUpload,
-                isUpload ? "上料架" : "下料架");
+                b.FrameRole == "0",
+                b.FrameRole,
+                FrameRoleText(b.FrameRole));
         }).ToList();
 
         var slotItems = slots.Select(s => new SlotItem(
@@ -560,5 +619,127 @@ public sealed class FrameService : IFrameService
         }
         await db.SaveChangesAsync(ct);
         return frame.Id;
+    }
+
+    public async Task<IReadOnlyList<NamedOption>> GetEquipmentOptionsAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var eqs = await db.Equipments.AsNoTracking().Where(e => e.State == ConfigFlags.Active)
+            .OrderBy(e => e.Id).ToListAsync(ct);
+        return eqs.Select(e => new NamedOption(e.Id, $"{e.EquipmentName} ({e.EquipmentNo})")).ToList();
+    }
+
+    public async Task BindEquipmentAsync(long frameId, long equipmentId, string roleCode, string author, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        // 一机一角色一料架：先清该机台该角色的旧绑定（任意料架），再绑本料架，避免同机台同角色多料架冲突。
+        var existing = await db.FrameBinds
+            .Where(b => b.EquipmentId == equipmentId && b.FrameRole == roleCode && b.State == ConfigFlags.Active)
+            .ToListAsync(ct);
+        db.FrameBinds.RemoveRange(existing);
+        db.FrameBinds.Add(new FrameBind
+        {
+            FrameId = frameId, EquipmentId = equipmentId, FrameRole = roleCode,
+            State = ConfigFlags.Active, Author = author, UpdateTime = DateTime.Now
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task UnbindAsync(long bindId, string author, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var bind = await db.FrameBinds.FirstOrDefaultAsync(b => b.Id == bindId, ct);
+        if (bind is null) return;
+        db.FrameBinds.Remove(bind);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static string FrameRoleText(string roleCode) => roleCode switch
+    {
+        "0" => "上料架",
+        "1" => "下料架",
+        "2" => "中转架",
+        "3" => "NG架",
+        _ => "未知"
+    };
+
+    public async Task<FrameEditModel?> GetFrameForEditAsync(long id, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var f = await db.Frames.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (f is null) return null;
+        return new FrameEditModel
+        {
+            Id = f.Id, Name = f.FrameName, Code = f.FrameCode, IdentifyCode = f.FrameIdentifyCode,
+            LayerTotal = f.LayerTotal, SlotsPerLayer = f.SlotsPerLayer
+        };
+    }
+
+    public async Task UpdateFrameAsync(FrameEditModel model, string author, CancellationToken ct = default)
+    {
+        var layers = Math.Max(1, model.LayerTotal);
+        var perLayer = Math.Max(1, model.SlotsPerLayer);
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var frame = await db.Frames.FirstOrDefaultAsync(f => f.Id == model.Id, ct);
+        if (frame is null) throw new InvalidOperationException($"料架 {model.Id} 不存在");
+
+        frame.FrameName = model.Name;
+        frame.FrameCode = string.IsNullOrWhiteSpace(model.Code) ? model.IdentifyCode : model.Code;
+        frame.FrameIdentifyCode = model.IdentifyCode;
+        frame.Author = author;
+        frame.UpdateTime = DateTime.Now;
+
+        var layoutChanged = frame.LayerTotal != layers || frame.SlotsPerLayer != perLayer;
+        if (layoutChanged)
+        {
+            // 改层数/每层槽数 → 重建空槽：先确认无占用/预记/锁定（非空）槽位，否则拒绝（避免丢账）
+            var nonEmpty = await db.FrameSlots.CountAsync(s => s.FrameId == model.Id && s.SlotState != "0", ct);
+            if (nonEmpty > 0)
+                throw new InvalidOperationException($"料架仍有 {nonEmpty} 个占用/预记/锁定槽位，请先清空再改层数或每层槽数。");
+
+            var old = await db.FrameSlots.Where(s => s.FrameId == model.Id).ToListAsync(ct);
+            db.FrameSlots.RemoveRange(old);
+            var total = layers * perLayer;
+            for (var slotNo = 1; slotNo <= total; slotNo++)
+            {
+                db.FrameSlots.Add(new FrameSlot
+                {
+                    FrameId = model.Id, SlotNo = slotNo,
+                    LayerNo = (slotNo - 1) / perLayer + 1,
+                    PosInLayer = (slotNo - 1) % perLayer + 1,
+                    SlotState = "0", UpdateTime = DateTime.Now
+                });
+            }
+            frame.LayerTotal = layers;
+            frame.SlotsPerLayer = perLayer;
+            frame.SlotTotal = total;
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<DeleteCheckResult> CheckDeleteFrameAsync(long id, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var binds = await db.FrameBinds.AsNoTracking()
+            .CountAsync(b => b.FrameId == id && b.State == ConfigFlags.Active, ct);
+        var occupied = await db.FrameSlots.AsNoTracking()
+            .CountAsync(s => s.FrameId == id && s.SlotState != "0", ct);
+        if (binds > 0)
+            return new DeleteCheckResult(false, binds, $"该料架已被 {binds} 台机台绑定，请先在绑定关系里解绑再删除。");
+        if (occupied > 0)
+            return new DeleteCheckResult(false, occupied, $"该料架仍有 {occupied} 个占用/预记槽位，请先清空再删除。");
+        return new DeleteCheckResult(true, 0, "可删除");
+    }
+
+    public async Task DeleteFrameAsync(long id, string author, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var frame = await db.Frames.FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (frame is null) return;
+        frame.State = "1"; // 软删
+        frame.Author = author;
+        frame.UpdateTime = DateTime.Now;
+        await db.SaveChangesAsync(ct);
     }
 }

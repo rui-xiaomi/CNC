@@ -22,6 +22,9 @@ public interface ILocationMapService
 
     /// <summary>按命名区域解析 RCS 编码。</summary>
     Task<LocationMapItem?> ResolveAreaAsync(string locName, CancellationToken ct = default);
+
+    /// <summary>反查：按 RCS 编码找映射项（供机台模拟器把工序间交接件落到目标工位）。无则 null。</summary>
+    Task<LocationMapItem?> ResolveByRcsCodeAsync(string rcsCode, CancellationToken ct = default);
 }
 
 /// <summary>位置映射项。</summary>
