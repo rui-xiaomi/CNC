@@ -71,6 +71,7 @@ public sealed record EquipmentListItem(
 
 /// <summary>加工位行（机台详情：名称/编码/状态）。</summary>
 public sealed record PositionItem(
+    long Id,
     string Name,
     string Code,
     string StateText);

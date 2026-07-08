@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Layer1Harness</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CncLoader.Common\CncLoader.Common.csproj" />
+    <ProjectReference Include="..\..\src\CncLoader.Core\CncLoader.Core.csproj" />
+    <ProjectReference Include="..\..\src\CncLoader.Data\CncLoader.Data.csproj" />
+    <ProjectReference Include="..\..\src\CncLoader.Communication\CncLoader.Communication.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\src\CncLoader.App\appsettings.json" Link="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

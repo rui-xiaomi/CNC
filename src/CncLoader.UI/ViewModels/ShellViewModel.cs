@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
+using CncLoader.Core.Plc;
 using CncLoader.Core.State;
 using CncLoader.UI.Navigation;
 
@@ -33,7 +35,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _alarms = alarms;
         _navigation.Navigated += OnNavigated;
         _store.MachineChanged += OnMachineChanged;
-        _alarms.AlarmRaised += (_, _) => _ = RefreshAlarmCountAsync();
+        _alarms.AlarmRaised += OnAlarmRaised;
         _alarms.AlarmsChanged += (_, _) => _ = RefreshAlarmCountAsync();
 
         NavItems = new ObservableCollection<NavItem>(BuildNavItems());
@@ -149,6 +151,43 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         if (_heartbeat % 5 == 0) _ = RefreshAlarmCountAsync();
     }
 
+    private void OnAlarmRaised(object? sender, AlarmRow e)
+    {
+        _ = RefreshAlarmCountAsync();
+        Application.Current?.Dispatcher.BeginInvoke(() => ShowAlarmNotification(e));
+    }
+
+    /// <summary>
+    /// 需人工介入的 RCS 任务告警弹模态框；其余严重告警 Growl，普通告警 Growl.Warning。
+    /// </summary>
+    private static void ShowAlarmNotification(AlarmRow e)
+    {
+        var title = e.AlarmType switch
+        {
+            "RCS_CANCELED" => "RCS 任务已取消",
+            "RCS_REDO_LIMIT" => "RCS 自动重做达上限",
+            "RCS_NOT_FOUND" => "RCS 任务查无此单",
+            "RCS_WARN" => "RCS 严重告警",
+            "PLC_COMM" => "PLC 通信告警",
+            _ => string.IsNullOrWhiteSpace(e.AlarmType) ? "系统告警" : $"告警 · {e.AlarmType}"
+        };
+
+        if (e.AlarmType is "RCS_CANCELED" or "RCS_REDO_LIMIT" or "RCS_NOT_FOUND")
+        {
+            HandyControl.Controls.MessageBox.Show(
+                e.Message + "\n\n请到「RCS 任务」或「日志/告警」页跟进处理。",
+                title,
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (e.Level == "严重")
+            HandyControl.Controls.Growl.Error($"{title}：{e.Message}");
+        else
+            HandyControl.Controls.Growl.Warning($"{title}：{e.Message}");
+    }
+
     private async Task RefreshAlarmCountAsync()
     {
         try { UnhandledAlarms = await _alarms.GetUnhandledCountAsync(); }
@@ -176,6 +215,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _timer.Stop();
         _navigation.Navigated -= OnNavigated;
         _store.MachineChanged -= OnMachineChanged;
+        _alarms.AlarmRaised -= OnAlarmRaised;
     }
 }
 

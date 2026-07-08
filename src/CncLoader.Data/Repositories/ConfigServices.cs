@@ -272,6 +272,7 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
             .Where(p => p.EquipmentId == equipmentId && p.State == ConfigFlags.Active)
             .OrderBy(p => p.PositionCode).ToListAsync(ct);
         return positions.Select(p => new PositionItem(
+            p.Id,
             p.PositionName,
             p.PositionCode,
             p.PositionWorkState == "0" ? "空闲可用" : p.PositionWorkState)).ToList();

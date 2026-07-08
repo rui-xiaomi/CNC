@@ -76,8 +76,6 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private void OnWarnReceived(object? sender, RcsWarnEvent e)
     {
         Append($"⚠ warnCallback 车{e.RobotCode} {e.WarnContent}");
-        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
-            HandyControl.Controls.Growl.Warning($"RCS 严重告警：车{e.RobotCode} {e.WarnContent}"));
         if (AutoRefreshMessages) _ = RefreshMessagesAsync();
     }
 

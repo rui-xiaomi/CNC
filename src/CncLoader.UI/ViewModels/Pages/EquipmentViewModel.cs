@@ -1,31 +1,46 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
+using CncLoader.Core.State;
 using CncLoader.UI.Views.Dialogs;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
 /// <summary>
 /// 机台管理：列表（按工序过滤）+ 加工位（自动 2 位）+ 关联料架（按原型一比一）。
-/// 加工位随机台新增自动建 2 个；点位映射在 PLC 页维护。机台/料架绑定的新增配置作为后续表单接入点。
+/// 加工位状态订阅 <see cref="ISignalStateStore"/> 实时刷新；点位映射在 PLC 页维护。
 /// </summary>
 public sealed partial class EquipmentViewModel : PageViewModelBase
 {
     private readonly IEquipmentConfigService _service;
+    private readonly ISignalStateStore _store;
     private readonly ICurrentUser _user;
 
-    public EquipmentViewModel(IEquipmentConfigService service, ICurrentUser user)
+    private readonly Dictionary<long, EquipmentPositionRowVm> _positionRows = new();
+    private readonly DispatcherTimer _positionThrottle;
+    private volatile bool _positionsDirty;
+    private long _selectedEquipmentId;
+
+    public EquipmentViewModel(IEquipmentConfigService service, ISignalStateStore store, ICurrentUser user)
     {
         _service = service;
+        _store = store;
         _user = user;
         Equipments = new ObservableCollection<EquipmentListItem>();
         CraftFilters = new ObservableCollection<NamedOption>();
-        Positions = new ObservableCollection<PositionItem>();
+        Positions = new ObservableCollection<EquipmentPositionRowVm>();
         FrameBindings = new ObservableCollection<EquipmentFrameBinding>();
+        _store.PositionChanged += OnPositionChanged;
+
+        _positionThrottle = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(200) };
+        _positionThrottle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdatePositionStatesUi(); } };
+        _positionThrottle.Start();
+
         _ = InitializeAsync();
     }
 
@@ -34,13 +49,28 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
 
     public ObservableCollection<EquipmentListItem> Equipments { get; }
     public ObservableCollection<NamedOption> CraftFilters { get; }
-    public ObservableCollection<PositionItem> Positions { get; }
+    public ObservableCollection<EquipmentPositionRowVm> Positions { get; }
     public ObservableCollection<EquipmentFrameBinding> FrameBindings { get; }
 
     [ObservableProperty] private NamedOption? _selectedCraftFilter;
     [ObservableProperty] private EquipmentListItem? _selectedEquipment;
     [ObservableProperty] private string _positionsTitle = "加工位（自动 2 位）";
     [ObservableProperty] private string _statusMessage = "";
+
+    private void OnPositionChanged(object? sender, PositionStatus ps)
+    {
+        if (ps.EquipmentId != _selectedEquipmentId) return;
+        _positionsDirty = true;
+    }
+
+    private void UpdatePositionStatesUi()
+    {
+        foreach (var row in _positionRows.Values)
+        {
+            var live = _store.GetPosition(_selectedEquipmentId, row.Id);
+            row.Update(live?.State ?? PositionState.Offline);
+        }
+    }
 
     private async Task InitializeAsync()
     {
@@ -70,11 +100,14 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
     {
         if (value is null)
         {
+            _selectedEquipmentId = 0;
+            _positionRows.Clear();
             Positions.Clear();
             FrameBindings.Clear();
             PositionsTitle = "加工位（自动 2 位）";
             return;
         }
+        _selectedEquipmentId = value.Id;
         PositionsTitle = $"加工位（自动 2 位）· {value.No}";
         _ = LoadDetailAsync(value.Id);
     }
@@ -82,8 +115,15 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
     private async Task LoadDetailAsync(long equipmentId)
     {
         var positions = await _service.GetPositionsAsync(equipmentId);
+        _positionRows.Clear();
         Positions.Clear();
-        foreach (var p in positions) Positions.Add(p);
+        foreach (var p in positions)
+        {
+            var live = _store.GetPosition(equipmentId, p.Id);
+            var row = new EquipmentPositionRowVm(p.Id, p.Name, p.Code, live?.State ?? PositionState.Offline);
+            _positionRows[p.Id] = row;
+            Positions.Add(row);
+        }
 
         var binds = await _service.GetFrameBindingsAsync(equipmentId);
         FrameBindings.Clear();
@@ -217,4 +257,39 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
             HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
         }
     }
+}
+
+/// <summary>机台详情加工位行（实时状态来自 ISignalStateStore）。</summary>
+public sealed partial class EquipmentPositionRowVm : ObservableObject
+{
+    public EquipmentPositionRowVm(long id, string name, string code, PositionState state)
+    {
+        Id = id;
+        Name = name;
+        Code = code;
+        _state = state;
+    }
+
+    public long Id { get; }
+    public string Name { get; }
+    public string Code { get; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StateDisplay))]
+    [NotifyPropertyChangedFor(nameof(StateBadge))]
+    private PositionState _state;
+
+    public string StateDisplay => PositionStateNames.ToDisplay(State);
+    public string StateBadge => State switch
+    {
+        PositionState.Offline => "offline",
+        PositionState.Alarm => "alarm",
+        PositionState.Processing => "run",
+        PositionState.DoneOk => "ok",
+        PositionState.DoneNg => "ng",
+        PositionState.Dispatching or PositionState.Transporting => "run",
+        _ => "idle"
+    };
+
+    public void Update(PositionState state) => State = state;
 }

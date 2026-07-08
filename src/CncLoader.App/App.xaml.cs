@@ -26,9 +26,17 @@ public partial class App : Application
 {
     private IHost? _host;
     private Microsoft.Extensions.Logging.ILogger? _logger;
+    private SingleInstanceGuard? _singleInstance;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        _singleInstance = SingleInstanceGuard.TryAcquire();
+        if (_singleInstance is null)
+        {
+            Shutdown(0);
+            return;
+        }
+
         base.OnStartup(e);
         TrySetConsoleUtf8();
         RegisterGlobalExceptionHandlers();
@@ -191,7 +199,11 @@ public partial class App : Application
             }
         }
         catch (Exception ex) { Log.Logger.Warning(ex, "停止主机异常"); }
-        finally { Log.CloseAndFlush(); }
+        finally
+        {
+            _singleInstance?.Dispose();
+            Log.CloseAndFlush();
+        }
         base.OnExit(e);
     }
 }

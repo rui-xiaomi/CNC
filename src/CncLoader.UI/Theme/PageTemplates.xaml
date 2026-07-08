@@ -324,7 +324,11 @@
                                     <DataGridTextColumn Header="redo" Binding="{Binding RedoCount}" Width="50"/>
                                     <DataGridTextColumn Header="落库" Binding="{Binding SendTime, StringFormat=HH:mm:ss}" Width="80"/>
                                     <DataGridTextColumn Header="取消处理" Binding="{Binding CancelManualFlag, Converter={StaticResource CancelFlagConv}}" Width="80"/>
-                                    <DataGridTextColumn Header="错误" Binding="{Binding ErrorMsg}" Width="*"/>
+                                    <DataGridTextColumn Header="错误" Binding="{Binding ErrorMsg}" Width="*" MinWidth="100">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>
@@ -364,8 +368,12 @@
                                         <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style></DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
                                     <DataGridTextColumn Header="耗时" Binding="{Binding CostMs}" Width="60"/>
-                                    <DataGridTextColumn Header="请求" Binding="{Binding RequestBody}" Width="*">
-                                        <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="FontSize" Value="11"/></Style></DataGridTextColumn.ElementStyle>
+                                    <DataGridTextColumn Header="请求" Binding="{Binding RequestBody}" Width="*" MinWidth="120">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
+                                                <Setter Property="FontSize" Value="11"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
@@ -514,9 +522,9 @@
                                     <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Header="扫码内容" Binding="{Binding Content}" Width="*">
+                            <DataGridTextColumn Header="扫码内容" Binding="{Binding Content}" Width="*" MinWidth="100">
                                 <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}"/>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                         </DataGrid.Columns>
@@ -567,7 +575,11 @@
                                     </DataGridTextColumn>
                                     <DataGridTextColumn Header="级别" Binding="{Binding Level}" Width="60"/>
                                     <DataGridTextColumn Header="类型" Binding="{Binding AlarmType}" Width="120"/>
-                                    <DataGridTextColumn Header="消息" Binding="{Binding Message}" Width="*"/>
+                                    <DataGridTextColumn Header="消息" Binding="{Binding Message}" Width="*" MinWidth="120">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
                                     <DataGridTextColumn Header="状态" Binding="{Binding State}" Width="80"/>
                                 </DataGrid.Columns>
                             </DataGrid>
@@ -598,9 +610,9 @@
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
                                     <DataGridTextColumn Header="级别" Binding="{Binding Level}" Width="55"/>
-                                    <DataGridTextColumn Header="内容" Binding="{Binding Text}" Width="*">
+                                    <DataGridTextColumn Header="内容" Binding="{Binding Text}" Width="*" MinWidth="120">
                                         <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}"/>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
                                 </DataGrid.Columns>
@@ -662,15 +674,19 @@
                                         <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
-                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                                 <DataGridTextColumn Header="扫码枪" Binding="{Binding ScanEnabled, Converter={StaticResource YesNoConv}}" Width="64"/>
                                 <DataGridTextColumn Header="AGV" Binding="{Binding AgvText}" Width="70"/>
                                 <DataGridTemplateColumn Header="状态" Width="100" CellTemplate="{StaticResource EnabledBadge}"/>
-                                <DataGridTemplateColumn Header="操作" Width="80">
+                                <DataGridTemplateColumn Header="操作" Width="Auto" MinWidth="88">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <Button Content="删除" Style="{StaticResource DangerButton}" Height="22"
-                                                    Padding="8,0" FontSize="11" Margin="6,0"
+                                                    Padding="8,0" FontSize="11" Margin="4,0"
                                                     Command="{Binding DataContext.DeleteLineCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                     CommandParameter="{Binding}"/>
                                         </DataTemplate>
@@ -788,7 +804,11 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="所属线体" Binding="{Binding LineName}" Width="*"/>
+                            <DataGridTextColumn Header="所属线体" Binding="{Binding LineName}" Width="*" MinWidth="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
                             <DataGridTextColumn Header="自动发送" Binding="{Binding AutoSend, Converter={StaticResource YesNoConv}}" Width="80"/>
                             <DataGridTextColumn Header="优先级" Binding="{Binding Prior}" Width="64">
                                 <DataGridTextColumn.ElementStyle>
@@ -796,11 +816,11 @@
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                             <DataGridTemplateColumn Header="状态" Width="110" CellTemplate="{StaticResource EnabledBadge}"/>
-                            <DataGridTemplateColumn Header="操作" Width="80">
+                            <DataGridTemplateColumn Header="操作" Width="Auto" MinWidth="88">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Button Content="删除" Style="{StaticResource DangerButton}" Height="22"
-                                                Padding="8,0" FontSize="11" Margin="6,0"
+                                                Padding="8,0" FontSize="11" Margin="4,0"
                                                 Command="{Binding DataContext.DeleteCraftCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                 CommandParameter="{Binding}"/>
                                     </DataTemplate>
@@ -906,16 +926,16 @@
                             </DataGridTextColumn>
                             <DataGridTextColumn Header="类型" Binding="{Binding TypeText}" Width="80"/>
                             <DataGridTextColumn Header="所属工序" Binding="{Binding CraftName}" Width="100"/>
-                            <DataGridTextColumn Header="所属 PLC" Binding="{Binding PlcText}" Width="*">
+                            <DataGridTextColumn Header="所属 PLC" Binding="{Binding PlcText}" Width="*" MinWidth="80">
                                 <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}"/>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                                 <DataGridTemplateColumn Header="状态" Width="110" CellTemplate="{StaticResource EnabledBadge}"/>
-                                <DataGridTemplateColumn Header="操作" Width="120">
+                                <DataGridTemplateColumn Header="操作" Width="Auto" MinWidth="136">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <StackPanel Orientation="Horizontal" Margin="6,0" VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal" Margin="4,0" VerticalAlignment="Center">
                                                 <Button Content="编辑" Style="{StaticResource GhostButton}" Height="22"
                                                         Padding="8,0" FontSize="11"
                                                         Command="{Binding DataContext.EditEquipmentCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
@@ -949,7 +969,11 @@
                         <DataGrid ItemsSource="{Binding Positions}" Style="{StaticResource DataGridCompact}"
                                   RowHeight="32" IsHitTestVisible="False">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                                 <DataGridTextColumn Header="编码" Binding="{Binding Code}" Width="120">
                                     <DataGridTextColumn.ElementStyle>
                                         <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
@@ -961,8 +985,9 @@
                                             <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
                                                     Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center">
                                                 <StackPanel Orientation="Horizontal">
-                                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0" Stroke="{StaticResource IdleBrush}" StrokeThickness="1.5"/>
-                                                    <TextBlock Text="{Binding StateText}" FontSize="12"/>
+                                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                                             Fill="{Binding StateBadge, Converter={StaticResource StateBadgeBrushConv}}"/>
+                                                    <TextBlock Text="{Binding StateDisplay}" FontSize="12"/>
                                                 </StackPanel>
                                             </Border>
                                         </DataTemplate>
@@ -1052,7 +1077,11 @@
                         <DataGrid ItemsSource="{Binding Frames}" SelectedItem="{Binding SelectedFrame}"
                                   Style="{StaticResource DataGridCompact}" RowHeight="34" MaxHeight="200">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                                 <DataGridTextColumn Header="识别码" Binding="{Binding IdentifyCode}" Width="110">
                                     <DataGridTextColumn.ElementStyle>
                                         <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style>
@@ -1103,12 +1132,16 @@
                         <DataGrid ItemsSource="{Binding Bindings}" Style="{StaticResource DataGridCompact}"
                                   RowHeight="34" MaxHeight="160">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="机台" Binding="{Binding EquipmentDisplay}" Width="*"/>
-                                <DataGridTemplateColumn Header="角色" Width="110">
+                                <DataGridTextColumn Header="机台" Binding="{Binding EquipmentDisplay}" Width="*" MinWidth="100">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTemplateColumn Header="角色" Width="Auto" MinWidth="100">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
-                                                    Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center">
+                                                    Padding="6,1" HorizontalAlignment="Left" Margin="4,0" VerticalAlignment="Center">
                                                 <StackPanel Orientation="Horizontal">
                                                     <Ellipse Width="8" Height="8" Margin="0,0,6,0"
                                                              Fill="{Binding IsUpload, Converter={StaticResource RoleBrushConv}}"/>
@@ -1118,11 +1151,11 @@
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTemplateColumn Header="操作" Width="72">
+                                <DataGridTemplateColumn Header="操作" Width="Auto" MinWidth="88">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <Button Content="解绑" Style="{StaticResource DangerButton}" Height="24" Padding="8,0"
-                                                    FontSize="12" Margin="8,0" VerticalAlignment="Center"
+                                                    FontSize="12" Margin="4,0" VerticalAlignment="Center"
                                                     Command="{Binding DataContext.UnbindCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                     CommandParameter="{Binding}"/>
                                         </DataTemplate>
@@ -1345,10 +1378,10 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTemplateColumn Header="操作" Width="*">
+                            <DataGridTemplateColumn Header="操作" Width="Auto" MinWidth="300">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <StackPanel Orientation="Horizontal" Margin="6,0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" Margin="4,0" VerticalAlignment="Center">
                                             <Button Content="连接" Style="{StaticResource GhostButton}" Height="22"
                                                     Padding="8,0" FontSize="11"
                                                     Command="{Binding DataContext.ConnectPlcCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
@@ -1639,7 +1672,7 @@
     </DataTemplate>
 
     <!-- ============================================================
-         监控看板（静态骨架，后续阶段接线实时数据）
+         监控看板（实时：加工位状态 + 当班产量 + 最近加工记录）
          ============================================================ -->
     <DataTemplate DataType="{x:Type p:DashboardViewModel}">
         <Grid Margin="2">
@@ -1753,7 +1786,9 @@
                                 <DataGridTextColumn Header="机台" Binding="{Binding EquipmentId}" Width="54"/>
                                 <DataGridTextColumn Header="工位" Binding="{Binding PositionCode}" Width="70"/>
                                 <DataGridTextColumn Header="电极" Binding="{Binding ElectrodeId}" Width="*" MinWidth="80">
-                                    <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/></Style></DataGridTextColumn.ElementStyle>
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}"/>
+                                    </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
                                 <DataGridTextColumn Header="结果" Binding="{Binding WorkResult}" Width="54"/>
                                 <DataGridTextColumn Header="耗时" Binding="{Binding ElapsedSeconds, StringFormat={}{0}s}" Width="60"/>

@@ -70,6 +70,17 @@
         <Setter Property="BorderBrush" Value="{StaticResource AlarmBrush}"/>
     </Style>
 
+    <!-- 文本列：过长省略，避免挤占操作列 -->
+    <Style x:Key="DataGridCellEllipsis" TargetType="TextBlock">
+        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        <Setter Property="TextWrapping" Value="NoWrap"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <Style x:Key="DataGridCellEllipsisMono" TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}">
+        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+    </Style>
+
     <!-- 表格：统一走 HandyControl 深色基线（与原型一致），仅叠加行为/字体设置。
          旧自定义浅色表格样式与 DataGridColumnHeader 已移除，全局统一。 -->
     <Style x:Key="DataGridCompact" TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
@@ -79,6 +90,8 @@
         <Setter Property="HeadersVisibility" Value="Column"/>
         <Setter Property="FontFamily" Value="{StaticResource FontSans}"/>
         <Setter Property="FontSize" Value="12"/>
+        <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="CanUserResizeColumns" Value="True"/>
     </Style>
 
     <!-- 下拉框 / 文本框：统一走 HandyControl 深色基线 -->

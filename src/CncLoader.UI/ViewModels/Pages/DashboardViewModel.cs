@@ -22,6 +22,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
 
     private readonly Dictionary<(long Eq, long Pos), PositionCardVm> _cards = new();
     private readonly DispatcherTimer _throttle;
+    private readonly DispatcherTimer _statsTimer;
     private volatile bool _positionsDirty;
 
     public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms, IPositionScheduler scheduler)
@@ -42,6 +43,11 @@ public sealed partial class DashboardViewModel : PageViewModelBase
         _throttle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdatePositionsUi(); } };
         _throttle.Start();
 
+        // 2s 轮询：当班 OK/NG、最近加工记录等 DB 指标随生产实时刷新。
+        _statsTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
+        _statsTimer.Tick += (_, _) => _ = RefreshStatsAndRecordsAsync();
+        _statsTimer.Start();
+
         _positionsDirty = true;
         _ = RefreshAsync();
     }
@@ -59,7 +65,13 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     [ObservableProperty] private int _onlineMachines;
     [ObservableProperty] private string _statusMessage = "";
 
-    private void OnStoreChanged(object? sender, PositionStatus ps) => _positionsDirty = true;
+    private void OnStoreChanged(object? sender, PositionStatus ps)
+    {
+        _positionsDirty = true;
+        // 出结果时立即刷新产量统计与加工记录，不必等 2s 轮询。
+        if (ps.State is PositionState.DoneOk or PositionState.DoneNg)
+            _ = RefreshStatsAndRecordsAsync();
+    }
     private void OnStoreChanged(object? sender, MachineStatus ms) => _positionsDirty = true;
 
     // 告警产生时即时刷新未处理数（AlarmRaised 可能在后台线程触发，标量属性 WPF 会自动 marshal）
@@ -75,6 +87,11 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     private async Task RefreshAsync()
     {
         _positionsDirty = true; // 位置由节流器刷新
+        await RefreshStatsAndRecordsAsync();
+    }
+
+    private async Task RefreshStatsAndRecordsAsync()
+    {
         await RefreshStatsAsync();
         await RefreshRecordsAsync();
     }
