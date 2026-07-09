@@ -105,7 +105,11 @@ public sealed class RcsTaskStore : IRcsTaskStore
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
-        if (t is null) return;
+        if (t is null)
+            throw new InvalidOperationException($"任务不存在：{rcsTaskId}");
+        if (t.TaskState != RcsTaskState.Canceled)
+            throw new InvalidOperationException($"仅已取消（CANCELED）任务可确认人工处理，当前状态为 {t.TaskState}");
+        if (t.CancelManualFlag == "1") return; // 幂等
         t.CancelManualFlag = "1";
         await db.SaveChangesAsync(ct);
     }

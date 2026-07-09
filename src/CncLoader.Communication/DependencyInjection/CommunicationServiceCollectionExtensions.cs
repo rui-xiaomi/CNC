@@ -42,17 +42,23 @@ public static class CommunicationServiceCollectionExtensions
         services.AddSingleton<IAgvTestService, AgvTestService>();
         services.AddSingleton<IScanListenerService, ScanListenerService>();
 
-        // Phase 4 RCS 对接：出站客户端（4 接口）+ 任务编排
+        // Phase 4 RCS 对接：运行时配置 + 出站客户端（4 接口）+ 任务编排
+        services.AddSingleton<IRcsRuntimeConfig, RcsRuntimeConfig>();
         services.AddSingleton<IRcsClient>(sp => new RcsClient(
             new System.Net.Http.HttpClient(),
-            sp.GetRequiredService<IOptions<AppOptions>>(),
+            sp.GetRequiredService<IRcsRuntimeConfig>(),
             sp.GetRequiredService<IRcsMessageLog>(),
             sp.GetRequiredService<ILogger<RcsClient>>()));
         services.AddSingleton<IRcsTaskService, RcsTaskService>();
 
+        // 先从库加载连接配置，再启动回调宿主（保证 BootCallback* 已 Capture）
+        services.AddHostedService<RcsConnectionBootstrapper>();
+
         // Phase 4 步骤②：回调处理器 + 内嵌 Kestrel 回调服务端（3 回调 + 幂等去重 + warnCallback 落 ALARM）
         services.AddSingleton<IRcsCallbackProcessor, RcsCallbackProcessor>();
-        services.AddHostedService<RcsCallbackHost>();
+        services.AddSingleton<RcsCallbackHost>();
+        services.AddSingleton<IRcsCallbackListener>(sp => sp.GetRequiredService<RcsCallbackHost>());
+        services.AddHostedService(sp => sp.GetRequiredService<RcsCallbackHost>());
 
         // Phase 4 步骤③：本机 RCS 模拟器（收任务→延时→按失败率/取消率回推 push/scan）。仅 UseSimulator=true 生效。
         services.AddHostedService<RcsSimulator>();

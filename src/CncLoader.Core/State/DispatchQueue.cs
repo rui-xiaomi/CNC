@@ -33,6 +33,8 @@ public sealed record DispatchItem
     public long? DestPositionId { get; init; }
     /// <summary>随件电极码（供入库落账/交接溯源）。</summary>
     public string? ElectrodeId { get; init; }
+    /// <summary>下料结果（true=OK / false=NG）。上料忽略。下料终点（选位/中转/NG/下料架）由单消费者出队后统一决策，故结果随请求入队。</summary>
+    public bool IsOk { get; init; } = true;
 }
 
 /// <summary>上料/下料阶段。</summary>
@@ -76,6 +78,6 @@ public interface IRouteResolver
     Task<(string from, string to)?> ResolveUnloadAsync(long equipmentId, long positionId, CancellationToken ct = default);
     /// <summary>解析加工位 cell 编码（LOCATION_MAP rcsType="cell"）；失败返回 null。</summary>
     Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default);
-    /// <summary>解析料架 cell 编码（LOCATION_MAP FrameId + rcsType="cell"，回退 FRAME-{id}）。</summary>
+    /// <summary>解析料架 cell 编码（LOCATION_MAP FrameId + rcsType="cell"；缺映射返回 null，禁止假码）。</summary>
     Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default);
 }

@@ -31,14 +31,28 @@ public interface ILocationMapService
 public sealed record LocationMapItem
 {
     public long Id { get; init; }
-    /// <summary>EQUIPMENT/POSITION/FRAME/AREA。</summary>
+    /// <summary>EQUIPMENT/POSITION/FRAME/AREA（库内英文码）。</summary>
     public string LocType { get; init; } = "AREA";
     public long? EquipmentId { get; init; }
     public long? PositionId { get; init; }
     public long? FrameId { get; init; }
     public string? LocName { get; init; }
     public string RcsCode { get; init; } = "";
-    /// <summary>shelf/cell/station。</summary>
+    /// <summary>shelf/cell/station（库内英文码）。</summary>
     public string RcsType { get; init; } = "station";
     public string? Remark { get; init; }
+
+    // —— 仅列表展示用（GetAllAsync 填充；Save 忽略）——
+    public string? EquipmentName { get; init; }
+    public string? PositionName { get; init; }
+    public string? FrameName { get; init; }
+
+    public string LocTypeText => LocationDisplayLabels.LocTypeToZh(LocType);
+    public string RcsTypeText => LocationDisplayLabels.RcsTypeToZh(RcsType);
+    public string LocNameText => LocType == "AREA"
+        ? LocationDisplayLabels.AreaNameToZh(LocName)
+        : (LocName ?? "");
+    public string EquipmentText => LocationDisplayLabels.FormatRef(EquipmentName, EquipmentId);
+    public string PositionText => LocationDisplayLabels.FormatRef(PositionName, PositionId);
+    public string FrameText => LocationDisplayLabels.FormatRef(FrameName, FrameId);
 }

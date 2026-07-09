@@ -18,7 +18,32 @@ public sealed class LocationMapService : ILocationMapService
             .Where(x => x.State == "0")
             .OrderBy(x => x.LocType).ThenBy(x => x.RcsCode)
             .ToListAsync(ct);
-        return rows.Select(Map).ToList();
+
+        // 列表中文：机台/工位/料架名（Save 不写这些字段）
+        var eqIds = rows.Where(x => x.EquipmentId is > 0).Select(x => x.EquipmentId!.Value).Distinct().ToList();
+        var posIds = rows.Where(x => x.PositionId is > 0).Select(x => x.PositionId!.Value).Distinct().ToList();
+        var frameIds = rows.Where(x => x.FrameId is > 0).Select(x => x.FrameId!.Value).Distinct().ToList();
+
+        var eqNames = eqIds.Count == 0
+            ? new Dictionary<long, string>()
+            : await db.Equipments.AsNoTracking()
+                .Where(x => eqIds.Contains(x.Id) && x.State == "0")
+                .ToDictionaryAsync(x => x.Id, x => x.EquipmentName, ct);
+        var posNames = posIds.Count == 0
+            ? new Dictionary<long, string>()
+            : await db.Positions.AsNoTracking()
+                .Where(x => posIds.Contains(x.Id) && x.State == "0")
+                .ToDictionaryAsync(x => x.Id, x => x.PositionName, ct);
+        var frameNames = frameIds.Count == 0
+            ? new Dictionary<long, string>()
+            : await db.Frames.AsNoTracking()
+                .Where(x => frameIds.Contains(x.Id) && x.State == "0")
+                .ToDictionaryAsync(x => x.Id, x => x.FrameName, ct);
+
+        return rows.Select(e => Map(e,
+            e.EquipmentId is > 0 && eqNames.TryGetValue(e.EquipmentId.Value, out var en) ? en : null,
+            e.PositionId is > 0 && posNames.TryGetValue(e.PositionId.Value, out var pn) ? pn : null,
+            e.FrameId is > 0 && frameNames.TryGetValue(e.FrameId.Value, out var fn) ? fn : null)).ToList();
     }
 
     public async Task<long> SaveAsync(LocationMapItem item, string? author = null, CancellationToken ct = default)
@@ -97,7 +122,7 @@ public sealed class LocationMapService : ILocationMapService
         return e is null ? null : Map(e);
     }
 
-    private static LocationMapItem Map(LocationMap e) => new()
+    private static LocationMapItem Map(LocationMap e, string? equipmentName = null, string? positionName = null, string? frameName = null) => new()
     {
         Id = e.Id,
         LocType = e.LocType,
@@ -107,6 +132,9 @@ public sealed class LocationMapService : ILocationMapService
         LocName = e.LocName,
         RcsCode = e.RcsCode,
         RcsType = e.RcsType,
-        Remark = e.Remark
+        Remark = e.Remark,
+        EquipmentName = equipmentName,
+        PositionName = positionName,
+        FrameName = frameName
     };
 }

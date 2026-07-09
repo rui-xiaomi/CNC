@@ -5,14 +5,14 @@ namespace CncLoader.Core.Config;
 
 // ===== 线体 =====
 
-/// <summary>线体列表行（对应原型「线体列表」表格列：编码/名称/扫码枪/AGV/状态）。</summary>
+/// <summary>线体列表行（编码/名称/扫码枪/状态）。状态 Enabled 只读展示；RCS 连接在「RCS 任务」页配置，不在此展示。</summary>
 public sealed record WorkLineListItem(
     long Id,
     string Code,
     string Name,
     bool ScanEnabled,
-    string AgvText,
-    bool Enabled);
+    bool Enabled,
+    long AgvId = 0);
 
 /// <summary>线体编辑表单。</summary>
 public sealed class WorkLineEditModel
@@ -102,7 +102,7 @@ public sealed class EquipmentEditModel
 /// <summary>机台当前关联料架（上/下料架的料架 ID，未配置为 null）。</summary>
 public sealed record EquipmentFrameBindingIds(long? UploadFrameId, long? DownloadFrameId);
 
-/// <summary>机台关联料架（上/下料架各一行）。</summary>
+/// <summary>机台关联料架一行（角色含上料/下料/中转/NG）。IsUpload 仅供上料角色着色。</summary>
 public sealed record EquipmentFrameBinding(
     bool IsUpload,
     string RoleText,
@@ -110,23 +110,28 @@ public sealed record EquipmentFrameBinding(
 
 // ===== 料架 =====
 
-/// <summary>料架列表行（名称/识别码/布局/槽位/占用）。</summary>
+/// <summary>料架列表行（名称/识别码/布局/槽位/占用；HasNgRole 供 NG 筛选）。</summary>
 public sealed record FrameListItem(
     long Id,
     string Name,
     string IdentifyCode,
     string LayoutText,
     int SlotTotal,
-    int Occupied);
+    int Occupied,
+    bool HasNgRole = false);
 
-/// <summary>料架-机台绑定行（机台 + 角色：0上料/1下料/2中转/3NG）。BindId 供解绑，EquipmentId/RoleCode 供编辑。</summary>
+/// <summary>料架-机台绑定行（机台 + 角色：0上料/1下料/2中转/3NG）。BindId 供解绑，EquipmentId/RoleCode 供编辑。
+/// BindingText =「机台 · 角色」完整一句，窄栏列表用。</summary>
 public sealed record FrameBindRow(
     long BindId,
     long EquipmentId,
     string EquipmentDisplay,
     bool IsUpload,
     string RoleCode,
-    string RoleText);
+    string RoleText)
+{
+    public string BindingText => $"{EquipmentDisplay} · {RoleText}";
+}
 
 /// <summary>槽位（层 + 层内位 + 电极绑定 + 状态），按层分组渲染。
 /// SlotState：0=空 1=占用 2=锁定 3=预记（第四阶段⑥a 槽位账目）。</summary>

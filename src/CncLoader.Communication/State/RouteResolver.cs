@@ -58,7 +58,8 @@ public sealed class RouteResolver : IRouteResolver
 
     public async Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default)
     {
+        // 仅返回 LOCATION_MAP 真实编码；缺映射返回 null，禁止 FRAME-{id} 假码下发。
         var cell = await _locationMap.ResolveFrameAsync(frameId, "cell", ct);
-        return cell?.RcsCode ?? $"FRAME-{frameId}";
+        return cell?.RcsCode;
     }
 }

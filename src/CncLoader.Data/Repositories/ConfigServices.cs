@@ -17,6 +17,16 @@ internal static class ConfigFlags
     public static string ToState(bool enabled) => enabled ? Active : Disabled;
     public static bool IsTrue(string? flag) => flag == "1";
     public static string ToFlag(bool value) => value ? "1" : "0";
+
+    /// <summary>FRAME_ROLE "0"/"1"/"2"/"3" → 中文角色名（列表展示用）。</summary>
+    public static string FrameRoleText(string roleCode) => roleCode switch
+    {
+        "0" => "上料架",
+        "1" => "下料架",
+        "2" => "中转架",
+        "3" => "NG架",
+        _ => "未知"
+    };
 }
 
 public sealed class WorkLineService : IWorkLineService
@@ -35,8 +45,8 @@ public sealed class WorkLineService : IWorkLineService
             l.WorkLineCode,
             l.WorkMachineLine,
             ConfigFlags.IsTrue(l.ScanState),
-            l.AgvId > 0 ? $"AGV-{l.AgvId}" : "无",
-            ConfigFlags.IsEnabled(l.State))).ToList();
+            ConfigFlags.IsEnabled(l.State),
+            l.AgvId)).ToList();
     }
 
     public async Task<WorkLineEditModel?> GetByIdAsync(long id, CancellationToken ct = default)
@@ -240,7 +250,7 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
             var plc = plcs.FirstOrDefault(p => p.PlcId == e.PlcId);
             var plcText = plc is null
                 ? "未绑定"
-                : $"{plc.PlcName ?? $"PLC-{plc.PlcId}"} · .{plc.PlcComputerIp.Split('.').LastOrDefault()}";
+                : $"{plc.PlcName ?? $"PLC-{plc.PlcId}"} ({plc.PlcComputerIp})";
             return new EquipmentListItem(
                 e.Id,
                 e.EquipmentNo,
@@ -285,14 +295,14 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
             .Where(b => b.EquipmentId == equipmentId && b.State == ConfigFlags.Active).ToListAsync(ct);
         var frames = await db.Frames.AsNoTracking().ToListAsync(ct);
 
-        // 上料架（FRAME_ROLE='0'）在前，下料架（'1'）在后
+        // 按角色排序：上料0 / 下料1 / 中转2 / NG3，全部展示（不再只认上/下料）。
         return binds.OrderBy(b => b.FrameRole).Select(b =>
         {
             var frame = frames.FirstOrDefault(f => f.Id == b.FrameId);
-            var isUpload = b.FrameRole == "0";
+            var role = b.FrameRole ?? "";
             return new EquipmentFrameBinding(
-                isUpload,
-                isUpload ? "上料架" : "下料架",
+                role == "0",
+                ConfigFlags.FrameRoleText(role),
                 frame is null ? "—" : $"{frame.FrameName} ({frame.FrameIdentifyCode})");
         }).ToList();
     }
@@ -528,6 +538,12 @@ public sealed class FrameService : IFrameService
         var frames = await db.Frames.AsNoTracking().Where(f => f.State == ConfigFlags.Active)
             .OrderBy(f => f.Id).ToListAsync(ct);
         var slots = await db.FrameSlots.AsNoTracking().ToListAsync(ct);
+        var ngFrameIds = await db.FrameBinds.AsNoTracking()
+            .Where(b => b.State == ConfigFlags.Active && b.FrameRole == "3")
+            .Select(b => b.FrameId)
+            .Distinct()
+            .ToListAsync(ct);
+        var ngSet = ngFrameIds.ToHashSet();
 
         return frames.Select(f => new FrameListItem(
             f.Id,
@@ -535,7 +551,8 @@ public sealed class FrameService : IFrameService
             f.FrameIdentifyCode,
             $"{f.LayerTotal}×{f.SlotsPerLayer}",
             f.SlotTotal,
-            slots.Count(s => s.FrameId == f.Id && s.SlotState == "1"))).ToList();
+            slots.Count(s => s.FrameId == f.Id && s.SlotState == "1"),
+            ngSet.Contains(f.Id))).ToList();
     }
 
     public async Task<FrameDetail?> GetDetailAsync(long frameId, CancellationToken ct = default)
@@ -559,7 +576,7 @@ public sealed class FrameService : IFrameService
                 eq is null ? "—" : $"{eq.EquipmentName} ({eq.EquipmentNo})",
                 b.FrameRole == "0",
                 b.FrameRole,
-                FrameRoleText(b.FrameRole));
+                ConfigFlags.FrameRoleText(b.FrameRole));
         }).ToList();
 
         var slotItems = slots.Select(s => new SlotItem(
@@ -654,15 +671,6 @@ public sealed class FrameService : IFrameService
         db.FrameBinds.Remove(bind);
         await db.SaveChangesAsync(ct);
     }
-
-    private static string FrameRoleText(string roleCode) => roleCode switch
-    {
-        "0" => "上料架",
-        "1" => "下料架",
-        "2" => "中转架",
-        "3" => "NG架",
-        _ => "未知"
-    };
 
     public async Task<FrameEditModel?> GetFrameForEditAsync(long id, CancellationToken ct = default)
     {

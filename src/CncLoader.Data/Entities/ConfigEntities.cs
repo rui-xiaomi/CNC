@@ -46,7 +46,7 @@ public class WorkLinePlc
     [Column("UPDATETIME")] public DateTime? UpdateTime { get; set; }
 }
 
-/// <summary>线体 AGV 配置 MAS_AUTO_WORKLINE_AGV（仅测试用，口令密文）。</summary>
+/// <summary>线体 AGV/RCS 连接配置 MAS_AUTO_WORKLINE_AGV（v2 正式存 RCS 出站与回调）。</summary>
 [Table("MAS_AUTO_WORKLINE_AGV")]
 public class WorkLineAgv
 {
@@ -60,6 +60,13 @@ public class WorkLineAgv
     [Column("AGV_COMPUTER_PORT")] public int? AgvComputerPort { get; set; }
     [Column("AGV_COMPUTER_USRNAME")] public string? AgvComputerUsername { get; set; }
     [Column("AGV_COMPUTER_PASSWORD")] public string? AgvComputerPassword { get; set; }
+    [Column("RCS_BASE_URL")] public string? RcsBaseUrl { get; set; }
+    [Column("RCS_CLIENT_CODE")] public string? RcsClientCode { get; set; }
+    [Column("RCS_CALLBACK_HOST")] public string? RcsCallbackHost { get; set; }
+    [Column("RCS_CALLBACK_PORT")] public int? RcsCallbackPort { get; set; }
+    [Column("RCS_TIMEOUT_MS")] public int? RcsTimeoutMs { get; set; }
+    [Column("RCS_MAX_RETRIES")] public int? RcsMaxRetries { get; set; }
+    [Column("RCS_POLL_INTERVAL_MS")] public int? RcsPollIntervalMs { get; set; }
     [Column("STATE")] public string State { get; set; } = "0";
     [Column("AUTHOR")] public string? Author { get; set; }
     [Column("UPDATETIME")] public DateTime? UpdateTime { get; set; }

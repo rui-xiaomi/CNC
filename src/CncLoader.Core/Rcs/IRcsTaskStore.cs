@@ -24,7 +24,7 @@ public interface IRcsTaskStore
     /// </summary>
     Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default);
 
-    /// <summary>标记取消后人工处理已确认。</summary>
+    /// <summary>标记取消后人工处理已确认。仅 TASK_STATE=CANCELED 允许；任务不存在或状态不符抛 InvalidOperationException。</summary>
     Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);
 
     /// <summary>按 taskId 取一行（不存在返回 null）。</summary>

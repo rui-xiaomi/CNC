@@ -38,7 +38,7 @@ public interface IRcsTaskService
     /// <summary>按条件查询报文流水（方向/接口/taskId/条数），供报文流水页筛选。</summary>
     Task<IReadOnlyList<RcsMsgRow>> QueryMessagesAsync(RcsMsgQuery query, CancellationToken ct = default);
 
-    /// <summary>标记已取消任务的人工处理已确认（CANCEL_MANUAL_FLAG=1，解锁相关点位派工由步骤⑤状态机处理）。</summary>
+    /// <summary>标记已取消任务的人工处理已确认（CANCEL_MANUAL_FLAG=1）。仅 CANCELED 允许；否则抛异常。</summary>
     Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);
 }
 

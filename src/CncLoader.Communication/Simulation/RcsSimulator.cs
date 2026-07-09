@@ -41,15 +41,17 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
     };
 
     private readonly RcsOptions _options;
+    private readonly IRcsRuntimeConfig _runtime;
     private readonly ILogger<RcsSimulator> _logger;
     private readonly ConcurrentDictionary<string, SimTask> _tasks = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly HttpClient _callbackHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private WebApplication? _app;
 
-    public RcsSimulator(IOptions<AppOptions> options, ILogger<RcsSimulator> logger)
+    public RcsSimulator(IOptions<AppOptions> options, IRcsRuntimeConfig runtime, ILogger<RcsSimulator> logger)
     {
         _options = options.Value.Rcs;
+        _runtime = runtime;
         _logger = logger;
     }
 
@@ -62,10 +64,10 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
         }
 
         int listenPort;
-        try { listenPort = new Uri(_options.BaseUrl).Port; }
+        try { listenPort = new Uri(_runtime.BaseUrl).Port; }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "RCS 模拟器无法从 BaseUrl 解析端口：{BaseUrl}", _options.BaseUrl);
+            _logger.LogError(ex, "RCS 模拟器无法从 BaseUrl 解析端口：{BaseUrl}", _runtime.BaseUrl);
             return;
         }
 
@@ -79,7 +81,7 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
             _app = app;
             await app.StartAsync(cancellationToken);
             _logger.LogInformation("RCS 模拟器已启动，监听 :{Port}（回推至 {CbHost}:{CbPort}，延时 {Min}~{Max}ms 失败率 {Fail:P0} 取消率 {Cancel:P0}）",
-                listenPort, CallbackHost(), _options.CallbackPort,
+                listenPort, CallbackHost(), _runtime.BootCallbackPort,
                 _options.SimulatorMinDelayMs, _options.SimulatorMaxDelayMs,
                 _options.SimulatorFailureRate, _options.SimulatorCancelRate);
         }
@@ -229,8 +231,15 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
     {
         var products = new List<string>();
         if (errorCode == RcsErrorCode.Success)
+        {
+            // 孔位三位数：百位=面/层，后两位=层内位；连续扫时层内位递增，满 99 进下一层
+            var hole = task.PosStart > 0 ? task.PosStart : 101;
             for (var i = 0; i < Math.Max(1, task.Count); i++)
-                products.Add($"SIM{task.Code}-{task.PosStart + i}");
+            {
+                products.Add($"SIM{task.Code}-{hole}");
+                hole = NextIdentifyHole(hole);
+            }
+        }
 
         var payload = new
         {
@@ -251,7 +260,7 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
 
     private async Task PostCallbackAsync(string path, object payload, string taskId, int errorCode)
     {
-        var url = $"http://{CallbackHost()}:{_options.CallbackPort}{path}";
+        var url = $"http://{CallbackHost()}:{_runtime.BootCallbackPort}{path}";
         var body = JsonSerializer.Serialize(payload, JsonOpt);
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
         using var resp = await _callbackHttp.PostAsync(url, content, _cts.Token);
@@ -259,9 +268,17 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
             path, taskId, errorCode, (int)resp.StatusCode);
     }
 
-    /// <summary>回推目标 host：回调宿主可能绑定 0.0.0.0，回推走本机环回。</summary>
+    /// <summary>回推目标 host：任意网卡/非法 Host 走本机环回。</summary>
     private string CallbackHost()
-        => _options.CallbackHost is "0.0.0.0" or "" or null ? "127.0.0.1" : _options.CallbackHost;
+    {
+        var h = _runtime.BootCallbackHost;
+        if (string.IsNullOrWhiteSpace(h)) return "127.0.0.1";
+        if (!System.Net.IPAddress.TryParse(h, out var ip)) return "127.0.0.1";
+        if (ip.Equals(System.Net.IPAddress.Any) || ip.Equals(System.Net.IPAddress.IPv6Any)
+            || System.Net.IPAddress.IsLoopback(ip))
+            return "127.0.0.1";
+        return ip.ToString();
+    }
 
     private int RandomDelay()
     {
@@ -286,6 +303,17 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
         var posStart = parts.Length > 0 && int.TryParse(parts[0], out var p) ? p : 101;
         var count = parts.Length > 1 && int.TryParse(parts[1], out var c) ? c : 1;
         return (posStart, count);
+    }
+
+    /// <summary>identify 孔位递增：同层位号 +1，位号到 99 后进下一层从 01 起。</summary>
+    private static int NextIdentifyHole(int hole)
+    {
+        if (hole < 100) hole = 100 + Math.Max(1, hole);
+        var layer = hole / 100;
+        var pos = hole % 100;
+        pos++;
+        if (pos > 99) { layer++; pos = 1; }
+        return layer * 100 + pos;
     }
 
     private static string? ReadFirstPositionCode(string raw)

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using CncLoader.Core.Rcs;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -8,14 +7,15 @@ namespace CncLoader.Data.Repositories;
 
 /// <summary>
 /// 槽位账目服务实现（第四阶段⑥a）。
-/// 预记用 SLOT_STATE='3' + REMARK=taskId 跟踪（避免 DB schema 变更）；同架并发用内存 SemaphoreSlim 互斥。
-/// 落账后 REMARK 保留 taskId 作为幂等判定与审计（BindSource='RCS_CONFIRMED' 区分已落账）。
+/// 预记用 SLOT_STATE='3' + REMARK=taskId 跟踪（避免 DB schema 变更）。
+/// 选槽用"候选选取 + 带条件原子 UPDATE（WHERE SLOT_STATE=期望态）+ 影响行数校验"——
+/// 即使有第二写入者（另一次派工/人工校正/盘点回写）也不会双占（Layer 2 数据兜底）。
+/// 落账后 REMARK 保留 taskId 作为幂等判定与审计（BindSource='CONFIRMED' 区分已落账）。
 /// </summary>
 public sealed class SlotAccountService : ISlotAccountService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
     private readonly ILogger<SlotAccountService> _logger;
-    private readonly ConcurrentDictionary<long, SemaphoreSlim> _frameLocks = new();
 
     public SlotAccountService(IDbContextFactory<CncDbContext> factory, ILogger<SlotAccountService> logger)
     {
@@ -30,53 +30,66 @@ public sealed class SlotAccountService : ISlotAccountService
     public async Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? electrodeId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;
-        var gate = _frameLocks.GetOrAdd(frameId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
-        try
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = DateTime.Now;
+        // 候选（首个空槽）+ 带条件原子 UPDATE（WHERE SLOT_STATE='0'）。影响行数=0 表示该槽已被并发写入者占用 → 重选下一个候选。
+        while (true)
         {
-            await using var db = await _factory.CreateDbContextAsync(ct);
-            var slot = await db.FrameSlots.AsTracking()
+            ct.ThrowIfCancellationRequested();
+            var slot = await db.FrameSlots.AsNoTracking()
                 .Where(s => s.FrameId == frameId && s.SlotState == SlotStates.Empty)
                 .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
+                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer })
                 .FirstOrDefaultAsync(ct);
             if (slot is null) return null;
 
-            slot.SlotState = SlotStates.Reserved;
-            slot.ElectrodeId = electrodeId;
-            slot.Remark = taskId;
-            slot.BindSource = ReservePut;
-            slot.BindTime = DateTime.Now;
-            await db.SaveChangesAsync(ct);
-            _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
-            return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, electrodeId);
+            var affected = await db.FrameSlots
+                .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Empty)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.SlotState, SlotStates.Reserved)
+                    .SetProperty(s => s.ElectrodeId, electrodeId)
+                    .SetProperty(s => s.Remark, taskId)
+                    .SetProperty(s => s.BindSource, ReservePut)
+                    .SetProperty(s => s.BindTime, (DateTime?)now), ct);
+            if (affected == 1)
+            {
+                _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
+                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, electrodeId);
+            }
+            _logger.LogDebug("入库预记料架 {Frame} 槽 {Slot} 被并发占用，重选", frameId, slot.SlotNo);
         }
-        finally { gate.Release(); }
     }
 
     public async Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;
-        var gate = _frameLocks.GetOrAdd(frameId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
-        try
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = DateTime.Now;
+        // 候选（首个占用槽）+ 带条件原子 UPDATE（WHERE SLOT_STATE='1'）。影响行数=0 表示该槽已被并发写入者取走 → 重选下一个候选，直到成功或无占用槽（无料）。
+        while (true)
         {
-            await using var db = await _factory.CreateDbContextAsync(ct);
-            var slot = await db.FrameSlots.AsTracking()
+            ct.ThrowIfCancellationRequested();
+            var slot = await db.FrameSlots.AsNoTracking()
                 .Where(s => s.FrameId == frameId && s.SlotState == SlotStates.Occupied)
                 .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
+                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer, s.ElectrodeId })
                 .FirstOrDefaultAsync(ct);
             if (slot is null) return null;
 
-            var electrodeId = slot.ElectrodeId;
-            slot.SlotState = SlotStates.Reserved;
-            slot.Remark = taskId;
-            slot.BindSource = ReserveTake;
-            slot.BindTime = DateTime.Now;
-            await db.SaveChangesAsync(ct);
-            _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
-            return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, electrodeId);
+            var affected = await db.FrameSlots
+                .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Occupied)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.SlotState, SlotStates.Reserved)
+                    .SetProperty(s => s.Remark, taskId)
+                    .SetProperty(s => s.BindSource, ReserveTake)
+                    .SetProperty(s => s.BindTime, (DateTime?)now), ct);
+            if (affected == 1)
+            {
+                _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, slot.ElectrodeId);
+                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.ElectrodeId);
+            }
+            _logger.LogDebug("取料预记料架 {Frame} 槽 {Slot} 被并发取走，重选", frameId, slot.SlotNo);
         }
-        finally { gate.Release(); }
     }
 
     public async Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default)
@@ -239,40 +252,66 @@ public sealed class SlotAccountService : ISlotAccountService
     public async Task<int> CorrectFromInventoryAsync(long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var slots = await db.FrameSlots.AsTracking().Where(s => s.FrameId == frameId).OrderBy(s => s.SlotNo).ToListAsync(ct);
-        if (slots.Count == 0) return 0;
+        // 按层→层内位物理顺序对齐 identifyQR「按下发孔位顺序」回扫结果
+        var slots = await db.FrameSlots.AsTracking()
+            .Where(s => s.FrameId == frameId)
+            .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
+            .ToListAsync(ct);
+        if (slots.Count == 0 || products.Count == 0) return 0;
+
+        var (startLayer, startPos) = DecodeIdentifyHole(posStart);
+        var startIdx = slots.FindIndex(s => s.LayerNo == startLayer && s.PosInLayer == startPos);
+        if (startIdx < 0)
+        {
+            _logger.LogWarning("盘点校正料架 {Frame} 起始孔位 {Hole}（层{L}位{P}）无对应槽位，跳过",
+                frameId, posStart, startLayer, startPos);
+            return 0;
+        }
 
         var now = DateTime.Now;
         var corrected = 0;
-        // posStart 是孔位编号（百位为面），简化为按 SlotNo 从 posStart 起的 count 个槽位
-        var startIdx = Math.Max(0, posStart - 1);
-        for (var i = 0; i < slots.Count; i++)
+        for (var i = 0; i < products.Count; i++)
         {
-            var inRange = i >= startIdx && i < startIdx + products.Count;
-            if (inRange)
+            var idx = startIdx + i;
+            if (idx >= slots.Count) break;
+            var slot = slots[idx];
+            var code = products[i];
+            if (!string.IsNullOrWhiteSpace(code))
             {
-                var code = products[i - startIdx];
-                if (!string.IsNullOrWhiteSpace(code))
-                {
-                    slots[i].ElectrodeId = code;
-                    slots[i].SlotState = SlotStates.Occupied;
-                    slots[i].BindSource = "RCS_QR";
-                    slots[i].BindTime = now;
-                    corrected++;
-                }
-                else
-                {
-                    // 扫得空码 → 该槽位清空（盘点发现空位）
-                    slots[i].ElectrodeId = null;
-                    slots[i].SlotState = SlotStates.Empty;
-                }
+                slot.ElectrodeId = code;
+                slot.SlotState = SlotStates.Occupied;
+                slot.BindSource = "RCS_QR";
+                slot.BindTime = now;
+                corrected++;
             }
-            slots[i].LastVerifyTime = now;
-            slots[i].UpdateTime = now;
+            else
+            {
+                // 扫得空码 → 该槽位清空（盘点发现空位）
+                slot.ElectrodeId = null;
+                slot.SlotState = SlotStates.Empty;
+            }
+            slot.LastVerifyTime = now;
+            slot.UpdateTime = now;
+        }
+        // 整架打上本次盘点新鲜度（范围外槽位电极不变）
+        foreach (var s in slots)
+        {
+            s.LastVerifyTime = now;
+            s.UpdateTime = now;
         }
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("盘点校正料架 {Frame} 起始 {Start} 数 {N} → 校正 {C} 个电极", frameId, posStart, products.Count, corrected);
+        _logger.LogInformation("盘点校正料架 {Frame} 起始孔位 {Start}（层{L}位{P}）数 {N} → 校正 {C} 个电极",
+            frameId, posStart, startLayer, startPos, products.Count, corrected);
         return corrected;
+    }
+
+    /// <summary>identifyQR 孔位：三位数百位=面/层、后两位=层内位（101→1层1位）。&lt;100 兼容为第 1 面层内位。</summary>
+    private static (int layer, int pos) DecodeIdentifyHole(int hole)
+    {
+        if (hole < 100) return (1, Math.Max(1, hole));
+        var layer = hole / 100;
+        var pos = hole % 100;
+        return (Math.Max(1, layer), Math.Max(1, pos));
     }
 
     public async Task<IReadOnlyList<SlotRecord>> GetSlotsAsync(long frameId, CancellationToken ct = default)

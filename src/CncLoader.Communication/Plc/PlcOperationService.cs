@@ -32,6 +32,22 @@ public sealed class PlcOperationService : IPlcOperationService
         var points = readOnlySignals ? allPoints.Where(p => !p.IsWrite).ToList() : allPoints.ToList();
         var results = new List<PlcReadResult>(points.Count);
 
+        // 未连接：整批失败，只告警一次（避免每个寄存器刷屏 Growl）。
+        if (!client.IsConnected)
+        {
+            foreach (var p in points)
+            {
+                results.Add(new PlcReadResult(
+                    null, SignalLabels.Get(p.Signal), null, p.RegisterAddress, 0,
+                    "未连接", false, 0, $"PLC {plcId} 未连接"));
+            }
+            if (points.Count > 0)
+                await _alarms.RaisePlcAlarmAsync(plcId, $"PLC#{plcId} 未连接，跳过读取 {points.Count} 个点位");
+            return results;
+        }
+
+        string? firstError = null;
+        var failCount = 0;
         foreach (var p in points)
         {
             var sw = Stopwatch.StartNew();
@@ -47,12 +63,17 @@ public sealed class PlcOperationService : IPlcOperationService
             }
             catch (Exception ex)
             {
+                failCount++;
+                firstError ??= ex.Message;
                 results.Add(new PlcReadResult(
                     null, SignalLabels.Get(p.Signal), null, p.RegisterAddress, 0,
                     "读取失败", false, (int)sw.ElapsedMilliseconds, ex.Message));
-                await _alarms.RaisePlcAlarmAsync(plcId, $"读 {p.RegisterAddress} 失败：{ex.Message}");
             }
         }
+
+        if (failCount > 0)
+            await _alarms.RaisePlcAlarmAsync(plcId, $"读点位失败 {failCount}/{points.Count}：{firstError}");
+
         return results;
     }
 

@@ -8,6 +8,9 @@ namespace CncLoader.Data.Repositories;
 public sealed class AlarmEventService : IAlarmEventService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
+    private readonly object _plcAlarmGate = new();
+    private readonly Dictionary<long, DateTime> _lastPlcAlarmAt = new();
+    private static readonly TimeSpan PlcAlarmThrottle = TimeSpan.FromSeconds(30);
 
     public AlarmEventService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
 
@@ -16,6 +19,15 @@ public sealed class AlarmEventService : IAlarmEventService
 
     public async Task RaisePlcAlarmAsync(long plcId, string message, string level = "1", CancellationToken ct = default)
     {
+        // 同 PLC 30s 内只落库+弹一次，避免连接/编辑后读点位刷屏。
+        lock (_plcAlarmGate)
+        {
+            var now = DateTime.UtcNow;
+            if (_lastPlcAlarmAt.TryGetValue(plcId, out var last) && now - last < PlcAlarmThrottle)
+                return;
+            _lastPlcAlarmAt[plcId] = now;
+        }
+
         await using var db = await _factory.CreateDbContextAsync(ct);
         var eq = await db.Equipments.AsNoTracking()
             .FirstOrDefaultAsync(e => e.PlcId == plcId && e.State == "0", ct);
@@ -25,7 +37,7 @@ public sealed class AlarmEventService : IAlarmEventService
             EquipmentId = eq?.Id,
             AlarmType = "PLC_COMM",
             AlarmLevel = level,
-            AlarmMsg = message,
+            AlarmMsg = message.Length > 500 ? message[..500] : message,
             AlarmState = "0",
             CreateTime = DateTime.Now
         };
@@ -33,7 +45,7 @@ public sealed class AlarmEventService : IAlarmEventService
         await db.SaveChangesAsync(ct);
 
         var row = new AlarmRow(entity.Id, entity.CreateTime ?? DateTime.Now,
-            level == "2" ? "严重" : "警告", message, "未处理", "PLC_COMM");
+            level == "2" ? "严重" : "警告", entity.AlarmMsg, "未处理", "PLC_COMM");
         AlarmRaised?.Invoke(this, row);
     }
 

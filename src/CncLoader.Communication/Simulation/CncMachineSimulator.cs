@@ -49,10 +49,11 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
         _locationMap = locationMap;
         _useSimulator = options.Value.Plc.UseSimulator;
         _ngRate = Math.Clamp(options.Value.Rcs.SimulatorNgRate, 0.0, 1.0);
+        SkipMaterialArrival = options.Value.Rcs.SimulatorSkipMaterialArrival;
         _logger = logger;
     }
 
-    /// <summary>演示注入：true=上料完成时不置 HasMat=ON（模拟 RCS 报完成但工件未到位），用于验证 PLC 复核收口告警。</summary>
+    /// <summary>演示注入：true=上料完成时不置 HasMat=ON（模拟 RCS 报完成但工件未到位），用于验证 PLC 复核收口告警。可由 appsettings <c>Rcs.SimulatorSkipMaterialArrival</c> 启动时注入。</summary>
     public bool SkipMaterialArrival { get; set; }
 
     public async Task StartAsync(CancellationToken cancellationToken)

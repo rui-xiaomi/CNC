@@ -27,6 +27,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
     private readonly IAlarmEventService _alarms;
     private readonly RcsCallbackNotifier _notifier;
     private readonly RcsOptions _options;
+    private readonly IRcsRuntimeConfig _runtime;
     private readonly ILogger<RcsTaskTracker> _logger;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
@@ -42,6 +43,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         IAlarmEventService alarms,
         RcsCallbackNotifier notifier,
         IOptions<AppOptions> options,
+        IRcsRuntimeConfig runtime,
         ILogger<RcsTaskTracker> logger)
     {
         _taskSvc = taskSvc;
@@ -49,6 +51,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         _alarms = alarms;
         _notifier = notifier;
         _options = options.Value.Rcs;
+        _runtime = runtime;
         _logger = logger;
     }
 
@@ -62,8 +65,8 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
 
         _notifier.TaskStatusReceived += OnTaskStatusReceived;
         _loopTask = Task.Run(() => PollLoopAsync(_cts.Token));
-        _logger.LogInformation("RCS 任务跟踪器已启动（轮询 {Ms}ms，自动 redo 上限 {Max}）",
-            _options.PollIntervalMs, _options.MaxAutoRedo);
+        _logger.LogInformation("RCS 任务跟踪器已启动（轮询初值 {Ms}ms，自动 redo 上限 {Max}）",
+            _runtime.PollIntervalMs, _options.MaxAutoRedo);
         return Task.CompletedTask;
     }
 
@@ -85,7 +88,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
             try { await PollOnceAsync(ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "RCS 跟踪器轮询异常"); }
 
-            try { await Task.Delay(_options.PollIntervalMs, ct); }
+            try { await Task.Delay(_runtime.PollIntervalMs, ct); }
             catch (OperationCanceledException) { break; }
         }
     }

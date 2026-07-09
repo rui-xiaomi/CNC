@@ -111,7 +111,9 @@ public sealed class InventorySchedulerService : IHostedService, IAsyncDisposable
     private async Task InventoryOneAsync(long frameId, int slotTotal, CancellationToken ct)
     {
         var count = slotTotal > 0 ? slotTotal : 1;
-        var taskId = await _inventory.StartInventoryAsync(frameId, 1, count, "inventory-scheduler", ct);
+        // AUTHOR 列 VARCHAR(15)，不可用超长系统名（曾用 inventory-scheduler 落库失败）。
+        // 起始孔位 101 = 1 层 1 位（identifyQR 三位数、百位为面）
+        var taskId = await _inventory.StartInventoryAsync(frameId, 101, count, "inv-auto", ct);
         if (string.IsNullOrEmpty(taskId))
         {
             _logger.LogWarning("定期盘点：料架 {Frame} 发起失败，跳过", frameId);

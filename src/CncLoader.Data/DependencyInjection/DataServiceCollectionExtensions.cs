@@ -45,6 +45,7 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<IRcsMessageLog, RcsMessageLog>();
         services.AddSingleton<IRcsTaskStore, RcsTaskStore>();
         services.AddSingleton<ILocationMapService, LocationMapService>();
+        services.AddSingleton<IRcsConnectionConfigService, RcsConnectionConfigService>();
 
         // Phase 4 步骤⑥a：槽位账目（预记/落账/回滚 + 同架并发互斥 + 人工校正/反查）
         services.AddSingleton<ISlotAccountService, SlotAccountService>();

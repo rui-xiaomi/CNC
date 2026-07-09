@@ -95,6 +95,9 @@ public sealed class RcsOptions
 
     /// <summary>CNC 机台模拟器：检测出 NG 的概率 0~1（默认 0=全 OK）。命中则置 POS_NG=ON 走 NG 分流，用于演示 NG→NG架。</summary>
     public double SimulatorNgRate { get; set; }
+
+    /// <summary>CNC 机台模拟器：上料 RCS 报完成时不置 HasMat=ON（默认 false）。用于演示「复核不过 → Alarm 粘滞」安全底线；改后需重启。</summary>
+    public bool SimulatorSkipMaterialArrival { get; set; }
 }
 
 /// <summary>数据库连接配置。Password 可为明文（开发）或 DPAPI 密文（PasswordProtected=true）。</summary>

@@ -63,19 +63,28 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             return txnId;
         }
 
-        // 2. 解析料架站点 cell + 缓存区 cell（LOCATION_MAP 未录入时用 fallback 编码，演示用）
-        var frameStation = await _locationMap.ResolveFrameAsync(frameId.Value, "cell", ct);
-        var frameCell = frameStation?.RcsCode ?? $"FRAME-{frameId.Value}";
+        // 2. 解析料架站点（cell 优先，否则 shelf）+ 缓存区；缺 LOCATION_MAP 拒发，禁止假码。
+        var frameLoc = await _locationMap.ResolveFrameAsync(frameId.Value, "cell", ct)
+                       ?? await _locationMap.ResolveFrameAsync(frameId.Value, "shelf", ct);
         var bufferArea = role == FrameRole.Unload ? _options.FullBufferArea : _options.EmptyBufferArea;
         var buffer = await _locationMap.ResolveAreaAsync(bufferArea, ct);
-        var bufferCell = buffer?.RcsCode ?? bufferArea;
+        if (frameLoc is null || buffer is null || string.IsNullOrWhiteSpace(buffer.RcsCode))
+        {
+            var msg = frameLoc is null
+                ? $"料架 {frameId.Value} 未录入 LOCATION_MAP（cell/shelf）"
+                : $"缓存区 {bufferArea} 未录入 LOCATION_MAP";
+            _logger.LogWarning("换架失败：{Msg}", msg);
+            Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", msg);
+            await _alarms.RaiseRcsTaskNotFoundAsync($"CHANGE-FRAME-{txnId}", ct);
+            return txnId;
+        }
 
         var line = await _equipment.GetWorkLineByEquipmentAsync(equipmentId, ct) ?? new WorkLineRef(1, "LINE");
 
         var ctx = new ChangeFrameContext
         {
             TxnId = txnId, EquipmentId = equipmentId, Role = role,
-            FrameId = frameId.Value, FrameCell = frameCell, BufferCell = bufferCell, Author = author,
+            FrameId = frameId.Value, FrameCell = frameLoc.RcsCode, BufferCell = buffer.RcsCode, Author = author,
             WorkLineId = line.WorkLineId, LineCode = line.LineCode
         };
         _active[txnId] = ctx;

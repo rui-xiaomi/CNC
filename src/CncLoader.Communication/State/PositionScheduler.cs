@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
@@ -86,6 +87,30 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
     private SemaphoreSlim GateFor((long Eq, long Pos) key) => _posGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
 
+    /// <summary>调度器关闭时仍向看板播种加工位卡片（Offline），避免监控页空白。</summary>
+    private async Task SeedDashboardPositionsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var allPoints = await _points.GetAllAsync(ct);
+            var posKeys = new HashSet<(long Eq, long Pos)>();
+            foreach (var p in allPoints)
+            {
+                if (p.PositionId is null) continue;
+                posKeys.Add((p.EquipmentId, p.PositionId.Value));
+            }
+            foreach (var (eq, pos) in posKeys.OrderBy(k => k.Eq).ThenBy(k => k.Pos))
+            {
+                _store.UpdatePosition(new PositionStatus
+                {
+                    EquipmentId = eq, PositionId = pos, State = PositionState.Offline
+                });
+            }
+            _logger.LogInformation("调度器关闭：已向看板播种 {N} 个加工位（Offline）", posKeys.Count);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "调度器关闭时播种看板加工位失败"); }
+    }
+
     /// <summary>反查机台所属线体（带缓存）；查不到回退 (1,"LINE") 保证不 NPE。</summary>
     private async Task<WorkLineRef> ResolveLineAsync(long equipmentId, CancellationToken ct)
     {
@@ -117,6 +142,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         if (!_options.SchedulerEnabled)
         {
             _logger.LogInformation("加工位状态机调度器未启用（SchedulerEnabled=false）。");
+            await SeedDashboardPositionsAsync(cancellationToken);
             IsReconciled = true;
             return;
         }
@@ -179,7 +205,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         finally { gate.Release(); }
     }
 
-    /// <summary>§6.3 启动三方对账：①RCS 未完结任务绑定回工位；②槽位账陈旧预记按方向回滚；③PLC 账实核对（有料无任务 → 报警等人工）。</summary>
+    /// <summary>§6.3 启动三方对账：①RCS 未完结任务绑定回工位；①b query 终态收口（落账/回滚预记）；②槽位账陈旧预记按方向回滚；③PLC 账实核对（有料无任务 → 报警等人工）。</summary>
     private async Task ReconcileAsync(CancellationToken ct)
     {
         var unfinished = new List<string>();
@@ -195,11 +221,23 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 var ctx = _contexts.GetOrAdd(key, k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
                 ctx.CurrentTaskId = taskId;
                 ctx.Phase = row.TaskType == "1" ? PositionPhase.Unload : PositionPhase.Upload;
-                ctx.State = PositionState.Dispatching; // 等 RCS 状态明确后由 loop 推进
+                ctx.State = PositionState.Dispatching; // 等 RCS 状态明确后由 loop / ①b 推进
                 _logger.LogInformation("对账①：任务 {TaskId} 绑定回 EQ{Eq} POS{Pos} 阶段 {Phase}", taskId, key.Eq, key.Pos, ctx.Phase);
             }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "启动对账①查询未完结任务失败"); }
+
+        // ①b 向 RCS query 未完结任务：已终态的立刻收口槽位账 + 工位态，并从 active 集合剔除（供②兜底）
+        try
+        {
+            var settled = await SettleTerminalTasksOnReconcileAsync(unfinished, ct);
+            if (settled.Count > 0)
+            {
+                unfinished = unfinished.Where(id => !settled.Contains(id)).ToList();
+                _logger.LogInformation("对账①b：收口终态任务 {N} 个", settled.Count);
+            }
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "启动对账①b 终态收口失败"); }
 
         // ② 槽位账对账：回滚未完结任务集之外的陈旧预记（按 BindSource 方向）
         try
@@ -233,6 +271,164 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "启动对账③ PLC 账实核对失败"); }
+    }
+
+    /// <summary>
+    /// 对账①b：批量 queryTask，对已终态任务立刻收口——先 PLC 复核再 Confirm/Rollback，避免「RCS 报完成但料未到」误清空槽位。
+    /// 返回已收口的 taskId 集合（应从 active/unfinished 剔除）。
+    /// </summary>
+    private async Task<HashSet<string>> SettleTerminalTasksOnReconcileAsync(IReadOnlyList<string> unfinished, CancellationToken ct)
+    {
+        var settled = new HashSet<string>(StringComparer.Ordinal);
+        if (unfinished.Count == 0) return settled;
+
+        var req = new QueryTaskRequest
+        {
+            Condition = new QueryCondition
+            {
+                Relation = "AND",
+                Conditions =
+                {
+                    new QueryConditionItem { Key = "taskId", Value = string.Join(",", unfinished), Operator = "IN", Order = "None" }
+                }
+            },
+            PageIndex = 1,
+            PageSize = Math.Max(10, unfinished.Count)
+        };
+        var result = await _taskSvc.QueryAsync(req, ct);
+        if (!result.Success)
+        {
+            _logger.LogWarning("对账①b queryTask 失败：{Msg}，跳过终态收口（②仍按库内未完结保护预记）", result.Message ?? result.Error);
+            return settled;
+        }
+
+        foreach (var (taskId, rcsStatus) in ParseQueryItems(result.RawResponse))
+        {
+            var state = RcsStatusMapper.ToTaskState(rcsStatus);
+            if (state is null || !RcsStatusMapper.IsTerminal(state)) continue;
+
+            var row = await _taskStore.GetByTaskIdAsync(taskId, ct);
+            if (row is null) continue;
+            if (row.TaskState != state)
+                await _taskStore.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct);
+
+            PositionContext? ctx = null;
+            if (row.EquipmentId is long eq && row.PositionId is long pos)
+                _contexts.TryGetValue((eq, pos), out ctx);
+
+            var phase = ctx?.Phase ?? (row.TaskType == "1" ? PositionPhase.Unload : PositionPhase.Upload);
+            if (ctx is null)
+            {
+                // 无工位上下文（任务未绑加工位，如换架）：仅按方向收口槽位账
+                await SettleSlotForTerminalAsync(taskId, phase, state, hasMat: null, ct);
+                settled.Add(taskId);
+                _logger.LogInformation("对账①b：无工位任务 {TaskId} 终态 {State}，已收口槽位账", taskId, state);
+                continue;
+            }
+
+            bool? hasMat = null;
+            if (state == RcsTaskState.Completed)
+                hasMat = await ReadHasMatFreshAsync(ctx, ct);
+
+            await SettleSlotForTerminalAsync(taskId, phase, state, hasMat, ct);
+
+            if (state == RcsTaskState.Completed && phase == PositionPhase.Upload && hasMat == true)
+            {
+                // 上料完成且 PLC 有料 → 进 Loaded，由主循环写启动/加工记录
+                ctx.CurrentTaskId = taskId;
+                ctx.Phase = PositionPhase.Upload;
+                SetState(ctx, PositionState.Loaded);
+            }
+            else if (state == RcsTaskState.Completed && phase == PositionPhase.Unload && hasMat == false)
+            {
+                // 下料完成且 PLC 无料 → 复位检测启动后清任务回 WaitLoad（跳过 Unloaded 态，补写 POS_TEST_START=2）
+                await WriteTestStartAsync(ctx, 2, ct);
+                ctx.CurrentTaskId = null;
+                ctx.Phase = null;
+                ctx.ElectrodeId = null;
+                SetState(ctx, PositionState.WaitLoad);
+            }
+            else if (state == RcsTaskState.Completed && hasMat is null)
+            {
+                // PLC 尚未可读（启动瞬间常见）：预记已保守回滚，工位回 WaitLoad，不 latch Alarm（避免误粘滞挡后续派工）
+                ctx.CurrentTaskId = null;
+                ctx.Phase = null;
+                ctx.ElectrodeId = null;
+                SetState(ctx, PositionState.WaitLoad);
+                _logger.LogWarning("对账①b：{TaskId} COMPLETED 但 PLC HasMat 未读到（phase={Phase}），预记已回滚，工位回 WaitLoad", taskId, phase);
+            }
+            else if (state == RcsTaskState.Completed)
+            {
+                // COMPLETED 且 PLC 明确不符（上料 hasMat=false / 下料 hasMat=true）→ Alarm，预记已回滚
+                ctx.CurrentTaskId = null;
+                ctx.Phase = null;
+                ctx.ElectrodeId = null;
+                ctx.AlarmRaised = true;
+                SetState(ctx, PositionState.Alarm);
+                await _alarms.RaiseRcsTaskNotFoundAsync($"RECONCILE-{taskId}", ct);
+                _logger.LogWarning("对账①b：{TaskId} COMPLETED 但 PLC 不符（phase={Phase} hasMat={Has}）→ ALARM", taskId, phase, hasMat);
+            }
+            else
+            {
+                // CANCELED / FAILED：预记已回滚，工位回 WaitLoad（FAILED 的自动 redo 由 tracker 另途处理）
+                ctx.CurrentTaskId = null;
+                ctx.Phase = null;
+                ctx.ElectrodeId = null;
+                SetState(ctx, PositionState.WaitLoad);
+                if (state == RcsTaskState.Canceled)
+                    await _alarms.RaiseRcsTaskCanceledAsync(taskId, ct);
+            }
+
+            settled.Add(taskId);
+            _logger.LogInformation("对账①b：任务 {TaskId} 终态 {State} 已收口 EQ{Eq} POS{Pos}", taskId, state, ctx.EquipmentId, ctx.PositionId);
+        }
+
+        return settled;
+    }
+
+    /// <summary>终态槽位收口：COMPLETED 且 PLC 符合阶段预期才 Confirm，否则 Rollback（避免误清空/误入库）。</summary>
+    private async Task SettleSlotForTerminalAsync(string taskId, PositionPhase phase, string state, bool? hasMat, CancellationToken ct)
+    {
+        if (state == RcsTaskState.Completed)
+        {
+            if (phase == PositionPhase.Upload)
+            {
+                if (hasMat == true) await _slots.ConfirmTakeAsync(taskId, ct);
+                else await _slots.RollbackTakeAsync(taskId, ct); // 无料或未知：电极应仍在源架
+            }
+            else if (phase == PositionPhase.Unload)
+            {
+                if (hasMat == false) await _slots.ConfirmAsync(taskId, ct);
+                else await _slots.RollbackAsync(taskId, ct); // 仍有料或未知：入库未真正完成
+            }
+            return;
+        }
+
+        // CANCELED / FAILED
+        if (phase == PositionPhase.Upload) await _slots.RollbackTakeAsync(taskId, ct);
+        else if (phase == PositionPhase.Unload) await _slots.RollbackAsync(taskId, ct);
+    }
+
+    /// <summary>解析 queryTask 应答 items[] → (taskId, status)。</summary>
+    private static IReadOnlyList<(string taskId, string status)> ParseQueryItems(string? raw)
+    {
+        var list = new List<(string, string)>();
+        if (string.IsNullOrWhiteSpace(raw)) return list;
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!doc.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) return list;
+            foreach (var it in items.EnumerateArray())
+            {
+                if (it.ValueKind != JsonValueKind.Object) continue;
+                var id = it.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String ? idEl.GetString() : null;
+                var st = it.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(st))
+                    list.Add((id!, st!));
+            }
+        }
+        catch { /* 解析失败：本轮跳过 */ }
+        return list;
     }
 
     private async Task LoopAsync(CancellationToken ct)
@@ -312,11 +508,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         // 执行动作；动作可能改写 next（如 WaitLoad→入队→Dispatching、Done→入下料队→Dispatching、Loaded→写启动→Processing）
         next = await ExecuteActionsAsync(ctx, next, hasMat, allowLoad, ok, ng, rcsState, ct);
         if (next != prev)
-        {
-            ctx.State = next;
             _logger.LogInformation("EQ{Eq} POS{Pos} {Prev} → {Next}", ctx.EquipmentId, ctx.PositionId, prev, next);
-        }
-        SetState(ctx, next);
+        SetState(ctx, next); // SetState 内统一写 ctx.State（含 WAIT_LOAD 进/出标记维护）
     }
 
     private PositionState ComputeNextState(PositionContext ctx, bool online, bool? safe, bool? door,
@@ -377,17 +570,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                     next = PositionState.Loaded;
                     break;
                 }
-                // 触发上料：允许上料=ON 且 有料=OFF 且 无未完结任务 且 无在途交接件（避免与工序间交接抢工位）
+                // Layer 1：工位不自己查料/选槽，只标记"请求上料"，由单一调度消费者统一决策
+                // （查料→选槽→原子预记→下发都在单消费者里串行，结构上杜绝两位同时看到同一件料）。
+                // 转 Dispatching 由消费者下发成功后设置；抢不到料则保持 WAIT_LOAD 等待（不告警）。
                 if (allowLoad == true && hasMat == false && string.IsNullOrEmpty(ctx.CurrentTaskId)
                     && !_expectedInbound.ContainsKey((ctx.EquipmentId, ctx.PositionId)))
                 {
-                    var dec = await EnqueueUploadAsync(ctx, ct);
-                    next = dec switch
-                    {
-                        UploadDecision.Queued => PositionState.Dispatching,
-                        UploadDecision.Failed => PositionState.Alarm,
-                        _ => PositionState.WaitLoad, // WaitMaterial：料架无料，保持等待
-                    };
+                    ctx.UploadRequested = true;
                 }
                 break;
             case PositionState.Transporting:
@@ -468,7 +657,12 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         return next;
     }
 
-    private async Task<UploadDecision> EnqueueUploadAsync(PositionContext ctx, CancellationToken ct)
+    /// <summary>上料料源+路由解析结果。Decision=Queued 时 From/To 必有值、SourceFrameId 为取料料架。</summary>
+    private readonly record struct UploadPlan(UploadDecision Decision, long? SourceFrameId, string? From, string? To);
+
+    /// <summary>解析上料料源与起终点 cell（不下发、不预记）：本机中转架(role2)有件 → 回流取；否则上料架/LOAD_AREA。
+    /// 无料源占用 → WaitMaterial；路由未配置 → Failed（已告警）。占用校验即"料源确认有料"的前置门（配合单消费者串行，杜绝两位并发抢同一件）。</summary>
+    private async Task<UploadPlan> ResolveUploadPlanAsync(PositionContext ctx, CancellationToken ct)
     {
         // 上料源优先级：本机中转架(role2)有件 → 从中转架取（工序间流转回流）；否则从上料架/LOAD_AREA 取。
         var binds = await ResolveBindingsAsync(ctx.EquipmentId, ct);
@@ -494,14 +688,14 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             if (binds.UploadFrameId is not long upFrame)
             {
                 _logger.LogDebug("EQ{Eq} POS{Pos} 无上料架绑定（纯下游机台），等待上游交接/中转回流", ctx.EquipmentId, ctx.PositionId);
-                return UploadDecision.WaitMaterial;
+                return new UploadPlan(UploadDecision.WaitMaterial, null, null, null);
             }
             // 上料架有料校验：账面无占用 → 等料（非告警，由水位/人工补料）
             var occ = await _slots.GetOccupancyAsync(upFrame, ct);
             if (occ.Occupied == 0)
             {
                 _logger.LogDebug("EQ{Eq} POS{Pos} 上料架 {Frame} 无料（账面 occupied=0），保持等料", ctx.EquipmentId, ctx.PositionId, upFrame);
-                return UploadDecision.WaitMaterial;
+                return new UploadPlan(UploadDecision.WaitMaterial, null, null, null);
             }
             sourceFrameId = upFrame;
             var route = await _routes.ResolveUploadAsync(ctx.EquipmentId, ctx.PositionId, ct);
@@ -509,25 +703,17 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             {
                 await _alarms.RaiseRcsTaskNotFoundAsync($"UPLOAD-EQ{ctx.EquipmentId}-POS{ctx.PositionId}", ct);
                 _logger.LogWarning("EQ{Eq} POS{Pos} 上料路由未配置（LOCATION_MAP 缺 LOAD_AREA/加工位 cell）", ctx.EquipmentId, ctx.PositionId);
-                return UploadDecision.Failed;
+                return new UploadPlan(UploadDecision.Failed, null, null, null);
             }
             (from, to) = route.Value;
         }
 
-        var line = await ResolveLineAsync(ctx.EquipmentId, ct);
-        _queue.Enqueue(new DispatchItem
-        {
-            EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId, Phase = PositionPhase.Upload,
-            Priority = 5, FromCode = from!, ToCode = to!,
-            WorkLineId = line.WorkLineId, LineCode = line.LineCode, Author = "scheduler",
-            SourceFrameId = sourceFrameId
-        });
-        ctx.Phase = PositionPhase.Upload;
-        _logger.LogInformation("EQ{Eq} POS{Pos} 入上料队 {From}→{To}", ctx.EquipmentId, ctx.PositionId, from, to);
-        return UploadDecision.Queued;
+        return new UploadPlan(UploadDecision.Queued, sourceFrameId, from, to);
     }
 
-    /// <summary>下料入队（§6.2 OK/NG 全量分流）：NG→NG架；OK→下一工序空闲工位直接交接 / 下一工序全忙入中转架 / 末道工序入下料架。</summary>
+    /// <summary>下料入队：仅解析下料源 cell + 结果，入"下料请求"队。
+    /// 终点决策（NG架/选下游空工位/中转架/下料架）推迟到单消费者出队时统一做——把"选下游空工位"与"登记待交接"收进同一串行步骤，
+    /// 避免两件下料抢到同一个下游空工位（与上料竞态同构）。</summary>
     private async Task<bool> EnqueueUnloadAsync(PositionContext ctx, bool isOk, CancellationToken ct)
     {
         var fromCell = await _routes.ResolvePositionCellAsync(ctx.EquipmentId, ctx.PositionId, ct);
@@ -537,32 +723,21 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             _logger.LogWarning("EQ{Eq} POS{Pos} 下料源 cell 未配置（LOCATION_MAP 缺加工位 cell）", ctx.EquipmentId, ctx.PositionId);
             return false;
         }
-
-        var decision = await ResolveUnloadTargetAsync(ctx, isOk, ct);
-        if (decision is null)
-        {
-            await _alarms.RaiseRcsTaskNotFoundAsync($"UNLOAD-EQ{ctx.EquipmentId}-POS{ctx.PositionId}", ct);
-            _logger.LogWarning("EQ{Eq} POS{Pos} 下料终点未配置（OK={Ok}，请录入 NG/中转/下料架绑定或 UNLOAD_AREA）", ctx.EquipmentId, ctx.PositionId, isOk);
-            return false;
-        }
-        var d = decision.Value;
         var line = await ResolveLineAsync(ctx.EquipmentId, ct);
         _queue.Enqueue(new DispatchItem
         {
             EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId, Phase = PositionPhase.Unload,
-            Priority = 8, FromCode = fromCell, ToCode = d.ToCell,
+            Priority = 8, FromCode = fromCell, ToCode = "", IsOk = isOk,
             WorkLineId = line.WorkLineId, LineCode = line.LineCode, Author = "scheduler",
-            UnloadTarget = d.Target, DestFrameId = d.DestFrameId,
-            DestEquipmentId = d.DestEquipmentId, DestPositionId = d.DestPositionId,
             ElectrodeId = ctx.ElectrodeId
         });
         ctx.Phase = PositionPhase.Unload;
-        ctx.CurrentTaskId = null; // 上料任务已完结，清掉；下料任务由 dispatcher 绑定新 taskId
-        _logger.LogInformation("EQ{Eq} POS{Pos} 入下料队 {From}→{To}（{Target}）", ctx.EquipmentId, ctx.PositionId, fromCell, d.ToCell, d.Target);
+        ctx.CurrentTaskId = null; // 上料任务已完结，清掉；下料任务由消费者绑定新 taskId
+        _logger.LogInformation("EQ{Eq} POS{Pos} 入下料队 from={From} isOk={Ok}（终点由消费者决策）", ctx.EquipmentId, ctx.PositionId, fromCell, isOk);
         return true;
     }
 
-    /// <summary>决策下料终点。返回 null 表示无可用终点（告警人工）。</summary>
+    /// <summary>决策下料终点（在单消费者内调用）。返回 null 表示无可用终点（告警人工）。</summary>
     private async Task<UnloadDecision?> ResolveUnloadTargetAsync(PositionContext ctx, bool isOk, CancellationToken ct)
     {
         if (!isOk)
@@ -622,31 +797,38 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         return null;
     }
 
-    /// <summary>在候选机台的加工位中找一个空闲工位（在线/安全/无料/无任务/无待交接）。</summary>
+    /// <summary>在候选机台的加工位中挑一个空闲工位（在线/安全/无料/无任务/无待交接）。
+    /// 多候选按"空闲最久（WaitLoadSince 最早）→ 工位编号升序"确定性排序（防饿死、均衡、可复现）。
+    /// 仅在单消费者内调用：选中后随即由调用方登记 _expectedInbound，串行保证两件下料不会抢到同一工位。</summary>
     private (long Eq, long Pos)? FindIdlePositionAmong(IReadOnlyList<long> equipmentIds)
     {
+        var candidates = new List<(long Eq, long Pos, DateTime Since)>();
         foreach (var eq in equipmentIds)
         {
             var machine = _store.GetMachine(eq);
             if (machine is null || !machine.PlcOnline || machine.Safe == false || machine.DoorOpen == true) continue;
+            var readings = _store.GetReadings(eq);
             foreach (var (pEq, pPos, _) in _positions)
             {
                 if (pEq != eq) continue;
                 if (_expectedInbound.ContainsKey((eq, pPos))) continue; // 已有件在途
+                var since = DateTime.MaxValue;
                 // 该工位调度上下文空闲：无当前任务且处于 WaitLoad/Offline
                 if (_contexts.TryGetValue((eq, pPos), out var pctx))
                 {
                     if (!string.IsNullOrEmpty(pctx.CurrentTaskId)) continue;
                     if (pctx.State != PositionState.WaitLoad && pctx.State != PositionState.Offline) continue;
+                    since = pctx.WaitLoadSince ?? DateTime.MaxValue;
                 }
                 // PLC 无料（当前工位空）
-                var readings = _store.GetReadings(eq);
                 var hasMat = readings.FirstOrDefault(r => r.PositionId == pPos && r.Signal == SignalKey.PosHasMat)?.On;
                 if (hasMat == true) continue;
-                return (eq, pPos);
+                candidates.Add((eq, pPos, since));
             }
         }
-        return null;
+        if (candidates.Count == 0) return null;
+        var best = candidates.OrderBy(c => c.Since).ThenBy(c => c.Pos).First();
+        return (best.Eq, best.Pos);
     }
 
     private async Task<bool> WriteTestStartAsync(PositionContext ctx, int value, CancellationToken ct)
@@ -656,12 +838,25 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             _logger.LogWarning("EQ{Eq} POS{Pos} 未配置 POS_TEST_START 写点位", ctx.EquipmentId, ctx.PositionId);
             return false;
         }
+
+        // 现场偶发 FINS/Modbus 写超时：失败后短间隔重试 1 次，仍失败再走 Alarm。
         var r = await _plcOps.WriteWithConfirmAsync(tp.PlcId, tp.RegAddr, value, "scheduler", ct);
         if (!r.Verified)
         {
-            _logger.LogWarning("EQ{Eq} POS{Pos} 写 POS_TEST_START={V} 复核失败：{Err}", ctx.EquipmentId, ctx.PositionId, value, r.Error);
-            return false;
+            _logger.LogWarning("EQ{Eq} POS{Pos} 写 POS_TEST_START={V} 首次失败，250ms 后重试：{Err}",
+                ctx.EquipmentId, ctx.PositionId, value, r.Error);
+            try { await Task.Delay(250, ct); }
+            catch (OperationCanceledException) { return false; }
+            r = await _plcOps.WriteWithConfirmAsync(tp.PlcId, tp.RegAddr, value, "scheduler", ct);
+            if (!r.Verified)
+            {
+                _logger.LogWarning("EQ{Eq} POS{Pos} 写 POS_TEST_START={V} 重试仍失败：{Err}",
+                    ctx.EquipmentId, ctx.PositionId, value, r.Error);
+                return false;
+            }
+            _logger.LogInformation("EQ{Eq} POS{Pos} 写 POS_TEST_START={V} 重试成功", ctx.EquipmentId, ctx.PositionId, value);
         }
+
         _writeHook?.OnTestStartWritten(ctx.EquipmentId, ctx.PositionId, value);
         return true;
     }
@@ -685,7 +880,18 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
     private void SetState(PositionContext ctx, PositionState state)
     {
+        var prev = ctx.State;
         ctx.State = state;
+        // Layer 1：进入 WAIT_LOAD 记空闲起点（供竞争排序）；离开 WAIT_LOAD 清"请求上料"标记与空闲计时。
+        if (state == PositionState.WaitLoad)
+        {
+            if (prev != PositionState.WaitLoad) ctx.WaitLoadSince = DateTime.Now;
+        }
+        else
+        {
+            ctx.UploadRequested = false;
+            ctx.WaitLoadSince = null;
+        }
         _store.UpdatePosition(new PositionStatus
         {
             EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId, State = state
@@ -701,7 +907,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         return "未知异常";
     }
 
-    /// <summary>派工循环：按优先级出队 → 下发 RCS → 绑定 taskId 回加工位上下文。</summary>
+    /// <summary>单一调度消费者（Layer 1）：先派下料（优先级高、无料源争用），队列空时再统一分配上料。
+    /// 所有"查料源→选槽→原子预记→下发"都在此单线程串行完成——两个空工位不可能同时看到并取走同一件料。</summary>
     private async Task DispatchLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -709,27 +916,141 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             try
             {
                 var item = _queue.Dequeue();
-                if (item is null) { await Task.Delay(200, ct); continue; }
-                await DispatchOneAsync(item, ct);
+                if (item is not null)
+                {
+                    await DispatchOneAsync(item, ct); // 下料（DONE→下料队）
+                    continue;                          // 尽快清空下料队列后再处理上料
+                }
+                var dispatched = await AllocateUploadsAsync(ct);
+                if (!dispatched) await Task.Delay(200, ct);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { _logger.LogWarning(ex, "派工循环异常"); await Task.Delay(500, ct); }
         }
     }
 
-    private async Task DispatchOneAsync(DispatchItem item, CancellationToken ct)
+    /// <summary>Layer 1 上料分配：收集"请求上料"的工位，按"空闲最久 → 工位编号升序"确定性排序，逐个尝试下发。
+    /// 串行处理保证前一位取料预记落地后，后一位再查料——料不足时后位自然看到无料而继续等待（不告警、不重试风暴）。
+    /// 返回本轮是否有成功下发（用于控制空转 delay）。</summary>
+    private async Task<bool> AllocateUploadsAsync(CancellationToken ct)
     {
+        var candidates = _contexts.Values
+            .Where(c => c.UploadRequested && c.State == PositionState.WaitLoad && string.IsNullOrEmpty(c.CurrentTaskId))
+            .OrderBy(c => c.WaitLoadSince ?? DateTime.MaxValue)
+            .ThenBy(c => c.PositionId)
+            .ToList();
+        if (candidates.Count == 0) return false;
+
+        var any = false;
+        foreach (var ctx in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            var outcome = await TryDispatchUploadAsync(ctx, ct);
+            if (outcome == UploadDecision.Queued) any = true;
+            // WaitMaterial：保留 UploadRequested，下一轮或新料到位时再评估；Failed：TryDispatch 内已置 Alarm。
+        }
+        return any;
+    }
+
+    /// <summary>解析上料料源+路由 → 下发 RCS → 原子取料预记 → 绑定回工位（成功转 Dispatching）。
+    /// 返回 Queued（已下发）/ WaitMaterial（无料，保持等待）/ Failed（路由缺失或下发失败，已置 Alarm）。</summary>
+    private async Task<UploadDecision> TryDispatchUploadAsync(PositionContext ctx, CancellationToken ct)
+    {
+        var plan = await ResolveUploadPlanAsync(ctx, ct);
+        if (plan.Decision == UploadDecision.WaitMaterial) return UploadDecision.WaitMaterial;
+        if (plan.Decision == UploadDecision.Failed)
+        {
+            var g = GateFor((ctx.EquipmentId, ctx.PositionId));
+            await g.WaitAsync(ct);
+            try { ctx.AlarmRaised = true; SetState(ctx, PositionState.Alarm); }
+            finally { g.Release(); }
+            return UploadDecision.Failed;
+        }
+
+        // 料源已确认有料（占用槽存在）→ 下发 RCS（网络调用在锁外）。
+        var line = await ResolveLineAsync(ctx.EquipmentId, ct);
         var result = await _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
         {
-            WorkLineId = item.WorkLineId, LineCode = item.LineCode,
-            TaskType = item.Phase == PositionPhase.Unload ? "1" : "0",
-            Priority = item.Priority, FromCode = item.FromCode, ToCode = item.ToCode,
+            WorkLineId = line.WorkLineId, LineCode = line.LineCode, TaskType = "0",
+            Priority = 5, FromCode = plan.From!, ToCode = plan.To!,
+            EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId,
+            Kind = RcsTaskKind.Transit, Author = "scheduler"
+        }, ct);
+
+        var gate = GateFor((ctx.EquipmentId, ctx.PositionId));
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (!result.Success || string.IsNullOrEmpty(result.TaskId))
+            {
+                // 下发失败 → 粘滞 Alarm，等人工恢复；不自动重发（防重试风暴）
+                ctx.AlarmRaised = true;
+                SetState(ctx, PositionState.Alarm);
+                await _alarms.RaiseRcsTaskNotFoundAsync($"UPLOAD-POS{ctx.PositionId}", ct);
+                _logger.LogWarning("EQ{Eq} POS{Pos} 上料下发失败：{Err}", ctx.EquipmentId, ctx.PositionId, result.Error ?? result.Message);
+                return UploadDecision.Failed;
+            }
+
+            ctx.CurrentTaskId = result.TaskId;
+            ctx.Phase = PositionPhase.Upload;
+            ctx.UploadRequested = false;
+
+            // 原子取料预记（Layer 2）：源料架取一件、捕获电极码随件流转。
+            if (plan.SourceFrameId is long src)
+            {
+                var taken = await _slots.ReserveTakeAsync(src, result.TaskId!, ct);
+                if (taken is not null) ctx.ElectrodeId = taken.ElectrodeId;
+                else
+                {
+                    // 已下发但源料架无可取料——单消费者串行下常规竞争不会命中此处；命中即外部写入者/盘点在下发窗口内取走了最后一件（账实异常）→ 告警人工。
+                    ctx.AlarmRaised = true;
+                    SetState(ctx, PositionState.Alarm);
+                    await _alarms.RaiseRcsTaskNotFoundAsync($"UPLOAD-NOSTOCK-POS{ctx.PositionId}", ct);
+                    _logger.LogWarning("EQ{Eq} POS{Pos} 上料已下发但源料架 {Frame} 无可取料（并发/账实异常）→ ALARM", ctx.EquipmentId, ctx.PositionId, src);
+                    return UploadDecision.Failed;
+                }
+            }
+            SetState(ctx, PositionState.Dispatching);
+            _logger.LogInformation("EQ{Eq} POS{Pos} 下发上料任务 {TaskId} {From}→{To}", ctx.EquipmentId, ctx.PositionId, result.TaskId, plan.From, plan.To);
+            return UploadDecision.Queued;
+        }
+        finally { gate.Release(); }
+    }
+
+    /// <summary>单消费者出队处理下料请求：先决策终点（含"选下游空工位"）→ 下发 RCS → 绑定 + 登记/入库预记。
+    /// 选位与登记同在此串行完成，前一件登记落地后后一件才选位，两件下料不会抢到同一下游空工位。</summary>
+    private async Task DispatchOneAsync(DispatchItem item, CancellationToken ct)
+    {
+        var ctx = _contexts.GetOrAdd((item.EquipmentId, item.PositionId), k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+
+        // 终点决策（NG架/选下游空工位/中转架/下料架）在消费者内串行完成。
+        var decision = await ResolveUnloadTargetAsync(ctx, item.IsOk, ct);
+        if (decision is null)
+        {
+            var g0 = GateFor((item.EquipmentId, item.PositionId));
+            await g0.WaitAsync(ct);
+            try
+            {
+                ctx.AlarmRaised = true;
+                SetState(ctx, PositionState.Alarm);
+                await _alarms.RaiseRcsTaskNotFoundAsync($"UNLOAD-EQ{item.EquipmentId}-POS{item.PositionId}", ct);
+                _logger.LogWarning("EQ{Eq} POS{Pos} 下料终点未配置（isOk={Ok}，请录入 NG/中转/下料架绑定或 UNLOAD_AREA）→ ALARM", item.EquipmentId, item.PositionId, item.IsOk);
+            }
+            finally { g0.Release(); }
+            return;
+        }
+        var d = decision.Value;
+
+        // 网络下发在锁外
+        var result = await _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+        {
+            WorkLineId = item.WorkLineId, LineCode = item.LineCode, TaskType = "1",
+            Priority = item.Priority, FromCode = item.FromCode, ToCode = d.ToCell,
             EquipmentId = item.EquipmentId, PositionId = item.PositionId,
             Kind = RcsTaskKind.Transit, Author = item.Author
         }, ct);
 
-        var ctx = _contexts.GetOrAdd((item.EquipmentId, item.PositionId), k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
-        // bug#7：回填 ctx 与主循环驱动串行化（网络下发在锁外，仅结果写入在锁内）
+        // bug#7：回填 ctx 与主循环驱动串行化（仅结果写入在锁内）
         var gate = GateFor((item.EquipmentId, item.PositionId));
         await gate.WaitAsync(ct);
         try
@@ -737,58 +1058,46 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             if (result.Success && !string.IsNullOrEmpty(result.TaskId))
             {
                 ctx.CurrentTaskId = result.TaskId;
-                ctx.Phase = item.Phase;
-                await ApplySlotReservationAsync(item, result.TaskId!, ctx, ct);
-                _logger.LogInformation("EQ{Eq} POS{Pos} 下发 {Phase} 任务 {TaskId}", item.EquipmentId, item.PositionId, item.Phase, result.TaskId);
+                ctx.Phase = PositionPhase.Unload;
+                await ApplyUnloadReservationAsync(item, d, result.TaskId!, ct);
+                _logger.LogInformation("EQ{Eq} POS{Pos} 下发下料任务 {TaskId} {From}→{To}（{Target}）", item.EquipmentId, item.PositionId, result.TaskId, item.FromCode, d.ToCell, d.Target);
             }
             else
             {
                 // 派工失败 → 粘滞 Alarm（经 SetState 刷看板），等人工恢复；不自动重发（防重试风暴）
                 ctx.AlarmRaised = true;
                 SetState(ctx, PositionState.Alarm);
-                await _alarms.RaiseRcsTaskNotFoundAsync(item.Phase == PositionPhase.Unload ? $"UNLOAD-POS{item.PositionId}" : $"UPLOAD-POS{item.PositionId}", ct);
-                _logger.LogWarning("EQ{Eq} POS{Pos} 下发失败：{Err}", item.EquipmentId, item.PositionId, result.Error ?? result.Message);
+                await _alarms.RaiseRcsTaskNotFoundAsync($"UNLOAD-POS{item.PositionId}", ct);
+                _logger.LogWarning("EQ{Eq} POS{Pos} 下料下发失败：{Err}", item.EquipmentId, item.PositionId, result.Error ?? result.Message);
             }
         }
         finally { gate.Release(); }
     }
 
-    /// <summary>下发成功后按方向做槽位账预记 + 登记工序间交接 + 捕获/流转电极码。</summary>
-    private async Task ApplySlotReservationAsync(DispatchItem item, string taskId, PositionContext ctx, CancellationToken ct)
+    /// <summary>下发成功后按下料终点做登记（直接交接）/ 入库预记（料架）+ 电极码流转。</summary>
+    private async Task ApplyUnloadReservationAsync(DispatchItem item, UnloadDecision d, string taskId, CancellationToken ct)
     {
         try
         {
-            if (item.Phase == PositionPhase.Upload)
+            if (d.Target == UnloadTarget.NextMachineCell && d.DestEquipmentId is long dstEq && d.DestPositionId is long dstPos)
             {
-                // 上料：从源料架（上料架/中转架）取料预记，并捕获电极码随件流转；无源料架（LOAD_AREA）不记账
-                if (item.SourceFrameId is long src)
-                {
-                    var taken = await _slots.ReserveTakeAsync(src, taskId, ct);
-                    if (taken is not null) ctx.ElectrodeId = taken.ElectrodeId;
-                }
+                // 直接交接：登记目标工位待入库（不记料架账，件进机台），电极码随交接传给下游
+                _expectedInbound[(dstEq, dstPos)] = new InboundHandoff(taskId, item.ElectrodeId);
             }
-            else // Unload
+            else if (d.DestFrameId is long destFrame)
             {
-                if (item.UnloadTarget == UnloadTarget.NextMachineCell && item.DestEquipmentId is long dstEq && item.DestPositionId is long dstPos)
+                // 入下料/中转/NG 架：入库预记；满架 → 告警人工（不静默丢件）
+                var put = await _slots.ReserveAsync(destFrame, taskId, item.ElectrodeId, ct);
+                if (put is null)
                 {
-                    // 直接交接：登记目标工位待入库（不记料架账，件进机台），电极码随交接传给下游
-                    _expectedInbound[(dstEq, dstPos)] = new InboundHandoff(taskId, item.ElectrodeId);
-                }
-                else if (item.DestFrameId is long destFrame)
-                {
-                    // 入下料/中转/NG 架：入库预记；满架 → 告警人工（不静默丢件）
-                    var put = await _slots.ReserveAsync(destFrame, taskId, item.ElectrodeId, ct);
-                    if (put is null)
-                    {
-                        _logger.LogWarning("EQ{Eq} POS{Pos} 料架 {Frame} 已满，件 {Task}（电极 {El}）无法入库预记，需人工换架/清架",
-                            item.EquipmentId, item.PositionId, destFrame, taskId, item.ElectrodeId ?? "—");
-                        await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            $"料架 {destFrame} 已满，件 {taskId}（电极 {item.ElectrodeId ?? "—"}）无法入库，请人工换架/清架", taskId, ct);
-                    }
+                    _logger.LogWarning("EQ{Eq} POS{Pos} 料架 {Frame} 已满，件 {Task}（电极 {El}）无法入库预记，需人工换架/清架",
+                        item.EquipmentId, item.PositionId, destFrame, taskId, item.ElectrodeId ?? "—");
+                    await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        $"料架 {destFrame} 已满，件 {taskId}（电极 {item.ElectrodeId ?? "—"}）无法入库，请人工换架/清架", taskId, ct);
                 }
             }
         }
-        catch (Exception ex) { _logger.LogWarning(ex, "槽位账预记异常 task={Task}", taskId); }
+        catch (Exception ex) { _logger.LogWarning(ex, "下料槽位账预记异常 task={Task}", taskId); }
     }
 
     private sealed class PositionContext
@@ -802,6 +1111,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         public bool AlarmRaised { get; set; }
         /// <summary>当前件的电极码（上料取料时捕获，随件流转至下料/交接，供落账与加工记录溯源）。</summary>
         public string? ElectrodeId { get; set; }
+        /// <summary>Layer 1：已向单一调度消费者投递"请求上料"（去重，避免每 tick 重复投递）。</summary>
+        public bool UploadRequested { get; set; }
+        /// <summary>进入 WAIT_LOAD 的时刻——多工位竞争同一料源时"空闲最久优先"的确定性排序依据。</summary>
+        public DateTime? WaitLoadSince { get; set; }
     }
 
     /// <summary>上料入队决策：入队 / 料架无料等待 / 失败告警。</summary>

@@ -43,7 +43,8 @@ public interface ISlotAccountService
     /// <summary>电极反查：按电极码找所在料架+槽位（UI 高亮 + NG 处理定位）。</summary>
     Task<SlotLocation?> LocateElectrodeAsync(string electrodeId, CancellationToken ct = default);
 
-    /// <summary>盘点校正：按槽位顺序从 posStart 起的 count 个槽位，用 products 数组按下发孔位顺序全量校正电极码（占用），范围外槽位不变；所有槽位 LAST_VERIFY_TIME=now。返回校正数。</summary>
+    /// <summary>盘点校正：posStart 为 identifyQR 孔位（三位数、百位=面/层，如 101=1层1位），
+    /// products 按下发孔位顺序映射到 LAYER_NO/POS_IN_LAYER 物理序；范围外槽位电极不变，整架 LAST_VERIFY_TIME=now。返回校正数。</summary>
     Task<int> CorrectFromInventoryAsync(long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default);
 
     /// <summary>取料架全部槽位（按 SlotNo 顺序），供盘点/NG 处理/UI。</summary>
