@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Configuration;
+using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
 using Microsoft.Extensions.Options;
@@ -18,39 +19,62 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private readonly IRcsTaskService _rcs;
     private readonly ILocationMapService _locationMap;
     private readonly IWorkLineService _workLineService;
+    private readonly IEquipmentConfigService _equipment;
+    private readonly IFrameService _frames;
     private readonly IRcsCallbackNotifier _callbacks;
     private readonly IChangeFrameOrchestrator _changeFrame;
+    private readonly IRcsConnectionConfigService _connConfig;
+    private readonly IRcsRuntimeConfig _runtime;
+    private readonly IRcsCallbackListener _callbackListener;
+    private readonly ICurrentUser _user;
     private readonly RcsOptions _options;
 
     private long _workLineId;
+    private long _agvId;
+    private long _connectionConfigId;
     private string _lineCode = "LINE";
+    private bool _suppressPositionReload;
+    private bool _suppressLocTypeSideEffects;
 
     public RcsViewModel(IRcsTaskService rcs, ILocationMapService locationMap,
-        IWorkLineService workLineService, IRcsCallbackNotifier callbacks, IChangeFrameOrchestrator changeFrame,
+        IWorkLineService workLineService, IEquipmentConfigService equipment, IFrameService frames,
+        IRcsCallbackNotifier callbacks, IChangeFrameOrchestrator changeFrame,
+        IRcsConnectionConfigService connConfig, IRcsRuntimeConfig runtime,
+        IRcsCallbackListener callbackListener, ICurrentUser user,
         IOptions<AppOptions> options)
     {
         _rcs = rcs;
         _locationMap = locationMap;
         _workLineService = workLineService;
+        _equipment = equipment;
+        _frames = frames;
         _callbacks = callbacks;
         _changeFrame = changeFrame;
+        _connConfig = connConfig;
+        _runtime = runtime;
+        _callbackListener = callbackListener;
+        _user = user;
         _options = options.Value.Rcs;
 
-        KindOptions = new[] { "搬运 transit", "抓取 grab", "识别 identifyQR" };
-        LocTypeOptions = new[] { "AREA", "EQUIPMENT", "POSITION", "FRAME" };
-        RcsTypeOptions = new[] { "station", "cell", "shelf" };
-        MsgDirectionOptions = new[] { "全部", "OUT", "IN" };
-        MsgInterfaceOptions = new[] { "全部", "transitTask", "excuteTask", "cancelTask", "queryTask",
-            "pushTaskStatus", "scanTaskStatus", "warnCallback" };
+        KindOptions = new[] { "搬运", "抓取", "识别" };
+        LocTypeOptions = new[] { "区域", "机台", "加工位", "料架" };
+        LocFilterTypeOptions = new[] { "全部", "区域", "机台", "加工位", "料架" };
+        RcsTypeOptions = new[] { "站点", "仓位", "料架站" };
+        AreaNameOptions = new[] { "上料区", "下料区", "满架缓存区", "空架缓存区", "托盘回收区" };
+        FilteredLocations = new ObservableCollection<LocationMapItem>();
+        MsgDirectionOptions = new[] { "全部", "出站", "入站" };
+        MsgInterfaceOptions = new[] { "全部", "搬运下发", "定制任务", "取消任务", "查询任务",
+            "状态回调", "扫码回调", "告警回调" };
         MsgLimitOptions = new[] { 100, 500, 1000, 2000 };
         TerminalLines = new ObservableCollection<string>();
         Tasks = new ObservableCollection<RcsTaskRow>();
         Messages = new ObservableCollection<RcsMsgRow>();
         Locations = new ObservableCollection<LocationMapItem>();
+        LocEquipmentOptions = new ObservableCollection<NamedOption>();
+        LocPositionOptions = new ObservableCollection<NamedOption>();
+        LocFrameOptions = new ObservableCollection<NamedOption>();
 
-        BaseUrl = _options.BaseUrl;
-        ClientCode = _options.ClientCode;
-        CallbackInfo = $"{_options.CallbackHost}:{_options.CallbackPort}";
+        LoadConnectionFromRuntime();
 
         _callbacks.TaskStatusReceived += OnTaskStatusReceived;
         _callbacks.ScanResultReceived += OnScanResultReceived;
@@ -59,6 +83,18 @@ public sealed partial class RcsViewModel : PageViewModelBase
         _changeFrame.ProgressChanged += OnChangeFrameProgress;
 
         _ = InitializeAsync();
+    }
+
+    private void LoadConnectionFromRuntime()
+    {
+        var snap = _runtime.Snapshot();
+        BaseUrl = snap.BaseUrl;
+        ClientCode = snap.ClientCode;
+        CallbackHost = snap.CallbackHost;
+        CallbackPort = snap.CallbackPort;
+        RequestTimeoutMs = snap.RequestTimeoutMs;
+        MaxRetries = snap.MaxRetries;
+        PollIntervalMs = snap.PollIntervalMs;
     }
 
     private void OnTaskStatusReceived(object? sender, RcsTaskStatusEvent e)
@@ -92,7 +128,9 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
     public string[] KindOptions { get; }
     public string[] LocTypeOptions { get; }
+    public string[] LocFilterTypeOptions { get; }
     public string[] RcsTypeOptions { get; }
+    public string[] AreaNameOptions { get; }
     public string[] MsgDirectionOptions { get; }
     public string[] MsgInterfaceOptions { get; }
     public int[] MsgLimitOptions { get; }
@@ -100,17 +138,54 @@ public sealed partial class RcsViewModel : PageViewModelBase
     public ObservableCollection<RcsTaskRow> Tasks { get; }
     public ObservableCollection<RcsMsgRow> Messages { get; }
     public ObservableCollection<LocationMapItem> Locations { get; }
+    /// <summary>位置映射列表（按类型筛选后）。</summary>
+    public ObservableCollection<LocationMapItem> FilteredLocations { get; }
+    public ObservableCollection<NamedOption> LocEquipmentOptions { get; }
+    public ObservableCollection<NamedOption> LocPositionOptions { get; }
+    public ObservableCollection<NamedOption> LocFrameOptions { get; }
 
-    // 连接配置（只读展示；正式编辑在步骤⑥并入 MAS_AUTO_WORKLINE_AGV）
+    // 连接配置（可编辑，落库 MAS_AUTO_WORKLINE_AGV）
     [ObservableProperty] private string _baseUrl = "";
     [ObservableProperty] private string _clientCode = "";
-    [ObservableProperty] private string _callbackInfo = "";
+    [ObservableProperty] private string _callbackHost = "0.0.0.0";
+    [ObservableProperty] private int _callbackPort = 9080;
+    [ObservableProperty] private int _requestTimeoutMs = 10000;
+    [ObservableProperty] private int _maxRetries = 3;
+    [ObservableProperty] private int _pollIntervalMs = 3000;
+    [ObservableProperty] private bool _isSavingConnection;
+    [ObservableProperty] private bool _isTestingConnection;
+    [ObservableProperty] private string _connectionHealthText = "未测试";
+    [ObservableProperty] private string _connectionHealthBrushKey = "IdleBrush";
+    [ObservableProperty] private bool _isTestingCallback;
+    [ObservableProperty] private string _callbackHealthText = "未测试";
+    [ObservableProperty] private string _callbackHealthBrushKey = "IdleBrush";
 
     // 手动下发表单
-    [ObservableProperty] private string _selectedKind = "搬运 transit";
+    [ObservableProperty] private string _selectedKind = "搬运";
     [ObservableProperty] private string _fromCode = "601203";
     [ObservableProperty] private string _toCode = "603201";
     [ObservableProperty] private int _priority = 5;
+
+    /// <summary>搬运：起终点都要。</summary>
+    public bool ShowTransitParams => SelectedKind is "搬运" || SelectedKind.StartsWith("搬运");
+    /// <summary>抓取：源/目标站 + 抓取孔位参数。</summary>
+    public bool ShowGrabParams => SelectedKind is "抓取" || SelectedKind.StartsWith("抓取");
+    /// <summary>识别：料架站 + 起始孔/数量。</summary>
+    public bool ShowIdentifyParams => SelectedKind is "识别" || SelectedKind.StartsWith("识别");
+    /// <summary>识别无终点；抓取终点=目标站。</summary>
+    public bool ShowToCode => !ShowIdentifyParams;
+    public string FromLabelText => ShowIdentifyParams ? "料架站" : (ShowGrabParams ? "源站" : "起点");
+    public string ToLabelText => ShowGrabParams ? "目标站" : "终点";
+
+    partial void OnSelectedKindChanged(string value)
+    {
+        OnPropertyChanged(nameof(ShowTransitParams));
+        OnPropertyChanged(nameof(ShowGrabParams));
+        OnPropertyChanged(nameof(ShowIdentifyParams));
+        OnPropertyChanged(nameof(ShowToCode));
+        OnPropertyChanged(nameof(FromLabelText));
+        OnPropertyChanged(nameof(ToLabelText));
+    }
     // 抓取参数（简化：单条 GrabItem）
     [ObservableProperty] private int _srcNo = 101;
     [ObservableProperty] private int _srcPos = 101;
@@ -120,10 +195,17 @@ public sealed partial class RcsViewModel : PageViewModelBase
     // 识别参数
     [ObservableProperty] private int _posStart = 101;
     [ObservableProperty] private int _identifyCount = 3;
-    // 取消/redo
+    // 取消/redo（任务列表点选回填 OperateTaskId）
+    [ObservableProperty] private RcsTaskRow? _selectedTask;
     [ObservableProperty] private string _operateTaskId = "";
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _statusMessage = "";
+
+    partial void OnSelectedTaskChanged(RcsTaskRow? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value?.RcsTaskId))
+            OperateTaskId = value.RcsTaskId!;
+    }
 
     // 报文流水筛选（服务端查询）+ 自动刷新开关
     [ObservableProperty] private string _msgFilterDirection = "全部";
@@ -131,6 +213,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [ObservableProperty] private string _msgFilterTaskId = "";
     [ObservableProperty] private int _msgLimit = 100;
     [ObservableProperty] private bool _autoRefreshMessages = true;
+    [ObservableProperty] private RcsMsgRow? _selectedMessage;
 
     // 换架/空托盘回收（第四阶段⑥b）
     [ObservableProperty] private string _changeFrameEquipmentId = "1";
@@ -139,16 +222,86 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [ObservableProperty] private string _palletReturnFromCode = "P100";
     public ObservableCollection<ChangeFrameProgressEvent> ChangeFrameTransactions { get; } = new();
 
-    // 位置映射编辑
+    // 位置映射编辑（下拉存中文，保存时转英文码；机台/工位/料架用 NamedOption）
     [ObservableProperty] private LocationMapItem? _selectedLocation;
-    [ObservableProperty] private string _locType = "AREA";
+    [ObservableProperty] private string _locType = "区域";
     [ObservableProperty] private string _locRcsCode = "";
-    [ObservableProperty] private string _locRcsType = "station";
+    [ObservableProperty] private string _locRcsType = "站点";
     [ObservableProperty] private string _locName = "";
-    [ObservableProperty] private string _locEquipmentId = "";
-    [ObservableProperty] private string _locPositionId = "";
-    [ObservableProperty] private string _locFrameId = "";
+    [ObservableProperty] private NamedOption? _selectedLocEquipment;
+    [ObservableProperty] private NamedOption? _selectedLocPosition;
+    [ObservableProperty] private NamedOption? _selectedLocFrame;
     [ObservableProperty] private long _editingLocId;
+    [ObservableProperty] private string _locFilterType = "全部";
+    [ObservableProperty] private string _locationCountText = "共 0 条";
+
+    /// <summary>区域：名称用预设；其它类型名称作备注。</summary>
+    public bool ShowLocAreaName => LocType is "区域";
+    public bool ShowLocRemarkName => LocType is not "区域";
+    /// <summary>机台 / 加工位：需选机台。</summary>
+    public bool ShowLocEquipment => LocType is "机台" or "加工位";
+    /// <summary>仅加工位：需选工位。</summary>
+    public bool ShowLocPosition => LocType is "加工位";
+    /// <summary>仅料架：需选料架。</summary>
+    public bool ShowLocFrame => LocType is "料架";
+
+    partial void OnLocTypeChanged(string value)
+    {
+        OnPropertyChanged(nameof(ShowLocAreaName));
+        OnPropertyChanged(nameof(ShowLocRemarkName));
+        OnPropertyChanged(nameof(ShowLocEquipment));
+        OnPropertyChanged(nameof(ShowLocPosition));
+        OnPropertyChanged(nameof(ShowLocFrame));
+        if (_suppressLocTypeSideEffects) return;
+
+        // 切类型时清掉无关关联，避免误保存脏引用。
+        if (value is "区域")
+        {
+            _suppressPositionReload = true;
+            try
+            {
+                SelectedLocEquipment = NoneOption;
+                SelectedLocPosition = NoneOption;
+                SelectedLocFrame = NoneOption;
+            }
+            finally { _suppressPositionReload = false; }
+            ReplaceOnUi(LocPositionOptions, new[] { NoneOption });
+            if (string.IsNullOrWhiteSpace(LocName) || !AreaNameOptions.Contains(LocName))
+                LocName = AreaNameOptions[0];
+            LocRcsType = "站点";
+        }
+        else if (value is "料架")
+        {
+            _suppressPositionReload = true;
+            try
+            {
+                SelectedLocEquipment = NoneOption;
+                SelectedLocPosition = NoneOption;
+            }
+            finally { _suppressPositionReload = false; }
+            ReplaceOnUi(LocPositionOptions, new[] { NoneOption });
+            if (LocRcsType is "站点") LocRcsType = "料架站";
+        }
+        else if (value is "机台")
+        {
+            _suppressPositionReload = true;
+            try
+            {
+                SelectedLocPosition = NoneOption;
+                SelectedLocFrame = NoneOption;
+            }
+            finally { _suppressPositionReload = false; }
+        }
+        else if (value is "加工位")
+        {
+            _suppressPositionReload = true;
+            try { SelectedLocFrame = NoneOption; }
+            finally { _suppressPositionReload = false; }
+            if (LocRcsType is "料架站") LocRcsType = "仓位";
+        }
+    }
+
+    partial void OnLocFilterTypeChanged(string value) => ApplyLocationFilter();
 
     private async Task InitializeAsync()
     {
@@ -160,12 +313,186 @@ public sealed partial class RcsViewModel : PageViewModelBase
             {
                 _workLineId = first.Id;
                 _lineCode = string.IsNullOrWhiteSpace(first.Code) ? "LINE" : first.Code;
+                _agvId = first.AgvId;
             }
         }
         catch { /* DB 未就绪：用默认 LINE */ }
+
+        try
+        {
+            var cfg = _agvId > 0
+                ? await _connConfig.GetByWorkLineAgvIdAsync(_agvId)
+                : await _connConfig.GetAsync();
+            if (cfg is not null)
+            {
+                _connectionConfigId = cfg.Id;
+                if (cfg.AgvId > 0) _agvId = cfg.AgvId;
+                BaseUrl = cfg.BaseUrl;
+                ClientCode = cfg.ClientCode;
+                CallbackHost = cfg.CallbackHost;
+                CallbackPort = cfg.CallbackPort;
+                RequestTimeoutMs = cfg.RequestTimeoutMs;
+                MaxRetries = cfg.MaxRetries;
+                PollIntervalMs = cfg.PollIntervalMs;
+            }
+            else
+                LoadConnectionFromRuntime();
+        }
+        catch { LoadConnectionFromRuntime(); }
+
+        RefreshCallbackListenHint();
+
+        await LoadLocationRefOptionsAsync();
         await RefreshTasksAsync();
         await RefreshMessagesAsync();
         await RefreshLocationsAsync();
+    }
+
+    /// <summary>根据宿主启动结果刷新回调状态灯（未点「测试回调」时也能看到是否在听）。</summary>
+    private void RefreshCallbackListenHint()
+    {
+        if (_callbackListener.IsListening)
+        {
+            CallbackHealthText = $"监听 {_callbackListener.BoundHost}:{_callbackListener.BoundPort}";
+            CallbackHealthBrushKey = "OkBrush";
+        }
+        else
+        {
+            var err = _callbackListener.ListenError;
+            CallbackHealthText = string.IsNullOrWhiteSpace(err) ? "未监听" : "启动失败";
+            CallbackHealthBrushKey = "AlarmBrush";
+        }
+    }
+
+    /// <summary>任意网卡 / 非法 IP / 环回 → 用 127.0.0.1 做本机探针。</summary>
+    private static string ResolveLoopbackProbeHost(string? boundHost)
+    {
+        if (string.IsNullOrWhiteSpace(boundHost)) return "127.0.0.1";
+        if (!System.Net.IPAddress.TryParse(boundHost, out var ip)) return "127.0.0.1";
+        if (ip.Equals(System.Net.IPAddress.Any) || ip.Equals(System.Net.IPAddress.IPv6Any)
+            || System.Net.IPAddress.IsLoopback(ip))
+            return "127.0.0.1";
+        return ip.ToString();
+    }
+
+    [RelayCommand]
+    private async Task SaveConnectionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(BaseUrl))
+        {
+            HandyControl.Controls.Growl.Warning("请填写 RCS 地址。");
+            return;
+        }
+        if (!Uri.TryCreate(BaseUrl.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            HandyControl.Controls.Growl.Warning("RCS 地址须为 http(s)://… 形式。");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(ClientCode))
+        {
+            HandyControl.Controls.Growl.Warning("请填写 clientCode。");
+            return;
+        }
+        if (CallbackPort is < 1 or > 65535)
+        {
+            HandyControl.Controls.Growl.Warning("回调端口无效。");
+            return;
+        }
+        var callbackHost = string.IsNullOrWhiteSpace(CallbackHost) ? "0.0.0.0" : CallbackHost.Trim();
+        if (!System.Net.IPAddress.TryParse(callbackHost, out var callbackIp))
+        {
+            HandyControl.Controls.Growl.Warning("回调 Host 须为合法 IP（如 0.0.0.0 或 127.0.0.1）。");
+            return;
+        }
+        // 规范化书写（00.0.0.0 → 0.0.0.0），避免脏值落库导致测试回调连错地址。
+        callbackHost = callbackIp.Equals(System.Net.IPAddress.Any) || callbackIp.Equals(System.Net.IPAddress.IPv6Any)
+            ? "0.0.0.0"
+            : callbackIp.ToString();
+
+        IsSavingConnection = true;
+        try
+        {
+            var draft = new RcsConnectionConfig
+            {
+                Id = _connectionConfigId,
+                AgvId = _agvId > 0 ? _agvId : 1,
+                BaseUrl = BaseUrl.Trim(),
+                ClientCode = ClientCode.Trim(),
+                CallbackHost = callbackHost,
+                CallbackPort = CallbackPort,
+                RequestTimeoutMs = RequestTimeoutMs,
+                MaxRetries = MaxRetries,
+                PollIntervalMs = PollIntervalMs
+            };
+            var saved = await _connConfig.SaveAsync(draft, _user.Name);
+            _connectionConfigId = saved.Id;
+            _agvId = saved.AgvId;
+            _runtime.Apply(saved);
+            LoadConnectionFromRuntime();
+
+            var callbackChanged = !string.Equals(saved.CallbackHost, _runtime.BootCallbackHost, StringComparison.OrdinalIgnoreCase)
+                                  || saved.CallbackPort != _runtime.BootCallbackPort;
+            if (callbackChanged)
+                HandyControl.Controls.Growl.Warning("已保存。回调 Host/Port 已变更，需重启客户端后生效。");
+            else
+                HandyControl.Controls.Growl.Success("RCS 连接配置已保存（出站立即生效）。");
+            Append($"> 已保存连接配置 {saved.BaseUrl} client={saved.ClientCode}");
+        }
+        catch (Exception ex)
+        {
+            HandyControl.Controls.Growl.Error($"保存失败：{ex.Message}");
+        }
+        finally { IsSavingConnection = false; }
+    }
+
+    private async Task LoadLocationRefOptionsAsync()
+    {
+        try
+        {
+            var eqs = await _frames.GetEquipmentOptionsAsync();
+            var frames = await _equipment.GetFrameOptionsAsync();
+            ReplaceOnUi(LocEquipmentOptions, PrependNone(eqs));
+            ReplaceOnUi(LocFrameOptions, PrependNone(frames));
+            ReplaceOnUi(LocPositionOptions, new[] { NoneOption });
+        }
+        catch (Exception ex) { StatusMessage = $"位置映射下拉加载失败：{ex.Message}"; }
+    }
+
+    private static readonly NamedOption NoneOption = new(0, "（无）");
+
+    private static IReadOnlyList<NamedOption> PrependNone(IReadOnlyList<NamedOption> items)
+    {
+        var list = new List<NamedOption>(items.Count + 1) { NoneOption };
+        list.AddRange(items);
+        return list;
+    }
+
+    partial void OnSelectedLocEquipmentChanged(NamedOption? value)
+    {
+        if (_suppressPositionReload) return;
+        _ = ReloadPositionsForEquipmentAsync(value?.Id ?? 0, preferPositionId: null);
+    }
+
+    private async Task ReloadPositionsForEquipmentAsync(long equipmentId, long? preferPositionId)
+    {
+        try
+        {
+            IReadOnlyList<NamedOption> opts = new[] { NoneOption };
+            if (equipmentId > 0)
+            {
+                var positions = await _equipment.GetPositionsAsync(equipmentId);
+                opts = PrependNone(positions.Select(p => new NamedOption(p.Id, $"{p.Name}({p.Code})")).ToList());
+            }
+            ReplaceOnUi(LocPositionOptions, opts);
+            var pick = preferPositionId is > 0
+                ? LocPositionOptions.FirstOrDefault(x => x.Id == preferPositionId.Value) ?? NoneOption
+                : NoneOption;
+            _suppressPositionReload = true;
+            try { SelectedLocPosition = pick; }
+            finally { _suppressPositionReload = false; }
+        }
+        catch (Exception ex) { StatusMessage = $"工位下拉加载失败：{ex.Message}"; }
     }
 
     [RelayCommand]
@@ -175,9 +502,9 @@ public sealed partial class RcsViewModel : PageViewModelBase
         try
         {
             RcsResult r;
-            if (SelectedKind.StartsWith("抓取"))
+            if (ShowGrabParams)
             {
-                Append($"> grabTask {SrcNo}/{SrcPos} → {DstNo}/{DstPos}");
+                Append($"> 抓取 {FromCode} → {ToCode} 孔位 {SrcNo}/{SrcPos}→{DstNo}/{DstPos}");
                 r = await _rcs.DispatchGrabAsync(new GrabDispatchArgs
                 {
                     WorkLineId = _workLineId,
@@ -188,9 +515,9 @@ public sealed partial class RcsViewModel : PageViewModelBase
                     Items = new[] { new GrabItem { SrcNo = SrcNo, SrcPos = SrcPos, DstNo = DstNo, DstPos = DstPos, Data = GrabData } }
                 });
             }
-            else if (SelectedKind.StartsWith("识别"))
+            else if (ShowIdentifyParams)
             {
-                Append($"> identifyQR {PosStart},{IdentifyCount} @ {FromCode}");
+                Append($"> 识别 {FromCode} 起始 {PosStart} 数量 {IdentifyCount}");
                 r = await _rcs.DispatchIdentifyAsync(new IdentifyDispatchArgs
                 {
                     WorkLineId = _workLineId,
@@ -203,7 +530,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
             }
             else
             {
-                Append($"> transitTask {FromCode} → {ToCode}");
+                Append($"> 搬运 {FromCode} → {ToCode}");
                 r = await _rcs.DispatchTransitAsync(new TransitDispatchArgs
                 {
                     WorkLineId = _workLineId,
@@ -227,14 +554,18 @@ public sealed partial class RcsViewModel : PageViewModelBase
             await RefreshTasksAsync();
             await RefreshMessagesAsync();
             // 自动回填最新 taskId，方便直接 redo/取消，无需手动复制。
-            if (Tasks.FirstOrDefault()?.RcsTaskId is { } newestId) OperateTaskId = newestId;
+            if (Tasks.FirstOrDefault()?.RcsTaskId is { } newestId)
+            {
+                OperateTaskId = newestId;
+                SelectedTask = Tasks.FirstOrDefault(t => t.RcsTaskId == newestId);
+            }
         }
     }
 
     [RelayCommand]
     private async Task CancelAsync()
     {
-        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填 taskId。"); return; }
+        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填任务号。"); return; }
         IsBusy = true;
         try
         {
@@ -247,11 +578,11 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [RelayCommand]
     private async Task RedoAsync()
     {
-        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填 taskId。"); return; }
+        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填任务号。"); return; }
         IsBusy = true;
         try
         {
-            Append($"> redo {OperateTaskId}");
+            Append($"> 重试 {OperateTaskId}");
             ReportResult(await _rcs.RedoAsync(OperateTaskId.Trim()));
         }
         finally { IsBusy = false; await RefreshTasksAsync(); await RefreshMessagesAsync(); }
@@ -260,7 +591,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [RelayCommand]
     private async Task ConfirmCancelHandledAsync()
     {
-        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填 taskId。"); return; }
+        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填任务号。"); return; }
         try
         {
             await _rcs.ConfirmCancelHandledAsync(OperateTaskId.Trim());
@@ -323,6 +654,133 @@ public sealed partial class RcsViewModel : PageViewModelBase
     }
 
     [RelayCommand]
+    private async Task TestConnectionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(BaseUrl)
+            || !Uri.TryCreate(BaseUrl.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            ConnectionHealthText = "地址无效";
+            ConnectionHealthBrushKey = "AlarmBrush";
+            HandyControl.Controls.Growl.Warning("请先填写有效的 RCS 地址。");
+            return;
+        }
+
+        IsTestingConnection = true;
+        ConnectionHealthText = "测试中…";
+        ConnectionHealthBrushKey = "WarnBrush";
+        try
+        {
+            // 用表单当前值测出站（未保存也可测）；不改回调启动快照。
+            _runtime.Apply(new RcsConnectionConfig
+            {
+                Id = _connectionConfigId,
+                AgvId = _agvId,
+                BaseUrl = BaseUrl.Trim(),
+                ClientCode = string.IsNullOrWhiteSpace(ClientCode) ? "CNC" : ClientCode.Trim(),
+                CallbackHost = string.IsNullOrWhiteSpace(CallbackHost) ? "0.0.0.0" : CallbackHost.Trim(),
+                CallbackPort = CallbackPort,
+                RequestTimeoutMs = RequestTimeoutMs,
+                MaxRetries = MaxRetries,
+                PollIntervalMs = PollIntervalMs
+            });
+
+            Append($"> 测试连接 queryTask → {_runtime.BaseUrl}");
+            var r = await _rcs.QueryAsync(new QueryTaskRequest { PageIndex = 1, PageSize = 1 });
+            if (r.Success)
+            {
+                ConnectionHealthText = $"连通 {r.ElapsedMs}ms";
+                ConnectionHealthBrushKey = "OkBrush";
+                Append($"< 连通 OK {r.ElapsedMs}ms");
+                HandyControl.Controls.Growl.Success($"RCS 连通成功 {r.ElapsedMs}ms");
+            }
+            else
+            {
+                var detail = r.Error ?? r.Message ?? "失败";
+                ConnectionHealthText = "不通";
+                ConnectionHealthBrushKey = "AlarmBrush";
+                Append($"< 连通失败 HTTP{r.HttpStatus} {detail}");
+                HandyControl.Controls.Growl.Warning($"RCS 连通失败：{detail}");
+            }
+        }
+        catch (Exception ex)
+        {
+            ConnectionHealthText = "不通";
+            ConnectionHealthBrushKey = "AlarmBrush";
+            Append($"< 连通异常 {ex.Message}");
+            HandyControl.Controls.Growl.Error($"测试异常：{ex.Message}");
+        }
+        finally
+        {
+            IsTestingConnection = false;
+            await RefreshMessagesAsync();
+        }
+    }
+
+    [RelayCommand]
+    private async Task TestCallbackAsync()
+    {
+        IsTestingCallback = true;
+        CallbackHealthText = "测试中…";
+        CallbackHealthBrushKey = "WarnBrush";
+        try
+        {
+            if (!_callbackListener.IsListening)
+            {
+                var err = _callbackListener.ListenError ?? "回调宿主未启动";
+                CallbackHealthText = "未监听";
+                CallbackHealthBrushKey = "AlarmBrush";
+                Append($"< 回调未监听：{err}");
+                HandyControl.Controls.Growl.Warning($"回调未监听：{err}");
+                return;
+            }
+
+            // 测实际已绑定端口；任意网卡/非法 Host 用环回探测（Kestrel 可能 ListenAnyIP 但 BoundHost 曾是脏值）。
+            var host = ResolveLoopbackProbeHost(_callbackListener.BoundHost);
+            var port = _callbackListener.BoundPort;
+            var url = $"http://{host}:{port}{RcsCallbackInterfaces.PushTaskStatusPath}";
+
+            // 空 taskId 探针：处理器会应答但不改任务态、不派发事件。
+            var body = """{"taskId":"","data":{"system":{"error_code":0,"msg":"callback-probe"}}}""";
+            Append($"> 测试回调 POST {url}");
+
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            using var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            using var resp = await http.PostAsync(url, content);
+            sw.Stop();
+            var ack = await resp.Content.ReadAsStringAsync();
+
+            if (resp.IsSuccessStatusCode)
+            {
+                CallbackHealthText = $"可达 {sw.ElapsedMilliseconds}ms";
+                CallbackHealthBrushKey = "OkBrush";
+                Append($"< 回调 OK HTTP{(int)resp.StatusCode} {sw.ElapsedMilliseconds}ms {ack}");
+                HandyControl.Controls.Growl.Success($"回调可达 {sw.ElapsedMilliseconds}ms");
+            }
+            else
+            {
+                CallbackHealthText = "不通";
+                CallbackHealthBrushKey = "AlarmBrush";
+                Append($"< 回调失败 HTTP{(int)resp.StatusCode} {ack}");
+                HandyControl.Controls.Growl.Warning($"回调不通：HTTP{(int)resp.StatusCode}");
+            }
+        }
+        catch (Exception ex)
+        {
+            CallbackHealthText = "不通";
+            CallbackHealthBrushKey = "AlarmBrush";
+            Append($"< 回调异常 {ex.Message}");
+            HandyControl.Controls.Growl.Error($"回调测试异常：{ex.Message}");
+        }
+        finally
+        {
+            IsTestingCallback = false;
+            await RefreshMessagesAsync();
+        }
+    }
+
+    [RelayCommand]
     private async Task QueryAsync()
     {
         IsBusy = true;
@@ -340,8 +798,11 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         try
         {
+            var keepId = SelectedTask?.RcsTaskId ?? OperateTaskId;
             var rows = await _rcs.GetRecentTasksAsync(100);
             ReplaceOnUi(Tasks, rows);
+            if (!string.IsNullOrWhiteSpace(keepId))
+                SelectedTask = Tasks.FirstOrDefault(t => t.RcsTaskId == keepId);
         }
         catch (Exception ex) { StatusMessage = $"任务加载失败：{ex.Message}"; }
     }
@@ -351,14 +812,17 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         try
         {
+            var keepId = SelectedMessage?.Id;
             var rows = await _rcs.QueryMessagesAsync(new RcsMsgQuery
             {
-                Direction = MsgFilterDirection is "全部" or "" ? null : MsgFilterDirection,
-                Interface = MsgFilterInterface is "全部" or "" ? null : MsgFilterInterface,
+                Direction = RcsDisplayLabels.DirectionFromZh(MsgFilterDirection),
+                Interface = RcsDisplayLabels.InterfaceFromZh(MsgFilterInterface),
                 TaskId = string.IsNullOrWhiteSpace(MsgFilterTaskId) ? null : MsgFilterTaskId.Trim(),
                 Limit = MsgLimit
             });
             ReplaceOnUi(Messages, rows);
+            if (keepId is long id)
+                SelectedMessage = Messages.FirstOrDefault(m => m.Id == id);
         }
         catch (Exception ex) { StatusMessage = $"报文加载失败：{ex.Message}"; }
     }
@@ -368,10 +832,30 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         try
         {
+            var keepId = SelectedLocation?.Id ?? EditingLocId;
             var rows = await _locationMap.GetAllAsync();
             ReplaceOnUi(Locations, rows);
+            ApplyLocationFilter();
+            if (keepId > 0)
+                SelectedLocation = FilteredLocations.FirstOrDefault(x => x.Id == keepId)
+                    ?? Locations.FirstOrDefault(x => x.Id == keepId);
         }
         catch (Exception ex) { StatusMessage = $"位置映射加载失败：{ex.Message}"; }
+    }
+
+    private void ApplyLocationFilter()
+    {
+        IEnumerable<LocationMapItem> q = Locations;
+        if (LocFilterType is not "全部" and not null and not "")
+        {
+            var code = LocationDisplayLabels.LocTypeFromZh(LocFilterType);
+            q = q.Where(x => x.LocType == code);
+        }
+        var list = q.ToList();
+        ReplaceOnUi(FilteredLocations, list);
+        LocationCountText = LocFilterType is "全部" or null or ""
+            ? $"共 {Locations.Count} 条"
+            : $"共 {list.Count} / {Locations.Count} 条";
     }
 
     /// <summary>把集合的整体替换 marshal 到 UI 线程（回调事件在后台线程触发，直接改 ObservableCollection 会抛跨线程异常）。</summary>
@@ -391,13 +875,26 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         if (value is null) return;
         EditingLocId = value.Id;
-        LocType = value.LocType;
-        LocRcsCode = value.RcsCode;
-        LocRcsType = value.RcsType;
-        LocName = value.LocName ?? "";
-        LocEquipmentId = value.EquipmentId?.ToString() ?? "";
-        LocPositionId = value.PositionId?.ToString() ?? "";
-        LocFrameId = value.FrameId?.ToString() ?? "";
+        _suppressLocTypeSideEffects = true;
+        try
+        {
+            LocType = LocationDisplayLabels.LocTypeToZh(value.LocType);
+            LocRcsCode = value.RcsCode;
+            LocRcsType = LocationDisplayLabels.RcsTypeToZh(value.RcsType);
+            LocName = value.LocType == "AREA"
+                ? LocationDisplayLabels.AreaNameToZh(value.LocName)
+                : (value.LocName ?? "");
+        }
+        finally { _suppressLocTypeSideEffects = false; }
+
+        _suppressPositionReload = true;
+        try
+        {
+            SelectedLocEquipment = LocEquipmentOptions.FirstOrDefault(x => x.Id == (value.EquipmentId ?? 0)) ?? NoneOption;
+            SelectedLocFrame = LocFrameOptions.FirstOrDefault(x => x.Id == (value.FrameId ?? 0)) ?? NoneOption;
+        }
+        finally { _suppressPositionReload = false; }
+        _ = ReloadPositionsForEquipmentAsync(value.EquipmentId ?? 0, value.PositionId);
     }
 
     [RelayCommand]
@@ -405,13 +902,29 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         EditingLocId = 0;
         SelectedLocation = null;
-        LocType = "AREA";
-        LocRcsCode = "";
-        LocRcsType = "station";
-        LocName = "";
-        LocEquipmentId = "";
-        LocPositionId = "";
-        LocFrameId = "";
+        _suppressLocTypeSideEffects = true;
+        try
+        {
+            LocType = "区域";
+            LocRcsCode = "";
+            LocRcsType = "站点";
+            LocName = AreaNameOptions[0];
+        }
+        finally { _suppressLocTypeSideEffects = false; }
+        OnPropertyChanged(nameof(ShowLocAreaName));
+        OnPropertyChanged(nameof(ShowLocRemarkName));
+        OnPropertyChanged(nameof(ShowLocEquipment));
+        OnPropertyChanged(nameof(ShowLocPosition));
+        OnPropertyChanged(nameof(ShowLocFrame));
+        _suppressPositionReload = true;
+        try
+        {
+            SelectedLocEquipment = NoneOption;
+            SelectedLocFrame = NoneOption;
+            SelectedLocPosition = NoneOption;
+        }
+        finally { _suppressPositionReload = false; }
+        ReplaceOnUi(LocPositionOptions, new[] { NoneOption });
     }
 
     [RelayCommand]
@@ -420,16 +933,45 @@ public sealed partial class RcsViewModel : PageViewModelBase
         if (string.IsNullOrWhiteSpace(LocRcsCode)) { HandyControl.Controls.Growl.Warning("请填 RCS 编码。"); return; }
         try
         {
+            var locTypeCode = LocationDisplayLabels.LocTypeFromZh(LocType);
+            var locNameRaw = string.IsNullOrWhiteSpace(LocName) ? null : LocName.Trim();
+            // 按类型只保留相关关联，避免隐藏字段脏值落库。
+            long? eqId = ShowLocEquipment && SelectedLocEquipment is { Id: > 0 } e ? e.Id : null;
+            long? posId = ShowLocPosition && SelectedLocPosition is { Id: > 0 } p ? p.Id : null;
+            long? frameId = ShowLocFrame && SelectedLocFrame is { Id: > 0 } f ? f.Id : null;
+            if (locTypeCode == "POSITION" && (eqId is null || posId is null))
+            {
+                HandyControl.Controls.Growl.Warning("加工位映射请选择机台和工位。");
+                return;
+            }
+            if (locTypeCode == "EQUIPMENT" && eqId is null)
+            {
+                HandyControl.Controls.Growl.Warning("机台映射请选择机台。");
+                return;
+            }
+            if (locTypeCode == "FRAME" && frameId is null)
+            {
+                HandyControl.Controls.Growl.Warning("料架映射请选择料架。");
+                return;
+            }
+            if (locTypeCode == "AREA" && string.IsNullOrWhiteSpace(locNameRaw))
+            {
+                HandyControl.Controls.Growl.Warning("区域映射请选择名称。");
+                return;
+            }
+
             var item = new LocationMapItem
             {
                 Id = EditingLocId,
-                LocType = LocType,
+                LocType = locTypeCode,
                 RcsCode = LocRcsCode.Trim(),
-                RcsType = LocRcsType,
-                LocName = string.IsNullOrWhiteSpace(LocName) ? null : LocName.Trim(),
-                EquipmentId = ParseLong(LocEquipmentId),
-                PositionId = ParseLong(LocPositionId),
-                FrameId = ParseLong(LocFrameId)
+                RcsType = LocationDisplayLabels.RcsTypeFromZh(LocRcsType),
+                LocName = locTypeCode == "AREA"
+                    ? LocationDisplayLabels.AreaNameFromZh(locNameRaw)
+                    : locNameRaw,
+                EquipmentId = eqId,
+                PositionId = posId,
+                FrameId = frameId
             };
             await _locationMap.SaveAsync(item, "system");
             HandyControl.Controls.Growl.Success("位置映射已保存。");
@@ -469,13 +1011,14 @@ public sealed partial class RcsViewModel : PageViewModelBase
         }
     }
 
+    [RelayCommand]
+    private void ClearTerminal()
+        => System.Windows.Application.Current?.Dispatcher.Invoke(() => TerminalLines.Clear());
+
     private void Append(string line)
         => System.Windows.Application.Current?.Dispatcher.Invoke(() =>
         {
             TerminalLines.Add(line);
             while (TerminalLines.Count > 200) TerminalLines.RemoveAt(0);
         });
-
-    private static long? ParseLong(string s)
-        => long.TryParse(s?.Trim(), out var v) && v > 0 ? v : null;
 }

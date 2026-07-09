@@ -65,6 +65,8 @@ public sealed partial class FrameViewModel : PageViewModelBase
     [ObservableProperty] private string _electrodeQuery = "";
     [ObservableProperty] private string _findResult = "";
     [ObservableProperty] private string _statusMessage = "";
+    /// <summary>仅显示绑定了 NG 角色的料架。</summary>
+    [ObservableProperty] private bool _showNgOnly;
 
     // 绑定编辑（Task B）
     [ObservableProperty] private NamedOption? _selectedBindEquipment;
@@ -78,6 +80,8 @@ public sealed partial class FrameViewModel : PageViewModelBase
     // 发起盘点（第四阶段⑥c）
     [ObservableProperty] private int _inventoryPosStart = 101;
     [ObservableProperty] private int _inventoryCount = 5;
+
+    private List<FrameListItem> _allFrames = new();
 
     private async Task InitAsync()
     {
@@ -103,12 +107,23 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         try
         {
-            var frames = await _service.GetAllAsync();
-            Frames.Clear();
-            foreach (var f in frames) Frames.Add(new FrameRowVm(f));
-            SelectedFrame = Frames.FirstOrDefault();
+            _allFrames = (await _service.GetAllAsync()).ToList();
+            ApplyFrameFilter(keepSelection: false);
         }
         catch (Exception ex) { StatusMessage = $"加载失败：{ex.Message}"; }
+    }
+
+    partial void OnShowNgOnlyChanged(bool value) => ApplyFrameFilter(keepSelection: true);
+
+    private void ApplyFrameFilter(bool keepSelection)
+    {
+        var keepId = keepSelection ? SelectedFrame?.Id : null;
+        var source = ShowNgOnly ? _allFrames.Where(f => f.HasNgRole) : _allFrames;
+        Frames.Clear();
+        foreach (var f in source) Frames.Add(new FrameRowVm(f));
+        SelectedFrame = keepId is long id
+            ? Frames.FirstOrDefault(r => r.Id == id) ?? Frames.FirstOrDefault()
+            : Frames.FirstOrDefault();
     }
 
     /// <summary>定时原地刷新：列表占用数 + 当前料架槽位状态，不重建集合，不丢选中/编辑。</summary>
@@ -116,17 +131,22 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         try
         {
-            var frames = await _service.GetAllAsync();
+            _allFrames = (await _service.GetAllAsync()).ToList();
+            var filtered = (ShowNgOnly ? _allFrames.Where(f => f.HasNgRole) : _allFrames).ToList();
             // 列表占用数原地更新（按 Id 匹配；数量变化才整体重载）
-            if (frames.Count != Frames.Count)
+            if (filtered.Count != Frames.Count || filtered.Any(f => Frames.All(r => r.Id != f.Id)))
             {
-                await ReloadAsync();
+                ApplyFrameFilter(keepSelection: true);
                 return;
             }
-            foreach (var f in frames)
+            foreach (var f in filtered)
             {
                 var row = Frames.FirstOrDefault(r => r.Id == f.Id);
-                if (row is not null) row.Occupied = f.Occupied;
+                if (row is not null)
+                {
+                    row.Occupied = f.Occupied;
+                    row.HasNgRole = f.HasNgRole;
+                }
             }
 
             if (SelectedFrame is null) return;
@@ -347,6 +367,26 @@ public sealed partial class FrameViewModel : PageViewModelBase
         catch (Exception ex) { HandyControl.Controls.Growl.Error($"校正失败：{ex.Message}"); }
     }
 
+    /// <summary>NG 闭环：选中槽一键置空释放（不向后流转）。</summary>
+    [RelayCommand]
+    private async Task ClearSelectedSlotAsync()
+    {
+        if (SelectedFrame is null || SelectedSlot is null)
+        {
+            HandyControl.Controls.Growl.Warning("请先选中料架与槽位。");
+            return;
+        }
+        try
+        {
+            await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, null, SlotStates.Empty, _user.Name);
+            HandyControl.Controls.Growl.Success($"槽位 {SelectedSlot.Label} 已置空释放。");
+            CorrectElectrode = "";
+            CorrectSlotState = "空(0)";
+            await LoadDetailAsync(SelectedFrame.Id);
+        }
+        catch (Exception ex) { HandyControl.Controls.Growl.Error($"置空失败：{ex.Message}"); }
+    }
+
     [RelayCommand]
     private async Task StartInventoryAsync()
     {
@@ -356,6 +396,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
             var taskId = await _inventory.StartInventoryAsync(SelectedFrame.Id, InventoryPosStart, InventoryCount, _user.Name);
             if (!string.IsNullOrEmpty(taskId))
                 HandyControl.Controls.Growl.Info($"盘点已发起 {taskId}（约 3~4 分钟，完成自动刷新）");
+            // 拒发（互斥/缺 LOCATION）走 InventoryCompleted FAILED → OnInventoryCompleted Growl
         }
         catch (Exception ex) { HandyControl.Controls.Growl.Error($"盘点发起失败：{ex.Message}"); }
     }
@@ -386,6 +427,7 @@ public sealed partial class FrameRowVm : ObservableObject
         LayoutText = item.LayoutText;
         SlotTotal = item.SlotTotal;
         _occupied = item.Occupied;
+        _hasNgRole = item.HasNgRole;
     }
 
     public long Id { get; }
@@ -394,6 +436,7 @@ public sealed partial class FrameRowVm : ObservableObject
     public string LayoutText { get; }
     public int SlotTotal { get; }
     [ObservableProperty] private int _occupied;
+    [ObservableProperty] private bool _hasNgRole;
 }
 
 /// <summary>绑定角色下拉项。</summary>

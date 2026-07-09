@@ -151,8 +151,15 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             await _connections.ConnectAsync(row.PlcId);
             await RefreshPlcRowAsync(row.PlcId);
             StatusMessage = $"{row.Name} 已连接";
+            HandyControl.Controls.Growl.Success($"{row.Name} 已连接");
+            if (SelectedPlc?.PlcId == row.PlcId)
+                await ReadOnceAsync();
         }
-        catch (Exception ex) { StatusMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            HandyControl.Controls.Growl.Warning($"{row.Name} 连接失败：{ex.Message}");
+        }
     }
 
     [RelayCommand]
@@ -162,6 +169,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         await _connections.DisconnectAsync(row.PlcId);
         await RefreshPlcRowAsync(row.PlcId);
         StatusMessage = $"{row.Name} 已断开";
+        HandyControl.Controls.Growl.Info($"{row.Name} 已断开");
+        if (SelectedPlc?.PlcId == row.PlcId)
+            await ShowDisconnectedReadRowsAsync(row.PlcId);
     }
 
     [RelayCommand]
@@ -170,6 +180,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         await _connections.ConnectAllAsync();
         await ReloadAllAsync();
         StatusMessage = "全部连接完成";
+        HandyControl.Controls.Growl.Success("全部 PLC 连接完成");
+        if (SelectedPlc is not null)
+            await ReadOnceAsync();
     }
 
     [RelayCommand]
@@ -178,6 +191,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         await _connections.DisconnectAllAsync();
         await ReloadAllAsync();
         StatusMessage = "全部已断开";
+        HandyControl.Controls.Growl.Info("全部 PLC 已断开");
+        if (SelectedPlc is not null)
+            await ShowDisconnectedReadRowsAsync(SelectedPlc.PlcId);
     }
 
     /// <summary>新增 PLC：弹出对话框，PlcId 取建议值，保存后刷新列表。</summary>
@@ -233,6 +249,16 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             }
             await _catalog.SaveAsync(dlg.Result, _user.Name);
             await _catalog.BindEquipmentAsync(row.PlcId, dlg.Result.BoundEquipmentId, _user.Name);
+            // 编辑会断开连接；保存后自动重连，避免界面显示未连接又触发读点位告警。
+            try
+            {
+                await _connections.ConnectAsync(row.PlcId);
+                StatusMessage = $"PLC {dlg.Result.Name} 已更新并重连";
+            }
+            catch (Exception cex)
+            {
+                StatusMessage = $"PLC {dlg.Result.Name} 已更新，重连失败：{cex.Message}";
+            }
             HandyControl.Controls.Growl.Success($"PLC {dlg.Result.Name} 已更新。");
             await ReloadAllAsync();
         }
@@ -281,6 +307,13 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     private async Task ReadOnceAsync()
     {
         if (SelectedPlc is null) return;
+        // 未连接：刷新表格为「未连接」，不弹告警（避免刷屏）；旧值必须清掉。
+        if (!_connections.IsConnected(SelectedPlc.PlcId))
+        {
+            await ShowDisconnectedReadRowsAsync(SelectedPlc.PlcId);
+            StatusMessage = $"{SelectedPlc.Name} 未连接";
+            return;
+        }
         try
         {
             var results = await _operations.ReadPointsAsync(SelectedPlc.PlcId);
@@ -290,17 +323,39 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             foreach (var r in results)
             {
                 metaByAddr.TryGetValue(r.RegisterAddress, out var meta);
+                var failed = !string.IsNullOrEmpty(r.Error);
                 ReadRows.Add(new ReadRowVm(
                     meta?.SignalLabel ?? r.SignalLabel,
                     meta?.PositionName ?? "—",
                     r.RegisterAddress,
-                    r.RawValue,
-                    r.SemanticText,
-                    r.IsOn));
+                    failed ? null : r.RawValue,
+                    failed ? (r.SemanticText is "未连接" or "读取失败" ? r.SemanticText : "读取失败") : r.SemanticText,
+                    !failed && r.IsOn));
             }
-            StatusMessage = $"读取 {results.Count} 个点位";
+            var failN = results.Count(r => !string.IsNullOrEmpty(r.Error));
+            StatusMessage = failN == 0
+                ? $"读取 {results.Count} 个点位"
+                : $"读取完成：失败 {failN}/{results.Count}";
         }
         catch (Exception ex) { StatusMessage = ex.Message; }
+    }
+
+    /// <summary>按点位表填充「未连接」行，清掉上次成功读到的旧值。</summary>
+    private async Task ShowDisconnectedReadRowsAsync(long plcId)
+    {
+        var pointMeta = await _points.GetByPlcAsync(plcId);
+        var reads = pointMeta.Where(p => !p.IsWrite).ToList();
+        ReadRows.Clear();
+        foreach (var p in reads)
+        {
+            ReadRows.Add(new ReadRowVm(
+                p.SignalLabel,
+                p.PositionName ?? "—",
+                p.RegisterAddress,
+                null,
+                "未连接",
+                false));
+        }
     }
 
     [RelayCommand]
@@ -479,6 +534,6 @@ public sealed record ReadRowVm(
     string SignalLabel,
     string PositionName,
     string RegisterAddress,
-    int RawValue,
+    int? RawValue,
     string SemanticText,
     bool IsOn);
