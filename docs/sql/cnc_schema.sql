@@ -66,12 +66,13 @@ CREATE TABLE MAS_AUTO_WORKLINECONFIGS (
 
 -- 2. 线体PLC配置（核心：客户端经此连接 PLC）
 -- 每台机台对应一台独立 PLC（一机一 PLC，IP 各不相同）。一行 = 一台 PLC。
+-- 现场若多机共用同一物理 PLC，仍建多行配置，IP/端口填相同即可（逻辑上仍一机一 PLC_ID）。
 CREATE TABLE MAS_AUTO_WORKLINE_PLC (
   ID1                    BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
   PLC_ID                 BIGINT       NOT NULL COMMENT 'PLC 业务编号（机台/点位以此关联，唯一）',
   PLC_NAME               VARCHAR(50)  NULL COMMENT 'PLC 名称，如 内长宽PLC',
   PLC_CONNECT_TYPE       VARCHAR(50)  NOT NULL DEFAULT '客户端' COMMENT '连接类型 客户端/服务端',
-  PLC_COMPUTER_IP        VARCHAR(20)  NOT NULL COMMENT 'PLC设备IP（每台不同）',
+  PLC_COMPUTER_IP        VARCHAR(20)  NOT NULL COMMENT 'PLC设备IP（每台不同；共物理机时可相同）',
   PLC_COMPUTER_PORT      INT          NULL DEFAULT 502 COMMENT 'PLC设备端口（Modbus TCP 默认502，FINS 默认9600）',
   PLC_READ_WAY           VARCHAR(20)  NULL DEFAULT 'ModbusTCP' COMMENT '通信方式 ModbusTCP/FINS',
   PLC_ORIGINATION_VALUE  VARCHAR(20)  NULL COMMENT '数据起始地址',
@@ -82,26 +83,33 @@ CREATE TABLE MAS_AUTO_WORKLINE_PLC (
   UPDATETIME             DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (ID1),
   UNIQUE KEY uk_plc_id (PLC_ID)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='PLC配置（一机一PLC，IP各异）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='PLC配置（一机一PLC，IP各异；共物理机时IP可相同）';
 
--- 3. 线体AGV配置（仅连通性测试使用，口令加密存储）
+-- 3. 线体 AGV/RCS 连接配置（v2：正式存 RCS 出站与回调；旧 AGV_COMPUTER_* 保留兼容）
 CREATE TABLE MAS_AUTO_WORKLINE_AGV (
   ID1                   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
   AGV_ID                BIGINT       NOT NULL DEFAULT 0 COMMENT '关联线体表 AGV_ID',
-  AGV_NAME              VARCHAR(50)  NOT NULL COMMENT 'AGV名称',
+  AGV_NAME              VARCHAR(50)  NOT NULL COMMENT '配置名称',
   AGV_CORRESPOND_WAY    VARCHAR(50)  NOT NULL COMMENT '通信方式 HTTP/Socket',
-  AGV_COMPUTER_IP       VARCHAR(20)  NOT NULL COMMENT 'AGV控制系统IP',
-  AGV_COMPUTER_PORT     INT          NULL COMMENT 'AGV控制系统端口',
-  AGV_COMPUTER_USRNAME  VARCHAR(20)  NULL COMMENT '用户名',
-  AGV_COMPUTER_PASSWORD VARCHAR(100) NULL COMMENT '密码（加密存储）',
+  AGV_COMPUTER_IP       VARCHAR(20)  NOT NULL COMMENT '旧：控制系统IP（兼容）',
+  AGV_COMPUTER_PORT     INT          NULL COMMENT '旧：控制系统端口（兼容）',
+  AGV_COMPUTER_USRNAME  VARCHAR(20)  NULL COMMENT '用户名（预留）',
+  AGV_COMPUTER_PASSWORD VARCHAR(100) NULL COMMENT '密码（预留，本系统不加密读写）',
   AGV_CORRESPOND_JSON   VARCHAR(500) NULL COMMENT '任务下发模板JSON',
   AGV_READ_JSON         VARCHAR(200) NULL COMMENT '状态读取模板JSON',
+  RCS_BASE_URL          VARCHAR(200) NULL COMMENT 'RCS出站基址',
+  RCS_CLIENT_CODE       VARCHAR(50)  NULL COMMENT 'clientCode',
+  RCS_CALLBACK_HOST     VARCHAR(50)  NULL COMMENT '回调监听IP',
+  RCS_CALLBACK_PORT     INT          NULL COMMENT '回调监听端口',
+  RCS_TIMEOUT_MS        INT          NULL COMMENT '出站超时毫秒',
+  RCS_MAX_RETRIES       INT          NULL COMMENT '网络重试次数',
+  RCS_POLL_INTERVAL_MS  INT          NULL COMMENT '兜底轮询间隔毫秒',
   STATE                 CHAR(1)      NOT NULL DEFAULT '0',
   AUTHOR                VARCHAR(15)  NULL,
   UPDATETIME            DATETIME     NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (ID1),
   KEY idx_agv_group (AGV_ID)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='线体AGV配置';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='线体AGV/RCS连接配置';
 
 -- 4. 工序表
 CREATE TABLE MAS_AUTO_WORKLINE_CRAFTWORK (
@@ -474,13 +482,13 @@ INSERT INTO MAS_AUTO_WORKLINECONFIGS
 VALUES
   (1, 'CNC检测自动化线', 'LINE01', '0', 1, 0, 'MAT-DEMO', '0', 'system');
 
--- PLC：三台机台各一台独立 PLC，IP 各不相同（示例IP，按现场替换）
+-- PLC：三台机台各一台独立 PLC（一机一 PLC）。现场共物理 PLC 时 IP/端口可填相同，协议按现场（示例为 FINS）。
 INSERT INTO MAS_AUTO_WORKLINE_PLC
   (PLC_ID, PLC_NAME, PLC_CONNECT_TYPE, PLC_COMPUTER_IP, PLC_COMPUTER_PORT, PLC_READ_WAY, STATE, AUTHOR)
 VALUES
-  (1, '内长宽PLC', '客户端', '192.168.1.11', 502, 'ModbusTCP', '0', 'system'),
-  (2, '平面度PLC', '客户端', '192.168.1.12', 502, 'ModbusTCP', '0', 'system'),
-  (3, 'A基准PLC',  '客户端', '192.168.1.13', 502, 'ModbusTCP', '0', 'system');
+  (1, '内长宽PLC', '客户端', '192.168.250.1', 9600, 'FINS', '0', 'system'),
+  (2, '平面度PLC', '客户端', '192.168.250.1', 9600, 'FINS', '0', 'system'),
+  (3, 'A基准PLC',  '客户端', '192.168.250.1', 9600, 'FINS', '0', 'system');
 
 -- 工序（三道串行，CRAFTWORK_NODE 决定先后：内长宽1 → 平面度2 → A基准3）
 INSERT INTO MAS_AUTO_WORKLINE_CRAFTWORK
@@ -637,7 +645,7 @@ INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_T
   ('FRAME', 3,  '下料总架',  '651003', 'shelf', '0', 'system'),
   ('FRAME', 91, 'NG专用架',  '651091', 'shelf', '0', 'system'),
   ('FRAME', 92, 'EQ3中转架', '651092', 'shelf', '0', 'system');
--- 料架 cell（下料/中转/NG 分流入库按此解析；缺失则回退 FRAME-{id}）
+-- 料架 cell（下料/中转/NG 分流入库按此解析；缺失则拒发，禁止 FRAME-{id} 假码）
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('FRAME', 2,  'EQ2中转架cell', '653002', 'cell', '0', 'system'),
   ('FRAME', 3,  '下料总架cell',  '653003', 'cell', '0', 'system'),

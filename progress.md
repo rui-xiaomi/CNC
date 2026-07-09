@@ -458,6 +458,128 @@
 - 验证：整库重建无报错，工序 node1/2/3、7 绑定、frame1=10 电极其余各 12 空槽、LOCATION_MAP 19 行、MACHINE_SAFE 保留 1 条 全部正确。`演示实操手册.md` §4.1 改为「建库即就绪，无需额外种子」。
 - 注意：删迁移脚本后仅支持**全新建库**（cnc_schema.sql 已含全部效果），不再有对既有库的增量迁移路径。
 
+### Session 40 — 2026-07-09 上料料源竞态修复（单消费者决策 + 原子预占 + 抢不到料=等待）
+> 起因：诊断「上料架仅剩 1 件、同机台双工位都空」场景。发现旧逻辑「入队只读 occupied、锁料在派工循环」两步间无预占，两工位同 tick 都读到 occupied=1 → 各发一条 RCS 任务，第二条空跑 → 到位复核无料转 Alarm（粘滞、卡人工），并伴电极码丢失/账实不符。按用户三层设计修复。改动集中 2 文件，`dotnet build` 0 警告 0 错误、ReadLints 无错。
+
+- **Layer 1 单一调度循环（`PositionScheduler`）**：工位状态机不再自查料/选槽/下发——WAIT_LOAD 仅置 `ctx.UploadRequested=true`（`ExecuteActionsAsync`）。派工消费者 `DispatchLoopAsync` 统一决策：先清下料队（priority 高），队列空时 `AllocateUploadsAsync` 收集"请求上料"工位，按 `WaitLoadSince` 升序（空闲最久优先）→ `PositionId` 升序 确定性排序，逐个 `TryDispatchUploadAsync`（解析料源+路由 → 下发 RCS → 原子取料预记 → 绑定转 Dispatching）。单线程串行保证前一位预记落地后后一位再查料，"两位同时看到同一件料"结构上不可能。原 `EnqueueUploadAsync` 拆为纯解析的 `ResolveUploadPlanAsync`（不入队/不下发）。
+- **Layer 2 原子预占（`SlotAccountService`）**：`ReserveAsync`/`ReserveTakeAsync` 由「SELECT+内存 SemaphoreSlim+SaveChanges」改为「候选选取 + 带条件 `ExecuteUpdateAsync`（WHERE SLOT_STATE=期望态）+ 影响行数校验，=0 则重选」。即使人工校正/盘点回写等第二写入者并发，DB 也不双占。移除 `_frameLocks` 内存锁（单消费者 + 原子 UPDATE 已足够）。复用现有 `SLOT_STATE='3'=预记`，不改 schema。
+- **Layer 3 抢不到料=正常等待**：`ResolveUploadPlanAsync` 无料源占用 → WaitMaterial，工位保持 WAIT_LOAD 不告警不重试风暴，由下一轮轮询/新料到位自然唤醒。仅"已下发但源架被外部写入者在窗口内取空"（罕见账实异常）→ ALARM 告警人工。`SetState` 统一维护进/出 WAIT_LOAD 的 `WaitLoadSince` 计时与 `UploadRequested` 清标记（移除 `DrivePositionCoreAsync` 里对 `ctx.State` 的提前赋值，改由 SetState 单点写入以正确判转移）。
+- 说明：上料不再走 `IDispatchQueue`（改走消费者扫描分配）；下料仍走队列 + `DispatchOneAsync`（不变）。`DispatchOneAsync`/`ApplySlotReservationAsync` 的 Upload 分支成为死路径（保留不删，防御性）。
+- 运行态验证（本机 App + 三 PLC 模拟器 + RCS 模拟器）：上料架仅 1 件 EL-001、EQ1 双工位皆空 → 仅 EQ1 POS2 下发上料（取料预记 1 次），POS1 保持 WAIT_LOAD 等料、无告警；落账后 frame1 无残留预记（SLOT_STATE='3' 为 0），电极码流转到加工记录。确定性选位命中先进 WAIT_LOAD 者。
+
+### Session 40（续）— 交接路径同构竞态修复（下料"选下游空工位"收敛进单消费者）
+> 承接上一改：上料竞态修好后，识别出"上游工序间直接交接（NextMachineCell）"是另一条料源路径且存在同构竞态——"选下游空工位"在 drive loop（`ResolveUnloadTargetAsync`/`FindIdlePositionAmong`）、"登记 `_expectedInbound`"在 consumer，两步分离 → 上游两件同时 OK 可能都选中同一个下游空工位（如 EQ1 双工位→EQ2 单工位 POS3）。改动集中 `PositionScheduler.cs` + `DispatchQueue.cs`（加 `DispatchItem.IsOk`），`dotnet build` 0 警告 0 错误、ReadLints 无错。
+
+- **下料终点决策整体移进单消费者**：`EnqueueUnloadAsync`（drive loop）只解析下料源 cell + 结果入队（新增 `DispatchItem.IsOk` 携带 OK/NG）；`DispatchOneAsync`（消费者）出队后才 `ResolveUnloadTargetAsync`（含选位）→ 下发 → `ApplyUnloadReservationAsync`（NextMachineCell 登记 `_expectedInbound` / 料架 `ReserveAsync`）。选位与登记同在单消费者串行完成，前一件登记落地后后一件才选位 → 两件下料不会抢同一下游工位。原 `ApplySlotReservationAsync`（含已死的 Upload 分支）删除，替换为只管下料的 `ApplyUnloadReservationAsync`。
+- **选位加确定性排序**：`FindIdlePositionAmong` 从"遍历取首个"改为收集候选后按"空闲最久（`WaitLoadSince` 最早）→ 工位编号升序"排序取首（防饿死、均衡、可复现），对齐上料路径策略。
+- 运行态验证（NG 率临时置 0、frame1 放 2 件、EQ1 双工位）：EL-101/EL-102 两件同拍 OK 下料，POS1→`602203`（NextMachineCell 直接交接 EQ2 POS3），POS2→`653002`（TransitFrame，POS3 已占改走 EQ2 中转架）；EL-101 随后从中转架回流上料 EQ2；两件全程流经三工序、电极码可追、无 ALARM。
+- 说明：`DispatchItem` 的 `SourceFrameId/UnloadTarget/DestFrameId/DestEquipmentId/DestPositionId` 现为预留字段（上料不入队、下料终点由消费者用 `UnloadDecision` 决策），保留未删以控改动面。
+
+### Session 41 — 2026-07-09 启动对账①b：终态任务立刻收口预记（防强杀重启残留）
+> 起因：§4.3④ 强杀重启实测——对账①绑回未完结任务成功，但模拟器内存清空后 query 把未知任务兜底报 completed，调度器未走 ConfirmTake/Alarm→Rollback，预记挂在 `SLOT_STATE=3`。按方案 A 在对账阶段收口。
+
+- **`PositionScheduler.ReconcileAsync` 加 ①b**：绑回后对 unfinished 批量 `queryTask`；终态立刻 `SettleSlotForTerminalAsync`（COMPLETED 先 fresh 读 HasMat，符合才 Confirm，否则 Rollback；CANCELED/FAILED 按方向 Rollback）并从 active 剔除供②兜底。
+- **工位态**：Upload+有料→Loaded；Unload+无料→写 POS_TEST_START=2 回 WaitLoad；HasMat 未读到→WaitLoad（**不 latch Alarm**）；明确不符→Alarm；取消→WaitLoad+`RCS_CANCELED`。
+- 文档：`客户端开发文档.md` §6.3 补 ①b；`演示实操手册.md` §4.3④ 验收点对齐。
+- 验证：`dotnet build` 0/0；强杀重启——强杀前预记 taskId 重启后 `still_reserved=0`，`RECONCILE-*` 告警=0（HasMat=null 走 WaitLoad），日志「对账①b：收口终态任务 N 个」。演示态 appsettings + frame1 已还原。
+
+### Session 41（续）— 复核不过 + 水位自动换架 实测
+- **复核不过**：新增 `Rcs.SimulatorSkipMaterialArrival`（启动注入 `CncMachineSimulator.SkipMaterialArrival`）。`true` 下跑节拍 → EQ1/EQ2 上料 COMPLETED 后不置 HasMat → `Transporting→Alarm`（「RCS 报完成但 PLC 无料」），无 Processing/写启动；粘滞不自动离开；看板「恢复」→ `人工恢复 → WAIT_LOAD`。`dotnet build` 0/0。
+- **水位自动换架**：`WaterMonitorEnabled=true` + `SchedulerEnabled=false`，frame1 抽空 → 启动即「水位触发：料架1 EMPTY → 机台1 Upload」；同拍还触发 frame3 FULL→Unload、frame92 EMPTY→Transit；各 TXN 两发 `change_frame` 均 COMPLETED（先拉后送）。
+- 演示态已还原（SkipMaterial=false、WaterMonitor=false、Scheduler=true、NgRate=0.3）；frame1 补满；手册 §4.3① / §5 水位说明已同步。
+
+### Session 42 — 2026-07-09 定期自动盘点实测 + AUTHOR 超长修复
+- **触发机制**（`InventorySchedulerService`）：`InventoryAutoEnabled=true` 时 HostedService 启动；`_lastRun=MinValue` → **首检立刻到期**；之后每 30s 检查，距上次 ≥ `InventoryIntervalMinutes` 且 RCS 空闲（派工队列空 + 无在途盘点 + 无换架）→ 逐料架 `StartInventoryAsync`（identifyQR）串行，一架完成再下一架。
+- **实测**：开 `InventoryAutoEnabled` + 间隔 1 分钟 + 关调度 → 启动即「定期盘点开始一轮：5 个料架」→ 5 条 `identify` 均 `COMPLETED`（AUTHOR=`inv-auto`），各架 `LAST_VERIFY_TIME` 刷新。
+- **真 bug**：作者原写 `"inventory-scheduler"`（20 字符）超 `AUTHOR VARCHAR(15)` → `DbUpdateException`，整轮失败。改为 `"inv-auto"`。`dotnet build` 0/0。
+- 演示态已还原（`InventoryAutoEnabled=false`、调度开、NgRate=0.3）；frame1 补满 EL-001..010，其余架清空。
+
+### Session 43 — 2026-07-09 现场工程缺口修复（不含 PLC 配置 / 口令）
+- **禁 LOCATION 假码**：`RouteResolver.ResolveFrameCellAsync` 缺映射返回 null；`ChangeFrameOrchestrator` / `InventoryService` 缺 cell/shelf/station 或缓存区 → 拒发 + 告警，删 `FRAME-{id}` 兜底。
+- **写启动重试**：`WriteTestStartAsync` 失败后 Delay(250ms) 再写一次，仍失败才 return false。
+- **手动盘点互斥**：`InventoryService` 注入队列+换架编排，有在途搬运/换架则拒发。
+- **位置映射编辑下拉**：机台/工位/料架改为 NamedOption 中文 ComboBox（工位随选中机台加载）。
+- **NG 提示**：料架页人工校正区加「置空释放」说明。
+- 文档：`演示实操手册` / `cnc_schema.sql` 注释同步。`dotnet build` 0/0。**未做**：FINS 节点可配、口令 DPAPI。
+
+### Session 44 — 2026-07-09 identify 孔位 / 盘点线体 / NG UX
+- **孔位映射**：`CorrectFromInventoryAsync` 按文档「三位数、百位=面/层」解码为 `LAYER_NO`/`POS_IN_LAYER`，products 沿物理序校正；起始孔无对应槽则跳过并打日志。定期盘点起始改为 `101`；模拟器扫码产品码按孔位递增（满 99 进层）。
+- **盘点线体**：`InventoryService` 经料架绑定机台 → `GetWorkLineByEquipmentAsync`，无绑定回退 `LINE/1`。
+- **NG UX**：料架列表「仅 NG 架」筛选（`FrameListItem.HasNgRole`）；人工校正区「置空释放」一键清槽。
+- 验证：`dotnet build` 0/0。
+
+### Session 45 — 2026-07-09 UI 布局优化（看板 / 料架 / RCS）
+- **监控看板**：对齐原型——机台治具卡（门/安全指示 + accent 刻度 + 双工位行）+ 右侧实时告警流（确认/全部确认）；KPI 保留；「最近加工记录」让位给告警。
+- **料架页**：左右分栏——左列表+绑定，右槽位网格 + 底栏校正/盘点，消除纵向挤压。
+- **RCS 页**：Tab 顺序改为 任务列表 → 报文流水 → 连接&下发 → 位置映射（默认落在任务）。
+- 验证：`dotnet build` 0/0。
+
+### Session 46 — 2026-07-09 RCS 任务页小修
+- 「取消处理」列：仅 CANCELED 显示待处理/已处理（COMPLETED 不再误显）。
+- `ConfirmCancelHandled`：仅 CANCELED 允许，任务不存在/状态不符抛错；已处理幂等。
+- 任务列表点选回填 `OperateTaskId`；状态列加宽至 110 避免 `COMPLE...`。
+- 验证：`dotnet build` 0/0。
+
+### Session 47 — 2026-07-09 料架页布局 P1
+- `FindResult`（统计/反查）从盘点行挪到槽位标题下方独立行，盘点行只留起始/数量/发起。
+- 槽位网格：先居中，后按反馈改为贴顶（去掉 ViewportHeight 居中包装）。
+- 「占用」列宽 60、右内边距 14。
+- 验证：`dotnet build` 0/0；已重启 App。
+
+### Session 48 — 2026-07-09 RCS 任务列表中文化
+- 列头：taskId→任务号，redo→重试次数，落库→创建时间。
+- 种类/状态单元格：transit→搬运、COMPLETED→已完成 等（`RcsDisplayLabels` + 转换器）；落库仍英文码。
+- 连接&下发：「redo」按钮→「重试」；报文筛选/操作区 taskId→任务号。
+- 列宽/MinWidth 防表头被排序箭头挤花；任务号加宽+悬停完整号；整表 ToolTip 改标题旁提示。
+- 验证：`dotnet build` 0/0；已重启 App。
+
+### Session 49 — 2026-07-09 报文流水页优化
+- 方向/接口筛选与列显示中文化（出站/入站、搬运下发/状态回调等）；查询条件映射回英文码。
+- 新增「结果」「错误」列；耗时显示为 `N ms`；「请求」改「摘要」+悬停。
+- 底部详情区：点选一行展示格式化请求体/响应体；刷新后尽量保持选中。
+- 验证：`dotnet build` 0/0；已重启 App。
+
+### Session 50 — 2026-07-09 连接&下发页优化
+- 连接配置压成一行；任务类型改为「搬运/抓取/识别」，按类型显隐参数区。
+- 抓取孔位补中文标签；识别时起点改「料架站」、隐藏终点。
+- 任务操作 / 换架回收分区卡片化；终端撑满高度 + 清空按钮。
+- 验证：`dotnet build` 0/0；已重启 App。
+
+### Session 51 — 2026-07-09 RCS 连接配置正式落库
+- 表 `MAS_AUTO_WORKLINE_AGV` 增 RCS_* 列（schema + `migrate_workline_agv_rcs.sql`）；实体同步。
+- `IRcsConnectionConfigService` / `RcsRuntimeConfig` / 启动 bootstrap；`RcsClient`/`RcsTaskTracker`/`RcsCallbackHost`/`RcsSimulator` 读运行时配置。
+- 连接&下发顶栏可编辑（地址/clientCode/回调/超时/重试/轮询）+ 保存落库；出站热更新，回调变更提示重启。
+- 不做口令加密。验证：`dotnet build` 0/0。
+- 补「测试连接」出站（queryTask）+ 状态灯。
+
+### Session 55 — 2026-07-09 PLC 通信告警刷屏修复
+- 根因：`ReadPointsAsync` 每个寄存器失败都 `RaisePlcAlarmAsync` → Shell Growl 堆叠。
+- 修：未连接整批只告一次；有连接时失败合并为一条；同 PLC 30s 节流；PLC 页未连接不读；编辑保存后自动重连。
+
+### Session 56 — 2026-07-09 线体/工序/机台列表体验
+- 「启用」确认：只读徽标（非开关）；停用走删除软删；加 ToolTip。
+- 机台「所属 PLC」完整显示 `名称 (IP)` + 列宽/ToolTip。
+- 关联料架展示全部角色（上/下/中转/NG）；`FrameRoleText` 提到 `ConfigFlags` 共用。
+- 线体列表去掉误导性 RCS/AGV 列（连接只在 RCS 页配）；所在电脑/电脑IP/计划数量标预留。
+
+### Session 57 — 2026-07-09 监控看板布局 B
+- 上半：机台治具卡 | 实时告警（默认只拉未处理）；「全部确认」按库内未处理全量。
+- 底部通栏：最近加工记录（时间/机台/工位/电极/结果/耗时），2s 轮询 + 节拍结束刷新。
+- 细节：时间列加宽防 `11:42...` 截断；告警/记录空态占位文案。
+- KPI 文案改为「工位 OK/NG」标明非整件；去掉未处理告警下的刷新按钮。
+- 验证：`dotnet build` 0/0；已重启 App。
+
+### Session 58 — 2026-07-09 日志/告警页美化
+- 告警：状态徽标、级别着色、消息 ToolTip、空态；新增「全部确认」；条数变更自动刷新。
+- 应用日志：级别着色、默认 200 行、筛选联动刷新、空态。
+- 底栏按当前 tab 显示摘要，不再残留「该告警已处理」。
+- 验证：`dotnet build` 0/0；已重启 App。
+
+### Session 59 — 2026-07-09 监控看板布局 A
+- 从「上双栏+底通栏」改为：左机台通高 | 右上告警 | 右下加工记录。
+- KPI/告警口径/加工记录列不变；右栏记录表列宽略收以适配窄栏。
+- 验证：`dotnet build` 0/0；已重启 App。
+
 ### 备注
 - 已是 git 仓库（远程 origin: github.com/rui-xiaomi/CNC）；commit/push 前先给用户看信息并确认。
 - 本机环境：MySQL 8.4（服务 MySQL84），root 口令 `2580.wxr`；appsettings 用明文口令开发（PasswordProtected=false，勿提交明文进 git）。
