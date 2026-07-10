@@ -31,7 +31,7 @@ public sealed class RcsTaskStore : IRcsTaskStore
             EquipmentId = record.EquipmentId,
             PositionId = record.PositionId,
             CraftworkId = record.CraftworkId,
-            ElectrodeId = record.ElectrodeId,
+            MaterialId = record.MaterialId,
             TxnId = record.TxnId,
             ReqParam = record.ReqParam,
             SendTime = DateTime.Now,
@@ -142,6 +142,6 @@ public sealed class RcsTaskStore : IRcsTaskStore
 
     private static RcsTaskRow Map(AgvTask t) => new(
         t.Id, t.RcsTaskId, t.RcsKind, t.TaskType, t.TaskState, t.RcsStatus, t.Priority,
-        t.FromFrameCode, t.ToFrameCode, t.EquipmentId, t.PositionId, t.ElectrodeId, t.TxnId,
+        t.FromFrameCode, t.ToFrameCode, t.EquipmentId, t.PositionId, t.MaterialId, t.TxnId,
         t.ReqParam, t.RedoCount, t.CancelManualFlag, t.SendTime, t.DispatchTime, t.FinishTime, t.ErrorMsg);
 }

@@ -133,14 +133,14 @@ public sealed record FrameBindRow(
     public string BindingText => $"{EquipmentDisplay} · {RoleText}";
 }
 
-/// <summary>槽位（层 + 层内位 + 电极绑定 + 状态），按层分组渲染。
+/// <summary>槽位（层 + 层内位 + 物料绑定 + 状态），按层分组渲染。
 /// SlotState：0=空 1=占用 2=锁定 3=预记（第四阶段⑥a 槽位账目）。</summary>
 public sealed record SlotItem(
     int SlotNo,
     int LayerNo,
     int PosInLayer,
     string Label,
-    string? ElectrodeId,
+    string? MaterialId,
     string SlotState,
     bool Occupied);
 

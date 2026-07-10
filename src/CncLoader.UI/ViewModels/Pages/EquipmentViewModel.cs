@@ -19,6 +19,7 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
 {
     private readonly IEquipmentConfigService _service;
     private readonly ISignalStateStore _store;
+    private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
 
     private readonly Dictionary<long, EquipmentPositionRowVm> _positionRows = new();
@@ -26,10 +27,12 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
     private volatile bool _positionsDirty;
     private long _selectedEquipmentId;
 
-    public EquipmentViewModel(IEquipmentConfigService service, ISignalStateStore store, ICurrentUser user)
+    public EquipmentViewModel(IEquipmentConfigService service, ISignalStateStore store,
+        IPositionScheduler scheduler, ICurrentUser user)
     {
         _service = service;
         _store = store;
+        _scheduler = scheduler;
         _user = user;
         Equipments = new ObservableCollection<EquipmentListItem>();
         CraftFilters = new ObservableCollection<NamedOption>();
@@ -218,6 +221,7 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
             if (dlg.ShowDialog() != true) return;
 
             await _service.SetFrameBindingAsync(SelectedEquipment.Id, dlg.UploadFrameId, dlg.DownloadFrameId, _user.Name);
+            _scheduler.InvalidateFrameBindingCache(SelectedEquipment.Id);
             HandyControl.Controls.Growl.Success("关联料架已更新。");
             StatusMessage = "关联料架已更新";
             await LoadDetailAsync(SelectedEquipment.Id);

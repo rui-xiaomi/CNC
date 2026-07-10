@@ -16,14 +16,17 @@ public interface IAlarmEventService
     Task<long> RaiseRcsWarnAsync(string robotCode, string beginTime, string warnContent,
         string? taskCode, CancellationToken ct = default);
 
-    /// <summary>RCS 任务取消 → 人工工单告警（ALARM_TYPE=RCS_CANCELED，级别严重，含 taskId 供 UI 联动）。</summary>
-    Task<long> RaiseRcsTaskCanceledAsync(string rcsTaskId, CancellationToken ct = default);
+    /// <summary>RCS 任务取消 → 人工工单告警（ALARM_TYPE=RCS_CANCELED）。
+    /// <paramref name="reason"/> 为具体原因（可空则用默认文案）。</summary>
+    Task<long> RaiseRcsTaskCanceledAsync(string rcsTaskId, string? reason = null, CancellationToken ct = default);
 
-    /// <summary>RCS 查无此任务告警（ALARM_TYPE=RCS_NOT_FOUND，级别警告）——轮询发现 RCS 侧无此 taskId 时人工介入。</summary>
-    Task<long> RaiseRcsTaskNotFoundAsync(string rcsTaskId, CancellationToken ct = default);
+    /// <summary>RCS 查无此任务告警（ALARM_TYPE=RCS_NOT_FOUND）。
+    /// <paramref name="reason"/> 为具体原因（可空则用默认「RCS 侧查无」文案）。</summary>
+    Task<long> RaiseRcsTaskNotFoundAsync(string rcsTaskId, string? reason = null, CancellationToken ct = default);
 
-    /// <summary>RCS 任务自动重做已达上限告警（ALARM_TYPE=RCS_REDO_LIMIT，级别严重）——需人工介入。</summary>
-    Task<long> RaiseRcsRedoLimitAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default);
+    /// <summary>RCS 任务自动重做已达上限告警（ALARM_TYPE=RCS_REDO_LIMIT）。
+    /// <paramref name="reason"/> 可补充上下文。</summary>
+    Task<long> RaiseRcsRedoLimitAsync(string rcsTaskId, int maxRedo, string? reason = null, CancellationToken ct = default);
 
     Task<IReadOnlyList<AlarmRow>> GetRecentAsync(int limit = 20, CancellationToken ct = default);
 

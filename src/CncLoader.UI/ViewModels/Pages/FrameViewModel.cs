@@ -7,12 +7,13 @@ using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using CncLoader.UI.Views.Dialogs;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
 /// <summary>
-/// 料架管理：料架列表 + 绑定关系（新增/改角色/解绑）+ 槽位与电极分层追踪 + 电极反查
+/// 料架管理：料架列表 + 绑定关系（新增/改角色/解绑）+ 槽位与物料分层追踪 + 物料反查
 /// + 人工校正（⑥a）+ 发起盘点（⑥c）。列表占用数与槽位随节拍动态刷新（原地更新，不丢选中/编辑）。
 /// </summary>
 public sealed partial class FrameViewModel : PageViewModelBase
@@ -20,14 +21,17 @@ public sealed partial class FrameViewModel : PageViewModelBase
     private readonly IFrameService _service;
     private readonly ISlotAccountService _slots;
     private readonly IInventoryService _inventory;
+    private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
     private readonly DispatcherTimer _refreshTimer;
 
-    public FrameViewModel(IFrameService service, ISlotAccountService slots, IInventoryService inventory, ICurrentUser user)
+    public FrameViewModel(IFrameService service, ISlotAccountService slots, IInventoryService inventory,
+        IPositionScheduler scheduler, ICurrentUser user)
     {
         _service = service;
         _slots = slots;
         _inventory = inventory;
+        _scheduler = scheduler;
         _user = user;
         Frames = new ObservableCollection<FrameRowVm>();
         Bindings = new ObservableCollection<FrameBindRow>();
@@ -61,8 +65,8 @@ public sealed partial class FrameViewModel : PageViewModelBase
 
     [ObservableProperty] private FrameRowVm? _selectedFrame;
     [ObservableProperty] private string _bindingsTitle = "绑定关系";
-    [ObservableProperty] private string _slotsTitle = "槽位与电极追踪";
-    [ObservableProperty] private string _electrodeQuery = "";
+    [ObservableProperty] private string _slotsTitle = "槽位与物料追踪";
+    [ObservableProperty] private string _materialQuery = "";
     [ObservableProperty] private string _findResult = "";
     [ObservableProperty] private string _statusMessage = "";
     /// <summary>仅显示绑定了 NG 角色的料架。</summary>
@@ -74,7 +78,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
 
     // 人工校正（第四阶段⑥a）
     [ObservableProperty] private SlotVm? _selectedSlot;
-    [ObservableProperty] private string _correctElectrode = "";
+    [ObservableProperty] private string _correctMaterial = "";
     [ObservableProperty] private string _correctSlotState = "空(0)";
 
     // 发起盘点（第四阶段⑥c）
@@ -153,7 +157,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
             var detail = await _service.GetDetailAsync(SelectedFrame.Id);
             if (detail is null) return;
 
-            // 槽位原地更新（按 SlotNo 匹配电极/状态）；层结构变化才重建
+            // 槽位原地更新（按 SlotNo 匹配物料/状态）；层结构变化才重建
             var slotById = Layers.SelectMany(l => l.Slots).ToDictionary(s => s.SlotNo);
             if (detail.Slots.Count != slotById.Count)
             {
@@ -162,13 +166,13 @@ public sealed partial class FrameViewModel : PageViewModelBase
             else
             {
                 foreach (var s in detail.Slots)
-                    if (slotById.TryGetValue(s.SlotNo, out var vm)) vm.Update(s.ElectrodeId, s.SlotState);
+                    if (slotById.TryGetValue(s.SlotNo, out var vm)) vm.Update(s.MaterialId, s.SlotState);
             }
 
             var empty = detail.SlotTotal - detail.Occupied;
-            SlotsTitle = $"槽位与电极追踪 · {detail.Name}（{detail.LayerTotal} 层 × {detail.SlotsPerLayer}，入库 {detail.Occupied} / {detail.SlotTotal}）";
-            if (string.IsNullOrEmpty(ElectrodeQuery))
-                FindResult = $"共 {detail.SlotTotal} 槽，已入库 {detail.Occupied} 个电极，空 {empty} 槽（允许不放满）";
+            SlotsTitle = $"槽位与物料追踪 · {detail.Name}（{detail.LayerTotal} 层 × {detail.SlotsPerLayer}，入库 {detail.Occupied} / {detail.SlotTotal}）";
+            if (string.IsNullOrEmpty(MaterialQuery))
+                FindResult = $"共 {detail.SlotTotal} 槽，已入库 {detail.Occupied} 个物料，空 {empty} 槽（允许不放满）";
         }
         catch { /* 刷新失败静默，下拍再试 */ }
     }
@@ -242,7 +246,9 @@ public sealed partial class FrameViewModel : PageViewModelBase
         if (SelectedBindEquipment is null) { HandyControl.Controls.Growl.Warning("请选择要绑定的机台。"); return; }
         try
         {
-            await _service.BindEquipmentAsync(SelectedFrame.Id, SelectedBindEquipment.Id, SelectedBindRole.Code, _user.Name);
+            var eqId = SelectedBindEquipment.Id;
+            await _service.BindEquipmentAsync(SelectedFrame.Id, eqId, SelectedBindRole.Code, _user.Name);
+            _scheduler.InvalidateFrameBindingCache(eqId);
             HandyControl.Controls.Growl.Success($"已绑定：{SelectedBindEquipment.DisplayName} · {SelectedBindRole.Label}");
             await LoadDetailAsync(SelectedFrame.Id);
         }
@@ -260,6 +266,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
         try
         {
             await _service.UnbindAsync(row.BindId, _user.Name);
+            _scheduler.InvalidateFrameBindingCache(row.EquipmentId);
             HandyControl.Controls.Growl.Success($"已解绑 {row.EquipmentDisplay} · {row.RoleText}");
             await LoadDetailAsync(SelectedFrame.Id);
         }
@@ -288,38 +295,38 @@ public sealed partial class FrameViewModel : PageViewModelBase
         RebuildLayers(detail);
 
         var empty = detail.SlotTotal - detail.Occupied;
-        FindResult = $"共 {detail.SlotTotal} 槽，已入库 {detail.Occupied} 个电极，空 {empty} 槽（允许不放满）";
+        FindResult = $"共 {detail.SlotTotal} 槽，已入库 {detail.Occupied} 个物料，空 {empty} 槽（允许不放满）";
     }
 
     private void RebuildLayers(FrameDetail detail)
     {
-        SlotsTitle = $"槽位与电极追踪 · {detail.Name}（{detail.LayerTotal} 层 × {detail.SlotsPerLayer}，入库 {detail.Occupied} / {detail.SlotTotal}）";
+        SlotsTitle = $"槽位与物料追踪 · {detail.Name}（{detail.LayerTotal} 层 × {detail.SlotsPerLayer}，入库 {detail.Occupied} / {detail.SlotTotal}）";
         Layers.Clear();
         foreach (var layer in detail.Slots.GroupBy(s => s.LayerNo).OrderBy(g => g.Key))
         {
             var vm = new SlotLayerVm($"{layer.Key} 层");
             foreach (var s in layer.OrderBy(x => x.PosInLayer))
-                vm.Slots.Add(new SlotVm(s.SlotNo, s.Label, s.ElectrodeId, s.SlotState));
+                vm.Slots.Add(new SlotVm(s.SlotNo, s.Label, s.MaterialId, s.SlotState));
             Layers.Add(vm);
         }
     }
 
     [RelayCommand]
-    private void FindElectrode()
+    private void FindMaterial()
     {
-        var id = ElectrodeQuery.Trim().ToUpperInvariant();
+        var id = MaterialQuery.Trim().ToUpperInvariant();
         SlotVm? hit = null;
         foreach (var layer in Layers)
         foreach (var slot in layer.Slots)
         {
             slot.IsHighlighted = !string.IsNullOrEmpty(id)
-                && string.Equals(slot.ElectrodeId, id, StringComparison.OrdinalIgnoreCase);
+                && string.Equals(slot.MaterialId, id, StringComparison.OrdinalIgnoreCase);
             if (slot.IsHighlighted) hit = slot;
         }
 
         FindResult = hit is not null
-            ? $"电极 {id} 当前位置：{SelectedFrame?.Name} · {hit.Label}"
-            : $"未找到电极 {(string.IsNullOrEmpty(id) ? "(空)" : id)}（可能未入库或已取出）";
+            ? $"物料 {id} 当前位置：{SelectedFrame?.Name} · {hit.Label}"
+            : $"未找到物料 {(string.IsNullOrEmpty(id) ? "(空)" : id)}（可能未入库或已取出）";
     }
 
     [RelayCommand]
@@ -331,7 +338,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
     partial void OnSelectedSlotChanged(SlotVm? value)
     {
         if (value is null) return;
-        CorrectElectrode = value.ElectrodeId ?? "";
+        CorrectMaterial = value.MaterialId ?? "";
         CorrectSlotState = value.SlotState switch
         {
             "1" => "占用(1)",
@@ -358,9 +365,9 @@ public sealed partial class FrameViewModel : PageViewModelBase
                 "预记(3)" => "3",
                 _ => "0"
             };
-            var electrode = string.IsNullOrWhiteSpace(CorrectElectrode) ? null : CorrectElectrode.Trim();
-            if (stateCode == "0") electrode = null;
-            await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, electrode, stateCode, _user.Name);
+            var material = string.IsNullOrWhiteSpace(CorrectMaterial) ? null : CorrectMaterial.Trim();
+            if (stateCode == "0") material = null;
+            await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, material, stateCode, _user.Name);
             HandyControl.Controls.Growl.Success($"槽位 {SelectedSlot.Label} 已校正。");
             await LoadDetailAsync(SelectedFrame.Id);
         }
@@ -380,7 +387,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
         {
             await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, null, SlotStates.Empty, _user.Name);
             HandyControl.Controls.Growl.Success($"槽位 {SelectedSlot.Label} 已置空释放。");
-            CorrectElectrode = "";
+            CorrectMaterial = "";
             CorrectSlotState = "空(0)";
             await LoadDetailAsync(SelectedFrame.Id);
         }
@@ -407,7 +414,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
         {
             if (e.State == "COMPLETED")
             {
-                HandyControl.Controls.Growl.Success($"盘点完成 {e.TaskId}：校正 {e.CorrectedCount} 个电极");
+                HandyControl.Controls.Growl.Success($"盘点完成 {e.TaskId}：校正 {e.CorrectedCount} 个物料");
                 if (SelectedFrame is not null && SelectedFrame.Id == e.FrameId) _ = LoadDetailAsync(e.FrameId);
             }
             else
@@ -450,36 +457,36 @@ public sealed class SlotLayerVm
     public ObservableCollection<SlotVm> Slots { get; } = new();
 }
 
-/// <summary>单个槽位（含占用/电极/反查高亮 + 人工校正选区）。电极/状态可观察，供动态刷新原地更新。</summary>
+/// <summary>单个槽位（含占用/物料/反查高亮 + 人工校正选区）。物料/状态可观察，供动态刷新原地更新。</summary>
 public sealed partial class SlotVm : ObservableObject
 {
-    public SlotVm(int slotNo, string label, string? electrodeId, string slotState)
+    public SlotVm(int slotNo, string label, string? materialId, string slotState)
     {
         SlotNo = slotNo;
         Label = label;
-        _electrodeId = electrodeId;
+        _materialId = materialId;
         _slotState = slotState;
     }
 
     public int SlotNo { get; }
     public string Label { get; }
 
-    [ObservableProperty] private string? _electrodeId;
+    [ObservableProperty] private string? _materialId;
     [ObservableProperty] private string _slotState;
 
-    /// <summary>原地更新电极/状态（动态刷新用，联动派生属性）。</summary>
-    public void Update(string? electrodeId, string slotState)
+    /// <summary>原地更新物料/状态（动态刷新用，联动派生属性）。</summary>
+    public void Update(string? materialId, string slotState)
     {
-        ElectrodeId = electrodeId;
+        MaterialId = materialId;
         SlotState = slotState;
     }
 
     public bool Occupied => SlotState == "1";
     public bool Reserved => SlotState == "3";
-    /// <summary>占用/预记显示电极ID，空槽显示「空」，锁定显示「锁」。</summary>
-    public string ElectrodeText => SlotState switch
+    /// <summary>占用/预记显示物料ID，空槽显示「空」，锁定显示「锁」。</summary>
+    public string MaterialText => SlotState switch
     {
-        "1" or "3" => ElectrodeId ?? "—",
+        "1" or "3" => MaterialId ?? "—",
         "2" => "锁",
         _ => "空"
     };
@@ -494,12 +501,12 @@ public sealed partial class SlotVm : ObservableObject
 
     [ObservableProperty] private bool _isHighlighted;
 
-    partial void OnElectrodeIdChanged(string? value) { OnPropertyChanged(nameof(ElectrodeText)); }
+    partial void OnMaterialIdChanged(string? value) { OnPropertyChanged(nameof(MaterialText)); }
     partial void OnSlotStateChanged(string value)
     {
         OnPropertyChanged(nameof(Occupied));
         OnPropertyChanged(nameof(Reserved));
-        OnPropertyChanged(nameof(ElectrodeText));
+        OnPropertyChanged(nameof(MaterialText));
         OnPropertyChanged(nameof(StateBadge));
     }
 }

@@ -22,8 +22,26 @@
     <Color x:Key="RunColor">#3B82F6</Color>
     <Color x:Key="WarnColor">#F59E0B</Color>
     <Color x:Key="AlarmColor">#EF4444</Color>
+    <Color x:Key="NgColor">#F97316</Color>          <!-- NG 橙，与报警红区分（对齐原型） -->
     <Color x:Key="IdleColor">#6B7280</Color>
     <Color x:Key="TermColor">#0B0E12</Color>        <!-- 终端 / 流水背景 -->
+    <!-- soft tint：对齐原型工位卡视觉重量（约 40% 状态色混 Surface） -->
+    <Color x:Key="SoftRunColor">#2A4570</Color>
+    <Color x:Key="SoftOkColor">#1F5540</Color>
+    <Color x:Key="SoftAlarmColor">#5C2A32</Color>
+    <Color x:Key="SoftWarnColor">#5A4628</Color>
+    <Color x:Key="SoftNgColor">#6B3F24</Color>
+    <Color x:Key="SoftIdleColor">#2E343C</Color>
+    <Color x:Key="SoftOfflineColor">#2A3038</Color>
+    <!-- 看板专用提亮色（仅监控看板；全局 Accent/Alarm 不变） -->
+    <Color x:Key="DashAccentColor">#22D3D8</Color>
+    <Color x:Key="DashAlarmColor">#F87171</Color>
+    <Color x:Key="DashSurfaceColor">#1A222C</Color>       <!-- 比 Surface 略亮，拉开与 Bg 层次 -->
+    <Color x:Key="DashSurface2Color">#232C38</Color>
+    <Color x:Key="DashBorderColor">#3E4B5A</Color>        <!-- 更清晰描边，避免灰糊 -->
+    <Color x:Key="DashIdleColor">#A8B4C2</Color>          <!-- 等待态图标/字，比 Idle 更亮 -->
+    <Color x:Key="DashSoftIdleColor">#243040</Color>      <!-- 冷灰蓝底，替代脏灰 SoftIdle -->
+    <Color x:Key="DashSoftOfflineColor">#1E2630</Color>
 
     <SolidColorBrush x:Key="ChromeBrush" Color="{StaticResource ChromeColor}"/>
     <SolidColorBrush x:Key="Chrome2Brush" Color="{StaticResource Chrome2Color}"/>
@@ -43,8 +61,24 @@
     <SolidColorBrush x:Key="RunBrush" Color="{StaticResource RunColor}"/>
     <SolidColorBrush x:Key="WarnBrush" Color="{StaticResource WarnColor}"/>
     <SolidColorBrush x:Key="AlarmBrush" Color="{StaticResource AlarmColor}"/>
+    <SolidColorBrush x:Key="NgBrush" Color="{StaticResource NgColor}"/>
     <SolidColorBrush x:Key="IdleBrush" Color="{StaticResource IdleColor}"/>
     <SolidColorBrush x:Key="TermBrush" Color="{StaticResource TermColor}"/>
+    <SolidColorBrush x:Key="SoftRunBrush" Color="{StaticResource SoftRunColor}"/>
+    <SolidColorBrush x:Key="SoftOkBrush" Color="{StaticResource SoftOkColor}"/>
+    <SolidColorBrush x:Key="SoftAlarmBrush" Color="{StaticResource SoftAlarmColor}"/>
+    <SolidColorBrush x:Key="SoftWarnBrush" Color="{StaticResource SoftWarnColor}"/>
+    <SolidColorBrush x:Key="SoftNgBrush" Color="{StaticResource SoftNgColor}"/>
+    <SolidColorBrush x:Key="SoftIdleBrush" Color="{StaticResource SoftIdleColor}"/>
+    <SolidColorBrush x:Key="SoftOfflineBrush" Color="{StaticResource SoftOfflineColor}"/>
+    <SolidColorBrush x:Key="DashAccentBrush" Color="{StaticResource DashAccentColor}"/>
+    <SolidColorBrush x:Key="DashAlarmBrush" Color="{StaticResource DashAlarmColor}"/>
+    <SolidColorBrush x:Key="DashSurfaceBrush" Color="{StaticResource DashSurfaceColor}"/>
+    <SolidColorBrush x:Key="DashSurface2Brush" Color="{StaticResource DashSurface2Color}"/>
+    <SolidColorBrush x:Key="DashBorderBrush" Color="{StaticResource DashBorderColor}"/>
+    <SolidColorBrush x:Key="DashIdleBrush" Color="{StaticResource DashIdleColor}"/>
+    <SolidColorBrush x:Key="DashSoftIdleBrush" Color="{StaticResource DashSoftIdleColor}"/>
+    <SolidColorBrush x:Key="DashSoftOfflineBrush" Color="{StaticResource DashSoftOfflineColor}"/>
 
     <!-- ===== 形状/间距 ===== -->
     <CornerRadius x:Key="Radius">6</CornerRadius>

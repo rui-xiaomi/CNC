@@ -37,7 +37,7 @@ public sealed class WorkRecordService : IWorkRecordService
             CraftworkId = args.CraftworkId ?? 0,
             EquipmentId = args.EquipmentId,
             PositionCode = args.PositionCode,
-            ElectrodeId = args.ElectrodeId,
+            MaterialId = args.MaterialId,
             MaterialCode = args.MaterialCode,
             WorkStartTime = DateTime.Now,
             WorkResult = "",
@@ -47,7 +47,7 @@ public sealed class WorkRecordService : IWorkRecordService
         };
         db.WorkRecords.Add(entity);
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("加工开始 EQ{Eq} POS{Pos} 电极 {El} 记录 {Id}", args.EquipmentId, args.PositionCode, args.ElectrodeId, entity.Id);
+        _logger.LogInformation("加工开始 EQ{Eq} POS{Pos} 物料 {El} 记录 {Id}", args.EquipmentId, args.PositionCode, args.MaterialId, entity.Id);
         return entity.Id;
     }
 
@@ -99,6 +99,6 @@ public sealed class WorkRecordService : IWorkRecordService
     {
         var elapsed = (r.WorkStartTime is not null && r.WorkEndTime is not null)
             ? (int?)(int)(r.WorkEndTime.Value - r.WorkStartTime.Value).TotalSeconds : null;
-        return new WorkRecordRow(r.Id, r.EquipmentId, r.PositionCode, r.ElectrodeId, r.WorkStartTime, r.WorkEndTime, r.WorkResult, r.Remark, elapsed);
+        return new WorkRecordRow(r.Id, r.EquipmentId, r.PositionCode, r.MaterialId, r.WorkStartTime, r.WorkEndTime, r.WorkResult, r.Remark, elapsed);
     }
 }

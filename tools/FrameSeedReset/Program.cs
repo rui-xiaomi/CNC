@@ -20,7 +20,7 @@ await using var sp = services.BuildServiceProvider();
 await using var db = await sp.GetRequiredService<IDbContextFactory<CncDbContext>>().CreateDbContextAsync();
 
 const long loadFrameId = 1;
-var electrodes = Enumerable.Range(1, 10).Select(i => $"EL-{i:D3}").ToArray();
+var materials = Enumerable.Range(1, 10).Select(i => $"EL-{i:D3}").ToArray();
 
 await using var tx = await db.Database.BeginTransactionAsync();
 
@@ -28,7 +28,7 @@ var all = await db.FrameSlots.ToListAsync();
 foreach (var s in all)
 {
     s.SlotState = "0";
-    s.ElectrodeId = null;
+    s.MaterialId = null;
     s.BindSource = null;
     s.BindTime = null;
     s.LastVerifyTime = null;
@@ -36,11 +36,11 @@ foreach (var s in all)
 }
 
 var loadSlots = all.Where(s => s.FrameId == loadFrameId).OrderBy(s => s.SlotNo).ToList();
-for (var i = 0; i < Math.Min(electrodes.Length, loadSlots.Count); i++)
+for (var i = 0; i < Math.Min(materials.Length, loadSlots.Count); i++)
 {
     var slot = loadSlots[i];
     slot.SlotState = "1";
-    slot.ElectrodeId = electrodes[i];
+    slot.MaterialId = materials[i];
     slot.BindSource = "MANUAL";
     slot.BindTime = DateTime.Now;
 }
@@ -61,8 +61,8 @@ foreach (var row in summary)
 var load = await db.FrameSlots.AsNoTracking()
     .Where(s => s.FrameId == loadFrameId)
     .OrderBy(s => s.SlotNo)
-    .Select(s => new { s.SlotNo, s.ElectrodeId, s.SlotState })
+    .Select(s => new { s.SlotNo, s.MaterialId, s.SlotState })
     .ToListAsync();
 Console.WriteLine("上料总架明细：");
 foreach (var s in load)
-    Console.WriteLine($"  槽{s.SlotNo}: state={s.SlotState} electrode={s.ElectrodeId ?? "(空)"}");
+    Console.WriteLine($"  槽{s.SlotNo}: state={s.SlotState} material={s.MaterialId ?? "(空)"}");

@@ -25,6 +25,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <Product>智造云枢 LineOS</Product>
+    <AssemblyTitle>智造云枢 LineOS</AssemblyTitle>
+    <Description>产线运行中枢客户端</Description>
+    <Company>智造云枢</Company>
   </PropertyGroup>
 
 </Project>

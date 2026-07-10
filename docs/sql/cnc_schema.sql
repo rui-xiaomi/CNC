@@ -1,7 +1,7 @@
 -- =============================================================
--- CNC 自动化上下料客户端 — 数据库建库与初始化脚本 (MySQL 8.x)
+-- 智造云枢 LineOS — 数据库建库与初始化脚本 (MySQL 8.x)
 -- 依据：docs/客户端开发文档.md、docs/测试机信号表.md
--- 约束：客户端仅经 IP/TCP 与 PLC 通信；机台双加工位；料架可一架两用 + 电极槽位追踪
+-- 约束：客户端仅经 IP/TCP 与 PLC 通信；机台双加工位；料架可一架两用 + 物料槽位追踪
 -- 字符集 utf8mb4，存储引擎 InnoDB
 -- 执行：mysql --default-character-set=utf8mb4 -u<user> -p < cnc_schema.sql
 -- =============================================================
@@ -145,7 +145,7 @@ CREATE TABLE MAS_AUTO_WORKLINE_EQUIMENT (
   EQUIMENT_CODE                VARCHAR(20)  NOT NULL COMMENT '机台编码',
   EQUIMENT_TYPE                VARCHAR(20)  NOT NULL COMMENT '机台类型 检测/加工',
   EQUIMENT_TYPE_NAME           VARCHAR(20)  NOT NULL COMMENT '具体机型',
-  EQUIMENT_WORK_TYPE           VARCHAR(20)  NOT NULL COMMENT '加工类型 钢料/电极/产品',
+  EQUIMENT_WORK_TYPE           VARCHAR(20)  NOT NULL COMMENT '加工类型 钢料/物料/产品',
   EQUIMENT_TXT_STATE           CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否需辅助信息 0/1',
   EQUIMENT_PROGRAM_STATE       CHAR(1)      NOT NULL DEFAULT '0' COMMENT '是否需程式 0/1（本期不实现上传）',
   EQUIMENT_UPLOAD_TYPE         VARCHAR(20)  NULL COMMENT '[本期不实现]程式上传模式',
@@ -236,7 +236,7 @@ CREATE TABLE MAS_AUTO_PLC_POINT (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='机台/加工位信号→PLC寄存器映射';
 
 -- =============================================================
--- 三、料架（主表 + 绑定 + 槽位/电极追踪）
+-- 三、料架（主表 + 绑定 + 槽位/物料追踪）
 -- =============================================================
 
 -- 8. 料架主表
@@ -272,7 +272,7 @@ CREATE TABLE MAS_AUTO_FRAME_BIND (
   CONSTRAINT fk_bind_eq FOREIGN KEY (EQUIMENT_ID) REFERENCES MAS_AUTO_WORKLINE_EQUIMENT (ID1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架-机台绑定';
 
--- 10. 料架槽位表（电极位置追踪：电极ID↔料架↔槽位）
+-- 10. 料架槽位表（物料位置追踪：物料ID↔料架↔槽位）
 CREATE TABLE MAS_AUTO_FRAME_SLOT (
   ID1          BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
   FRAME_ID     BIGINT      NOT NULL COMMENT '关联料架 ID1',
@@ -280,10 +280,10 @@ CREATE TABLE MAS_AUTO_FRAME_SLOT (
   LAYER_NO     INT         NOT NULL DEFAULT 1 COMMENT '层号，从1起',
   POS_IN_LAYER INT         NOT NULL DEFAULT 1 COMMENT '层内位号，从1起（如 2层3位）',
   SLOT_STATE   CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=空 1=占用 2=锁定/不可用',
-  ELECTRODE_ID VARCHAR(50) NULL COMMENT '电极ID 如 A；空表示无电极（初始可不放满）',
-  BIND_TIME    DATETIME    NULL COMMENT '电极存入时间',
-  BIND_SOURCE  VARCHAR(10) NULL COMMENT '电极码绑定来源 MANUAL/SCAN_GUN/RCS_QR',
-  LAST_VERIFY_TIME DATETIME NULL COMMENT '最近盘点校正时间（电极反查数据新鲜度）',
+  ELECTRODE_ID VARCHAR(50) NULL COMMENT '物料ID 如 A；空表示无物料（初始可不放满）',
+  BIND_TIME    DATETIME    NULL COMMENT '物料存入时间',
+  BIND_SOURCE  VARCHAR(10) NULL COMMENT '物料码绑定来源 MANUAL/SCAN_GUN/RCS_QR',
+  LAST_VERIFY_TIME DATETIME NULL COMMENT '最近盘点校正时间（物料反查数据新鲜度）',
   REMARK       VARCHAR(200) NULL,
   UPDATETIME   DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (ID1),
@@ -291,7 +291,7 @@ CREATE TABLE MAS_AUTO_FRAME_SLOT (
   UNIQUE KEY uk_frame_layer_pos (FRAME_ID, LAYER_NO, POS_IN_LAYER),
   KEY idx_slot_electrode (ELECTRODE_ID),
   CONSTRAINT fk_slot_frame FOREIGN KEY (FRAME_ID) REFERENCES MAS_AUTO_FRAME (ID1)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架槽位与电极绑定（层+层内位）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架槽位与物料绑定（层+层内位）';
 
 -- =============================================================
 -- 四、运行记录类
@@ -305,7 +305,7 @@ CREATE TABLE MAS_AUTO_WORK_RECORD (
   EQUIMENT_ID     BIGINT      NOT NULL COMMENT '关联机台',
   POSITION_CODE   VARCHAR(20) NOT NULL COMMENT '加工位编码',
   MATERIALCODE    VARCHAR(30) NULL COMMENT '物料编码',
-  ELECTRODE_ID    VARCHAR(50) NULL COMMENT '电极ID（如适用）',
+  ELECTRODE_ID    VARCHAR(50) NULL COMMENT '物料ID（如适用）',
   UPLOAD_TIME     DATETIME    NULL COMMENT '上料时间',
   WORK_START_TIME DATETIME    NULL COMMENT '检测开始时间',
   WORK_END_TIME   DATETIME    NULL COMMENT '检测完成时间',
@@ -338,7 +338,7 @@ CREATE TABLE MAS_AUTO_AGV_TASK (
   EQUIMENT_ID     BIGINT      NULL COMMENT '关联机台',
   POSITION_ID     BIGINT      NULL COMMENT '关联加工位',
   CRAFTWORK_ID    BIGINT      NULL COMMENT '关联工序',
-  ELECTRODE_ID    VARCHAR(50) NULL COMMENT '关联工件/电极码',
+  ELECTRODE_ID    VARCHAR(50) NULL COMMENT '关联工件/物料码',
   TXN_ID          VARCHAR(50) NULL COMMENT '换架事务 ID（关联先拉后送任务对）',
   REQ_PARAM       VARCHAR(1000) NULL COMMENT '下发参数快照（position/param）',
   SEND_TIME       DATETIME    NOT NULL COMMENT '落库时间',
@@ -472,7 +472,7 @@ CREATE TABLE MAS_AUTO_EQUIMENT_WORKDATA (
 
 -- =============================================================
 -- 六、初始化数据（1线体 → 三道串行工序：内长宽→平面度→A基准 → 3机台）
---     业务链：电极依次经三台机台，每道 OK 看下游有空位则直接交接/无则进该台中转架等位，NG→NG架人工处理，末道→下料架。
+--     业务链：物料依次经三台机台，每道 OK 看下游有空位则直接交接/无则进该台中转架等位，NG→NG架人工处理，末道→下料架。
 --     点位地址取自 docs/测试机信号表.md；LOCATION_MAP 的 RCS_CODE 为演示编码（接真机按现场替换）。
 -- =============================================================
 
@@ -594,7 +594,7 @@ INSERT INTO MAS_AUTO_FRAME_BIND
   (91, 3, '3', '0', 'system');   -- NG专用架 → A基准 NG架
 
 -- 槽位预建（按 层×每层数 全部预建空槽 SLOT_STATE='0'）。
--- 上料总架(ID=1)：10 槽全部入库原料电极 EL-001..EL-010（演示可连跑 ~10 件；见底后重跑本脚本补满）。
+-- 上料总架(ID=1)：10 槽全部入库原料物料 EL-001..EL-010（演示可连跑 ~10 件；见底后重跑本脚本补满）。
 INSERT INTO MAS_AUTO_FRAME_SLOT
   (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_SOURCE, BIND_TIME) VALUES
   (1, 1, 1, 1, '1', 'EL-001', 'MANUAL', NOW()),
@@ -655,7 +655,7 @@ INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_T
 -- =============================================================
 -- 七、常用查询示例
 -- =============================================================
--- 反查电极当前所在料架与槽位（含层/层内位）：
+-- 反查物料当前所在料架与槽位（含层/层内位）：
 --   SELECT f.FRAME_NAME, s.SLOT_NO, s.LAYER_NO, s.POS_IN_LAYER
 --   FROM MAS_AUTO_FRAME_SLOT s JOIN MAS_AUTO_FRAME f ON f.ID1 = s.FRAME_ID
 --   WHERE s.ELECTRODE_ID = 'A' AND s.SLOT_STATE = '1';

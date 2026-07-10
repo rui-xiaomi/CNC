@@ -143,6 +143,24 @@ AGV / 扫码枪连通性测试（仅测试，不纳入调度/来料校验）。
 ### Phase 6 — 联调验收　Status: pending
 现场真机联调、异常场景、地址表复核、验收要点核对。
 
+### Phase 7 — 监控看板悬浮卡片视觉升级　Status: 已完成（待目视确认）
+Spec：`docs/superpowers/specs/2026-07-10-dashboard-neon-float-design.md`  
+Plan：`docs/superpowers/plans/2026-07-10-dashboard-neon-float-plan.md`  
+范围：仅监控看板；克制光晕；装饰波形；矢量状态图标；看板专用青/红 token。
+
+- [x] 7.1 Token + `DashboardStyles.xaml` + App 合并（`DashPanel` / `DashKpiCard` / 波形 / 光晕）
+- [x] 7.2 `StateBadgeToIconConverter` + Geometry 映射
+- [x] 7.3 Dashboard DataTemplate 换皮（KPI / 产线流 / 机台 / 右栏）
+- [x] 7.4 修订 `docs/UI设计文档.md` 看板例外条款
+- [x] 7.5 验收：`dotnet build` 0 警告 0 错误（目视需重启 App 确认）
+
+#### Phase 7 验收清单
+1. 其它页面观感不变
+2. 默认卡片几乎无光晕；选中淡青；告警淡红
+3. 状态圆点全部换成矢量图标
+4. 波形底纹不挡文字
+5. 构建通过 ✓
+
 ---
 
 ## Errors Encountered

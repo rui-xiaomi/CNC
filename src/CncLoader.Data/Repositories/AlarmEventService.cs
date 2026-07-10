@@ -75,14 +75,28 @@ public sealed class AlarmEventService : IAlarmEventService
         return entity.Id;
     }
 
-    public async Task<long> RaiseRcsTaskCanceledAsync(string rcsTaskId, CancellationToken ct = default)
-        => await RaiseRcsTaskAlarmAsync("RCS_CANCELED", "2", $"任务 {rcsTaskId} 已取消，需人工处理小车/容器并确认（确认前锁定相关点位派工）", ct);
+    public async Task<long> RaiseRcsTaskCanceledAsync(string rcsTaskId, string? reason = null, CancellationToken ct = default)
+    {
+        var detail = string.IsNullOrWhiteSpace(reason)
+            ? "需人工处理小车/容器并确认（确认前锁定相关点位派工）"
+            : reason.Trim();
+        return await RaiseRcsTaskAlarmAsync("RCS_CANCELED", "2", $"任务 {rcsTaskId} 已取消：{detail}", ct);
+    }
 
-    public async Task<long> RaiseRcsTaskNotFoundAsync(string rcsTaskId, CancellationToken ct = default)
-        => await RaiseRcsTaskAlarmAsync("RCS_NOT_FOUND", "1", $"任务 {rcsTaskId} 在 RCS 侧查无此任务，需人工介入", ct);
+    public async Task<long> RaiseRcsTaskNotFoundAsync(string rcsTaskId, string? reason = null, CancellationToken ct = default)
+    {
+        var detail = string.IsNullOrWhiteSpace(reason)
+            ? "RCS 侧查无此任务，需人工介入"
+            : reason.Trim();
+        return await RaiseRcsTaskAlarmAsync("RCS_NOT_FOUND", "1", $"任务 {rcsTaskId}：{detail}", ct);
+    }
 
-    public async Task<long> RaiseRcsRedoLimitAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
-        => await RaiseRcsTaskAlarmAsync("RCS_REDO_LIMIT", "2", $"任务 {rcsTaskId} 自动重做已达上限 {maxRedo} 次，需人工介入", ct);
+    public async Task<long> RaiseRcsRedoLimitAsync(string rcsTaskId, int maxRedo, string? reason = null, CancellationToken ct = default)
+    {
+        var baseMsg = $"任务 {rcsTaskId} 自动重做已达上限 {maxRedo} 次，需人工介入";
+        if (!string.IsNullOrWhiteSpace(reason)) baseMsg += $"（{reason.Trim()}）";
+        return await RaiseRcsTaskAlarmAsync("RCS_REDO_LIMIT", "2", baseMsg, ct);
+    }
 
     private async Task<long> RaiseRcsTaskAlarmAsync(string alarmType, string level, string msg, CancellationToken ct)
     {

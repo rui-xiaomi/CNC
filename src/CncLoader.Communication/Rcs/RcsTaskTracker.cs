@@ -3,6 +3,8 @@ using System.Text.Json;
 using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -28,6 +30,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
     private readonly RcsCallbackNotifier _notifier;
     private readonly RcsOptions _options;
     private readonly IRcsRuntimeConfig _runtime;
+    private readonly IServiceProvider _services;
     private readonly ILogger<RcsTaskTracker> _logger;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
@@ -44,6 +47,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         RcsCallbackNotifier notifier,
         IOptions<AppOptions> options,
         IRcsRuntimeConfig runtime,
+        IServiceProvider services,
         ILogger<RcsTaskTracker> logger)
     {
         _taskSvc = taskSvc;
@@ -52,6 +56,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         _notifier = notifier;
         _options = options.Value.Rcs;
         _runtime = runtime;
+        _services = services;
         _logger = logger;
     }
 
@@ -131,10 +136,13 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
             }
         }
 
-        // RCS 侧未返回的 taskId → 查无此任务告警（人工介入）。
+        // RCS 侧未返回的 taskId → 查无此任务告警 + 工位收口 Alarm（可点恢复）。
         foreach (var id in ids)
-            if (!found.Contains(id) && _notFoundAlarmed.TryAdd(id, true))
-                await _alarms.RaiseRcsTaskNotFoundAsync(id, ct);
+        {
+            if (found.Contains(id) || !_notFoundAlarmed.TryAdd(id, true)) continue;
+            await _alarms.RaiseRcsTaskNotFoundAsync(id, "轮询 queryTask 未返回该任务（RCS 侧查无），工位已收口可点恢复", ct);
+            await NotifySchedulerAbandonedAsync(id, "RCS_NOT_FOUND", ct);
+        }
     }
 
     private async Task ApplyPollStateAsync(string taskId, string rcsStatus, CancellationToken ct)
@@ -169,7 +177,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
             if (state == RcsTaskState.Failed)
                 await AutoRedoAsync(taskId, source);
             else if (state == RcsTaskState.Canceled && _canceledAlarmed.TryAdd(taskId, true))
-                await _alarms.RaiseRcsTaskCanceledAsync(taskId);
+                await _alarms.RaiseRcsTaskCanceledAsync(taskId, $"RCS 回报取消（来源 {source}），需人工处理小车/容器并确认");
         }
         catch (Exception ex) { _logger.LogWarning(ex, "跟踪器处理事件 {TaskId} {State} 异常", taskId, state); }
     }
@@ -184,8 +192,23 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         }
         else if (_redoLimitAlarmed.TryAdd(taskId, true))
         {
-            _logger.LogWarning("任务 {TaskId} 自动重做已达上限 {Max}，告警人工", taskId, max);
-            await _alarms.RaiseRcsRedoLimitAsync(taskId, max);
+            _logger.LogWarning("任务 {TaskId} 自动重做已达上限 {Max}，告警人工并收口工位", taskId, max);
+            await _alarms.RaiseRcsRedoLimitAsync(taskId, max, $"来源 {source}，工位已收口可点恢复");
+            await NotifySchedulerAbandonedAsync(taskId, "REDO_LIMIT", CancellationToken.None);
+        }
+    }
+
+    private async Task NotifySchedulerAbandonedAsync(string taskId, string reason, CancellationToken ct)
+    {
+        try
+        {
+            var scheduler = _services.GetService<IPositionScheduler>();
+            if (scheduler is null) return;
+            await scheduler.NotifyTaskAbandonedAsync(taskId, reason, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "通知调度器任务放弃失败 {TaskId} {Reason}", taskId, reason);
         }
     }
 

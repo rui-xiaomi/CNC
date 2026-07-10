@@ -57,7 +57,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             Log.Logger.Fatal(ex, "应用启动失败");
-            MessageBox.Show($"应用启动失败：\n{ex.Message}", "CNC 自动化上下料客户端",
+            MessageBox.Show($"应用启动失败：\n{ex.Message}", "智造云枢 LineOS",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
         }
@@ -160,7 +160,7 @@ public partial class App : Application
     private void OnDispatcherException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         Log.Logger.Error(e.Exception, "UI 线程未处理异常");
-        MessageBox.Show($"发生未处理异常：\n{e.Exception.Message}", "CNC 自动化上下料客户端",
+        MessageBox.Show($"发生未处理异常：\n{e.Exception.Message}", "智造云枢 LineOS",
             MessageBoxButton.OK, MessageBoxImage.Warning);
         e.Handled = true; // 不崩溃退出
     }

@@ -60,7 +60,7 @@ public class FrameBind
     [Column("UPDATETIME")] public DateTime? UpdateTime { get; set; }
 }
 
-/// <summary>料架槽位/电极 MAS_AUTO_FRAME_SLOT（层 + 层内位 + 电极绑定）。</summary>
+/// <summary>料架槽位/物料 MAS_AUTO_FRAME_SLOT（层 + 层内位 + 物料绑定）。</summary>
 [Table("MAS_AUTO_FRAME_SLOT")]
 public class FrameSlot
 {
@@ -73,11 +73,11 @@ public class FrameSlot
     [Column("POS_IN_LAYER")] public int PosInLayer { get; set; } = 1;
     /// <summary>0=空,1=占用,2=锁定/不可用。</summary>
     [Column("SLOT_STATE")] public string SlotState { get; set; } = "0";
-    [Column("ELECTRODE_ID")] public string? ElectrodeId { get; set; }
+    [Column("ELECTRODE_ID")] public string? MaterialId { get; set; }
     [Column("BIND_TIME")] public DateTime? BindTime { get; set; }
-    /// <summary>电极码绑定来源 MANUAL/SCAN_GUN/RCS_QR。</summary>
+    /// <summary>物料码绑定来源 MANUAL/SCAN_GUN/RCS_QR。</summary>
     [Column("BIND_SOURCE")] public string? BindSource { get; set; }
-    /// <summary>最近盘点校正时间（电极反查数据新鲜度）。</summary>
+    /// <summary>最近盘点校正时间（物料反查数据新鲜度）。</summary>
     [Column("LAST_VERIFY_TIME")] public DateTime? LastVerifyTime { get; set; }
     [Column("REMARK")] public string? Remark { get; set; }
     [Column("UPDATETIME")] public DateTime? UpdateTime { get; set; }

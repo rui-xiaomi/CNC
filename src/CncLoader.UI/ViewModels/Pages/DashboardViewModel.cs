@@ -11,7 +11,7 @@ using CncLoader.Core.State;
 namespace CncLoader.UI.ViewModels.Pages;
 
 /// <summary>
-/// 监控看板：KPI + 左机台（紧凑）| 右上最近加工记录 + 右下实时告警。
+/// 监控看板：KPI + 产线流 + 左机台色块卡 | 右上最近加工记录 + 右下实时告警。
 /// 位置变化 200ms 节流原地更新；告警/产量/加工记录 2s 轮询 + 事件即时刷新。
 /// </summary>
 public sealed partial class DashboardViewModel : PageViewModelBase
@@ -21,6 +21,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     private readonly IAlarmEventService _alarms;
     private readonly IPositionScheduler _scheduler;
     private readonly IFrameService _frames;
+    private readonly IWorkLineService _workLines;
     private readonly ICurrentUser _user;
 
     private readonly Dictionary<long, MachineCardVm> _machines = new();
@@ -31,21 +32,24 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     private volatile bool _positionsDirty;
 
     public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms,
-        IPositionScheduler scheduler, IFrameService frames, ICurrentUser user)
+        IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user)
     {
         _store = store;
         _workRecords = workRecords;
         _alarms = alarms;
         _scheduler = scheduler;
         _frames = frames;
+        _workLines = workLines;
         _user = user;
         Machines = new ObservableCollection<MachineCardVm>();
+        FlowNodes = new ObservableCollection<FlowNodeVm>();
         Alarms = new ObservableCollection<AlarmFeedItem>();
         RecentRecords = new ObservableCollection<WorkRecordFeedItem>();
         _store.PositionChanged += OnStoreChanged;
         _store.MachineChanged += OnStoreChanged;
         _alarms.AlarmRaised += OnAlarmRaised;
         _alarms.AlarmsChanged += (_, _) => _ = RefreshAlarmsAsync();
+        _workLines.WorkLinesChanged += (_, _) => _ = RefreshFlowLineCodeAsync();
 
         _throttle = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(200) };
         _throttle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdateMachinesUi(); } };
@@ -63,6 +67,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     public override string Title => "监控看板";
 
     public ObservableCollection<MachineCardVm> Machines { get; }
+    public ObservableCollection<FlowNodeVm> FlowNodes { get; }
     public ObservableCollection<AlarmFeedItem> Alarms { get; }
     public ObservableCollection<WorkRecordFeedItem> RecentRecords { get; }
 
@@ -77,8 +82,13 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     /// <summary>OK 卡副文案：标明「工位判定」口径，避免理解成整件过线。</summary>
     [ObservableProperty] private string _okSubText = "今日工位判定 · 非整件";
     [ObservableProperty] private string _ngSubText = "今日工位判定 · 非整件";
+    [ObservableProperty] private string _alarmSubText = "—";
     [ObservableProperty] private bool _alarmsEmpty = true;
     [ObservableProperty] private bool _recordsEmpty = true;
+    /// <summary>产线流选中的机台；null 表示未选或锚点节点。</summary>
+    [ObservableProperty] private long? _selectedFlowEquipmentId;
+    /// <summary>产线流头线体编码（如 LINE01）。</summary>
+    [ObservableProperty] private string _flowLineCode = "—";
 
     private async Task InitAsync()
     {
@@ -88,7 +98,18 @@ public sealed partial class DashboardViewModel : PageViewModelBase
             foreach (var o in opts) _equipmentNames[o.Id] = o.DisplayName;
         }
         catch { /* 名称缺失时回退 EQ{id} */ }
+        await RefreshFlowLineCodeAsync();
         await RefreshAsync();
+    }
+
+    private async Task RefreshFlowLineCodeAsync()
+    {
+        try
+        {
+            var lines = await _workLines.GetAllAsync();
+            FlowLineCode = lines.FirstOrDefault()?.Code ?? "—";
+        }
+        catch { FlowLineCode = "—"; }
     }
 
     private void OnStoreChanged(object? sender, PositionStatus ps)
@@ -165,6 +186,22 @@ public sealed partial class DashboardViewModel : PageViewModelBase
         catch (Exception ex) { HandyControl.Controls.Growl.Error($"全部确认失败：{ex.Message}"); }
     }
 
+    [RelayCommand]
+    private void SelectFlowNode(FlowNodeVm? node)
+    {
+        if (node is null || !node.IsEquipment) { SelectedFlowEquipmentId = null; ApplyMachineHighlight(); return; }
+        SelectedFlowEquipmentId = SelectedFlowEquipmentId == node.EquipmentId ? null : node.EquipmentId;
+        ApplyMachineHighlight();
+    }
+
+    private void ApplyMachineHighlight()
+    {
+        foreach (var m in Machines)
+            m.IsHighlighted = SelectedFlowEquipmentId is long id && m.EquipmentId == id;
+        foreach (var n in FlowNodes)
+            n.IsSelected = n.IsEquipment && SelectedFlowEquipmentId is long id && n.EquipmentId == id;
+    }
+
     private void UpdateMachinesUi()
     {
         var positions = _store.GetAllPositions();
@@ -186,6 +223,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
                 Machines.Add(card);
             }
             card.Update(ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
+            card.IsHighlighted = SelectedFlowEquipmentId == eqId;
 
             foreach (var p in group.OrderBy(x => x.PositionId))
             {
@@ -193,11 +231,12 @@ public sealed partial class DashboardViewModel : PageViewModelBase
                 seenPos.Add(key);
                 if (_positions.TryGetValue(key, out var pos))
                 {
-                    pos.Update(p.State, ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
+                    pos.Update(p.State, p.MaterialId, ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
                 }
                 else
                 {
-                    var posVm = new PositionCardVm(p.EquipmentId, p.PositionId, p.State, ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
+                    var posVm = new PositionCardVm(p.EquipmentId, p.PositionId, p.State, p.MaterialId,
+                        ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
                     _positions[key] = posVm;
                     card.Positions.Add(posVm);
                 }
@@ -217,6 +256,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
                 Machines.Add(card);
             }
             card.Update(ms.PlcOnline, ms.Safe, ms.DoorOpen);
+            card.IsHighlighted = SelectedFlowEquipmentId == ms.EquipmentId;
         }
 
         foreach (var key in _positions.Keys.Where(k => !seenPos.Contains(k)).ToList())
@@ -231,13 +271,204 @@ public sealed partial class DashboardViewModel : PageViewModelBase
             _machines.Remove(eqId);
         }
 
+        // 保持 Machines 按 EquipmentId 升序（产线流与列表一致）
+        var orderedMachines = Machines.OrderBy(m => m.EquipmentId).ToList();
+        if (!Machines.SequenceEqual(orderedMachines))
+        {
+            Machines.Clear();
+            foreach (var m in orderedMachines) Machines.Add(m);
+        }
+
         TotalMachines = Machines.Count;
         OnlineMachines = Machines.Count(m => m.PlcOnline);
-        // 主数字已是「在线/总数」，副文案只报加工位数，避免再写一遍 3/3
         OnlineSubText = TotalMachines == 0
             ? "无加工位"
             : $"{_positions.Count} 个加工位有信号";
+
+        RebuildFlowNodes();
     }
+
+    private void RebuildFlowNodes()
+    {
+        // 上料架 → EQ升序机台 → 终点分叉（下料 / NG）；锚点仅示意，不绑实时水位
+        var desired = new List<FlowNodeVm>
+        {
+            new("upload", "上料架", null, isAnchor: true)
+        };
+        foreach (var m in Machines.OrderBy(x => x.EquipmentId))
+            desired.Add(new FlowNodeVm($"eq-{m.EquipmentId}", m.Name, m.EquipmentId, isAnchor: false));
+        desired.Add(new("ends", "终点", null, isAnchor: true) { IsEndFork = true });
+
+        // 原地同步集合，避免整表 Clear 闪烁
+        while (FlowNodes.Count > desired.Count) FlowNodes.RemoveAt(FlowNodes.Count - 1);
+        for (var i = 0; i < desired.Count; i++)
+        {
+            if (i < FlowNodes.Count)
+            {
+                var cur = FlowNodes[i];
+                var next = desired[i];
+                if (cur.Key != next.Key)
+                {
+                    FlowNodes[i] = next;
+                    cur = next;
+                }
+                else if (cur.Title != next.Title)
+                    cur.Title = next.Title;
+                cur.IsEndFork = next.IsEndFork;
+            }
+            else FlowNodes.Add(desired[i]);
+        }
+
+        for (var i = 0; i < FlowNodes.Count; i++)
+        {
+            var node = FlowNodes[i];
+            node.ShowArrowAfter = i < FlowNodes.Count - 1;
+            node.ArrowActive = false;
+            node.UnloadArrowActive = false;
+            node.NgArrowActive = false;
+
+            if (node.IsEndFork)
+            {
+                node.AggregateDisplay = "下料出站";
+                node.SummaryText = "合格出站";
+                node.StateBadge = "ok";
+                node.ForkSecondaryTitle = "NG出站";
+                node.ForkSecondaryAggregate = "不良出站";
+                node.ForkSecondarySummary = "不良出站";
+                node.ForkSecondaryBadge = "ng";
+                node.Seg1Text = "—";
+                node.Seg1Badge = "idle";
+                node.Seg2Text = "—";
+                node.Seg2Badge = "idle";
+                node.IsSelected = false;
+                continue;
+            }
+
+            if (node.IsEquipment && node.EquipmentId is long eqId && _machines.TryGetValue(eqId, out var mach))
+            {
+                ApplyEquipmentAggregate(node, mach);
+                var inboundBusy = mach.Positions.Any(p =>
+                    p.State is PositionState.Dispatching or PositionState.Transporting);
+                if (i > 0) FlowNodes[i - 1].ArrowActive = inboundBusy;
+            }
+            else
+            {
+                node.AggregateDisplay = "示意";
+                node.SummaryText = "流向起点";
+                node.StateBadge = "idle";
+                node.Seg1Text = "起点";
+                node.Seg1Badge = "idle";
+                node.Seg2Text = "—";
+                node.Seg2Badge = "idle";
+            }
+
+            node.IsSelected = node.IsEquipment && SelectedFlowEquipmentId == node.EquipmentId;
+        }
+
+        var fork = FlowNodes.LastOrDefault(n => n.IsEndFork);
+        var lastEq = FlowNodes.LastOrDefault(n => n.IsEquipment);
+        if (fork is not null && lastEq?.EquipmentId is long lastId
+            && _machines.TryGetValue(lastId, out var lastMach))
+        {
+            var outbound = lastMach.Positions.Any(p =>
+                p.State is PositionState.Dispatching or PositionState.Transporting);
+            var toNg = lastMach.Positions.Any(p => p.State == PositionState.DoneNg);
+            var toOk = lastMach.Positions.Any(p => p.State is PositionState.DoneOk or PositionState.Unloaded);
+            fork.UnloadArrowActive = outbound || toOk;
+            fork.NgArrowActive = outbound || toNg;
+            lastEq.ArrowActive = fork.UnloadArrowActive || fork.NgArrowActive;
+        }
+    }
+
+    private static void ApplyEquipmentAggregate(FlowNodeVm node, MachineCardVm mach)
+    {
+        var positions = mach.Positions.OrderBy(p => p.PositionId).ToList();
+        if (positions.Count == 0)
+        {
+            node.AggregateDisplay = mach.PlcOnline ? "等待上料" : "离线";
+            node.StateBadge = mach.PlcOnline ? "idle" : "offline";
+            node.SummaryText = "无加工位";
+            node.Seg1Text = "—";
+            node.Seg1Badge = "idle";
+            node.Seg2Text = "—";
+            node.Seg2Badge = "idle";
+            return;
+        }
+
+        var agg = AggregatePriority(positions.Select(p => p.State));
+        node.AggregateDisplay = PositionStateNames.ToDisplay(agg);
+        node.StateBadge = BadgeForAggregate(agg);
+
+        var parts = new List<string>();
+        void Add(string label, Func<PositionCardVm, bool> pred)
+        {
+            var n = positions.Count(pred);
+            if (n > 0) parts.Add($"{n} {label}");
+        }
+        Add("报警", p => p.State == PositionState.Alarm);
+        Add("检测中", p => p.State == PositionState.Processing);
+        Add("搬运", p => p.State is PositionState.Dispatching or PositionState.Transporting);
+        Add("已上料", p => p.State == PositionState.Loaded);
+        Add("待料", p => p.State is PositionState.WaitLoad or PositionState.Unloaded);
+        Add("OK", p => p.State == PositionState.DoneOk);
+        Add("NG", p => p.State == PositionState.DoneNg);
+        Add("离线", p => p.State == PositionState.Offline);
+        node.SummaryText = parts.Count > 0 ? string.Join(" · ", parts.Take(2)) : "—";
+
+        var (t1, b1) = SegFor(positions[0].State);
+        node.Seg1Text = t1;
+        node.Seg1Badge = b1;
+        if (positions.Count > 1)
+        {
+            var (t2, b2) = SegFor(positions[1].State);
+            node.Seg2Text = t2;
+            node.Seg2Badge = b2;
+        }
+        else
+        {
+            node.Seg2Text = "—";
+            node.Seg2Badge = "idle";
+        }
+    }
+
+    private static (string Text, string Badge) SegFor(PositionState s) => s switch
+    {
+        PositionState.Alarm => ("报警", "alarm"),
+        PositionState.Processing => ("检测", "run"),
+        PositionState.Dispatching or PositionState.Transporting => ("搬运", "run"),
+        PositionState.Loaded => ("已上料", "warn"),
+        PositionState.DoneOk => ("OK", "ok"),
+        PositionState.DoneNg => ("NG", "ng"),
+        PositionState.Offline => ("离线", "offline"),
+        PositionState.WaitLoad or PositionState.Unloaded => ("待料", "idle"),
+        _ => ("—", "idle")
+    };
+
+    private static PositionState AggregatePriority(IEnumerable<PositionState> states)
+    {
+        var list = states.ToList();
+        if (list.Count == 0) return PositionState.Offline;
+        if (list.Any(s => s == PositionState.Alarm)) return PositionState.Alarm;
+        if (list.Any(s => s is PositionState.Processing or PositionState.Dispatching or PositionState.Transporting))
+            return list.Any(s => s == PositionState.Processing) ? PositionState.Processing : PositionState.Transporting;
+        if (list.Any(s => s == PositionState.Loaded)) return PositionState.Loaded;
+        if (list.Any(s => s is PositionState.DoneOk or PositionState.DoneNg))
+            return list.Any(s => s == PositionState.DoneNg) ? PositionState.DoneNg : PositionState.DoneOk;
+        if (list.Any(s => s is PositionState.WaitLoad or PositionState.Unloaded)) return PositionState.WaitLoad;
+        if (list.All(s => s == PositionState.Offline)) return PositionState.Offline;
+        return PositionState.WaitLoad;
+    }
+
+    private static string BadgeForAggregate(PositionState s) => s switch
+    {
+        PositionState.Offline => "offline",
+        PositionState.Alarm => "alarm",
+        PositionState.Processing or PositionState.Dispatching or PositionState.Transporting => "run",
+        PositionState.DoneOk => "ok",
+        PositionState.DoneNg => "ng",
+        PositionState.Loaded => "warn",
+        _ => "idle"
+    };
 
     private async Task RefreshStatsAsync()
     {
@@ -270,6 +501,9 @@ public sealed partial class DashboardViewModel : PageViewModelBase
                 Alarms.Clear();
                 foreach (var r in rows) Alarms.Add(AlarmFeedItem.From(r));
                 AlarmsEmpty = Alarms.Count == 0;
+                AlarmSubText = Alarms.Count > 0
+                    ? $"最近 {Alarms[0].TimeText}"
+                    : "暂无未处理";
             });
         }
         catch { /* DB 未就绪时静默 */ }
@@ -288,13 +522,64 @@ public sealed partial class DashboardViewModel : PageViewModelBase
                     var eqName = _equipmentNames.TryGetValue(r.EquipmentId, out var n)
                         ? n
                         : $"EQ{r.EquipmentId:D2}";
-                    RecentRecords.Add(WorkRecordFeedItem.From(r, eqName));
+                    RecentRecords.Add(WorkRecordFeedItem.From(r, ShortEquipmentName(eqName)));
                 }
                 RecordsEmpty = RecentRecords.Count == 0;
             });
         }
         catch { /* DB 未就绪时静默 */ }
     }
+
+    /// <summary>下拉 DisplayName「内长宽 (EQ01)」→ 记录表只留短名，避免窄列溢出叠字。</summary>
+    private static string ShortEquipmentName(string displayName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName)) return "—";
+        var i = displayName.LastIndexOf(" (", StringComparison.Ordinal);
+        return i > 0 ? displayName[..i] : displayName;
+    }
+}
+
+/// <summary>产线流工序节点（看板顶部横向总览）。末尾可用 IsEndFork 表示下料/NG 分叉。</summary>
+public sealed partial class FlowNodeVm : ObservableObject
+{
+    public FlowNodeVm(string key, string title, long? equipmentId, bool isAnchor)
+    {
+        Key = key;
+        Title = title;
+        EquipmentId = equipmentId;
+        IsAnchor = isAnchor;
+    }
+
+    public string Key { get; }
+    public long? EquipmentId { get; }
+    public bool IsAnchor { get; }
+    public bool IsEquipment => !IsAnchor && EquipmentId is not null && !IsEndFork;
+    public string EquipmentCode => EquipmentId is long id ? $"EQ{id:D2}" : "";
+
+    /// <summary>终点分叉：主卡=下料，副卡=NG。</summary>
+    public bool IsEndFork { get; set; }
+
+    [ObservableProperty] private string _title = "";
+    [ObservableProperty] private string _aggregateDisplay = "—";
+    [ObservableProperty] private string _summaryText = "";
+    [ObservableProperty] private string _stateBadge = "idle";
+    [ObservableProperty] private bool _showArrowAfter;
+    [ObservableProperty] private bool _arrowActive;
+    [ObservableProperty] private bool _isSelected;
+
+    // 原型 st-slots 双槽
+    [ObservableProperty] private string _seg1Text = "—";
+    [ObservableProperty] private string _seg1Badge = "idle";
+    [ObservableProperty] private string _seg2Text = "—";
+    [ObservableProperty] private string _seg2Badge = "idle";
+
+    // 分叉副支（NG）
+    [ObservableProperty] private string _forkSecondaryTitle = "NG 出站";
+    [ObservableProperty] private string _forkSecondaryAggregate = "不良出站";
+    [ObservableProperty] private string _forkSecondarySummary = "不良出站";
+    [ObservableProperty] private string _forkSecondaryBadge = "ng";
+    [ObservableProperty] private bool _unloadArrowActive;
+    [ObservableProperty] private bool _ngArrowActive;
 }
 
 /// <summary>机台治具卡（看板签名元素）。</summary>
@@ -323,6 +608,7 @@ public sealed partial class MachineCardVm : ObservableObject
     private bool? _safe;
 
     [ObservableProperty] private bool _plcOnline;
+    [ObservableProperty] private bool _isHighlighted;
 
     public string DoorText => DoorOpen switch { true => "门 开", false => "门 闭", _ => "门 未知" };
     public string SafeText => Safe switch { true => "安全", false => "不安全", _ => "安全 未知" };
@@ -337,14 +623,16 @@ public sealed partial class MachineCardVm : ObservableObject
     }
 }
 
-/// <summary>加工位行（挂在机台卡下）。</summary>
+/// <summary>加工位色块卡（挂在机台卡下）。</summary>
 public sealed partial class PositionCardVm : ObservableObject
 {
-    public PositionCardVm(long equipmentId, long positionId, PositionState state, bool plcOnline, bool? safe, bool? doorOpen)
+    public PositionCardVm(long equipmentId, long positionId, PositionState state, string? materialId,
+        bool plcOnline, bool? safe, bool? doorOpen)
     {
         EquipmentId = equipmentId;
         PositionId = positionId;
         _state = state;
+        _materialId = materialId;
         _plcOnline = plcOnline;
         _safe = safe;
         _doorOpen = doorOpen;
@@ -357,9 +645,25 @@ public sealed partial class PositionCardVm : ObservableObject
     [NotifyPropertyChangedFor(nameof(StateDisplay))]
     [NotifyPropertyChangedFor(nameof(StateBadge))]
     [NotifyPropertyChangedFor(nameof(IsAlarm))]
+    [NotifyPropertyChangedFor(nameof(IsVerdict))]
+    [NotifyPropertyChangedFor(nameof(VerdictText))]
     private PositionState _state;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MaterialText))]
+    private string? _materialId;
+
     public bool IsAlarm => State == PositionState.Alarm;
+    /// <summary>判定态（OK/NG/报警）用大号等宽展示——看板签名元素。</summary>
+    public bool IsVerdict => State is PositionState.DoneOk or PositionState.DoneNg or PositionState.Alarm;
+    public string VerdictText => State switch
+    {
+        PositionState.DoneOk => "OK",
+        PositionState.DoneNg => "NG",
+        PositionState.Alarm => "ALM",
+        _ => ""
+    };
+    public string MaterialText => string.IsNullOrWhiteSpace(MaterialId) ? "—" : MaterialId!;
 
     [ObservableProperty] private bool _plcOnline;
     [ObservableProperty] private bool? _safe;
@@ -376,12 +680,14 @@ public sealed partial class PositionCardVm : ObservableObject
         PositionState.DoneOk => "ok",
         PositionState.DoneNg => "ng",
         PositionState.Dispatching or PositionState.Transporting => "run",
+        PositionState.Loaded => "warn",
         _ => "idle"
     };
 
-    public void Update(PositionState state, bool plcOnline, bool? safe, bool? doorOpen)
+    public void Update(PositionState state, string? materialId, bool plcOnline, bool? safe, bool? doorOpen)
     {
         State = state;
+        MaterialId = materialId;
         PlcOnline = plcOnline;
         Safe = safe;
         DoorOpen = doorOpen;
@@ -392,12 +698,14 @@ public sealed partial class PositionCardVm : ObservableObject
 public sealed class WorkRecordFeedItem
 {
     public long Id { get; init; }
+    public DateTime? SortTime { get; init; }
     public string TimeText { get; init; } = "";
     public string EquipmentText { get; init; } = "";
     public string PositionText { get; init; } = "";
-    public string ElectrodeText { get; init; } = "";
+    public string MaterialText { get; init; } = "";
     public string ResultText { get; init; } = "";
     public string ResultBadge { get; init; } = "idle";
+    public int SortElapsed { get; init; }
     public string ElapsedText { get; init; } = "";
 
     public static WorkRecordFeedItem From(WorkRecordRow r, string equipmentName)
@@ -409,17 +717,37 @@ public sealed class WorkRecordFeedItem
             "2" => ("异常", "alarm"),
             _ => ("进行中", "run")
         };
+        var sortTime = r.WorkEndTime ?? r.WorkStartTime;
         return new WorkRecordFeedItem
         {
             Id = r.Id,
-            TimeText = (r.WorkEndTime ?? r.WorkStartTime)?.ToString("HH:mm:ss") ?? "—",
-            EquipmentText = equipmentName,
-            PositionText = string.IsNullOrWhiteSpace(r.PositionCode) ? "—" : r.PositionCode,
-            ElectrodeText = string.IsNullOrWhiteSpace(r.ElectrodeId) ? "—" : r.ElectrodeId!,
+            SortTime = sortTime,
+            TimeText = sortTime?.ToString("HH:mm:ss") ?? "—",
+            EquipmentText = string.IsNullOrWhiteSpace(equipmentName) ? $"EQ{r.EquipmentId:D2}" : equipmentName,
+            PositionText = FormatPosition(r.PositionCode),
+            MaterialText = string.IsNullOrWhiteSpace(r.MaterialId) ? "—" : r.MaterialId!,
             ResultText = resultText,
             ResultBadge = badge,
+            SortElapsed = r.ElapsedSeconds ?? -1,
             ElapsedText = r.ElapsedSeconds is int s ? $"{s}s" : "—"
         };
+    }
+
+    /// <summary>POS-1 / POS1 → 工位1，避免窄列显示成 POS…</summary>
+    private static string FormatPosition(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "—";
+        var c = code.Trim();
+        if (c.StartsWith("POS-", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(c.AsSpan("POS-".Length), out var idDash))
+            return $"工位{idDash}";
+        if (c.StartsWith("POS", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(c.AsSpan(3), out var id))
+            return $"工位{id}";
+        var p = c.LastIndexOf('P');
+        if (p >= 0 && p + 1 < c.Length && int.TryParse(c.AsSpan(p + 1), out var idP))
+            return $"工位{idP}";
+        return c;
     }
 }
 
@@ -438,7 +766,7 @@ public sealed partial class AlarmFeedItem : ObservableObject
     [NotifyPropertyChangedFor(nameof(StateTag))]
     private string _state = "0";
 
-    public bool IsHandled => State != "0";
+    public bool IsHandled => State is "1" or "已处理";
     public string TimeText => Time.ToString("HH:mm:ss");
     public string LevelBadge => Level switch
     {

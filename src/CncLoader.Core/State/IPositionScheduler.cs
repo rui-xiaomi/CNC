@@ -16,4 +16,13 @@ public interface IPositionScheduler
 
     /// <summary>人工恢复：把指定加工位从 ALARM 重置回 WAIT_LOAD（解除报警后调用）。</summary>
     Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// RCS 任务已放弃（redo 达上限 / 查无等）：绑定工位置 ALARM、回滚预记、清工序间交接登记，
+    /// 避免工位停在 DISPATCHING/TRANSPORTING 且看板无「恢复」按钮。
+    /// </summary>
+    Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default);
+
+    /// <summary>料架绑定变更后失效机台→料架缓存（equipmentId 空则全清）。</summary>
+    void InvalidateFrameBindingCache(long? equipmentId = null);
 }

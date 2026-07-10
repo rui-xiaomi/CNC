@@ -10,6 +10,7 @@
                 <!-- 自研令牌/样式/页面模板：最后加载，覆盖库默认配色/圆角/字体 -->
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/Tokens.xaml"/>
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/Styles.xaml"/>
+                <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/DashboardStyles.xaml"/>
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/PageTemplates.xaml"/>
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

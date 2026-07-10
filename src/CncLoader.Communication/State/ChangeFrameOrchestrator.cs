@@ -3,6 +3,7 @@ using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -21,6 +22,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
     private readonly IEquipmentConfigService _equipment;
     private readonly ILocationMapService _locationMap;
     private readonly IAlarmEventService _alarms;
+    private readonly IPositionScheduler _scheduler;
     private readonly RcsCallbackNotifier _notifier;
     private readonly RcsOptions _options;
     private readonly ILogger<ChangeFrameOrchestrator> _logger;
@@ -30,14 +32,15 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
 
     public ChangeFrameOrchestrator(
         IRcsTaskService taskSvc, IRcsTaskStore taskStore, IEquipmentConfigService equipment,
-        ILocationMapService locationMap, IAlarmEventService alarms, RcsCallbackNotifier notifier,
-        IOptions<AppOptions> options, ILogger<ChangeFrameOrchestrator> logger)
+        ILocationMapService locationMap, IAlarmEventService alarms, IPositionScheduler scheduler,
+        RcsCallbackNotifier notifier, IOptions<AppOptions> options, ILogger<ChangeFrameOrchestrator> logger)
     {
         _taskSvc = taskSvc;
         _taskStore = taskStore;
         _equipment = equipment;
         _locationMap = locationMap;
         _alarms = alarms;
+        _scheduler = scheduler;
         _notifier = notifier;
         _options = options.Value.Rcs;
         _logger = logger;
@@ -75,7 +78,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                 : $"缓存区 {bufferArea} 未录入 LOCATION_MAP";
             _logger.LogWarning("换架失败：{Msg}", msg);
             Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", msg);
-            await _alarms.RaiseRcsTaskNotFoundAsync($"CHANGE-FRAME-{txnId}", ct);
+            await _alarms.RaiseRcsTaskNotFoundAsync($"CHANGE-FRAME-{txnId}", $"换架失败：{msg}", ct);
             return txnId;
         }
 
@@ -100,8 +103,9 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
 
         if (!pull.Success || string.IsNullOrEmpty(pull.TaskId))
         {
-            Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", $"第一发下发失败：{pull.Error ?? pull.Message}");
-            await _alarms.RaiseRcsTaskCanceledAsync(txnId, ct);
+            var pullErr = pull.Error ?? pull.Message ?? "未知错误";
+            Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", $"第一发下发失败：{pullErr}");
+            await _alarms.RaiseRcsTaskCanceledAsync(txnId, $"换架第一发（拉旧架）下发失败：{pullErr}", ct);
             return txnId;
         }
 
@@ -143,14 +147,16 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                     }
                     else
                     {
-                        Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, "FAILED", $"第二发下发失败：{push.Error ?? push.Message}");
-                        await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId);
+                        var pushErr = push.Error ?? push.Message ?? "未知错误";
+                        Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, "FAILED", $"第二发下发失败：{pushErr}");
+                        await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId, $"换架第二发（送新架）下发失败：{pushErr}");
                     }
                 }
                 else if (e.TaskState == RcsTaskState.Canceled || await IsRedoExhausted(e.TaskId))
                 {
                     Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, e.TaskState, "第一发失败/取消，绑定不解除，原状保持");
-                    await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId);
+                    await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId,
+                        $"换架第一发（拉旧架）{e.TaskState}，绑定不解除、原状保持");
                     _active.TryRemove(ctx.TxnId, out _);
                 }
             }
@@ -160,13 +166,15 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                 if (e.TaskState == RcsTaskState.Completed)
                 {
                     Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Done, ctx.PullTaskId, ctx.PushTaskId, "COMPLETED", "换架完成");
+                    _scheduler.InvalidateFrameBindingCache(ctx.EquipmentId);
                     _logger.LogInformation("换架 {Txn} 完成", ctx.TxnId);
                     _active.TryRemove(ctx.TxnId, out _);
                 }
                 else if (e.TaskState == RcsTaskState.Canceled || await IsRedoExhausted(e.TaskId))
                 {
                     Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, ctx.PushTaskId, e.TaskState, "第二发失败/取消，站点空置，锁定工序+工单");
-                    await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId);
+                    await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId,
+                        $"换架第二发（送新架）{e.TaskState}，站点空置，需锁定工序并人工处理");
                     _active.TryRemove(ctx.TxnId, out _);
                 }
             }

@@ -15,7 +15,7 @@ public class WorkRecord
     [Column("EQUIMENT_ID")] public long EquipmentId { get; set; }
     [Column("POSITION_CODE")] public string PositionCode { get; set; } = "";
     [Column("MATERIALCODE")] public string? MaterialCode { get; set; }
-    [Column("ELECTRODE_ID")] public string? ElectrodeId { get; set; }
+    [Column("ELECTRODE_ID")] public string? MaterialId { get; set; }
     [Column("UPLOAD_TIME")] public DateTime? UploadTime { get; set; }
     [Column("WORK_START_TIME")] public DateTime? WorkStartTime { get; set; }
     [Column("WORK_END_TIME")] public DateTime? WorkEndTime { get; set; }
@@ -54,8 +54,8 @@ public class AgvTask
     [Column("EQUIMENT_ID")] public long? EquipmentId { get; set; }
     [Column("POSITION_ID")] public long? PositionId { get; set; }
     [Column("CRAFTWORK_ID")] public long? CraftworkId { get; set; }
-    /// <summary>关联工件/电极码。</summary>
-    [Column("ELECTRODE_ID")] public string? ElectrodeId { get; set; }
+    /// <summary>关联工件/物料码。</summary>
+    [Column("ELECTRODE_ID")] public string? MaterialId { get; set; }
     /// <summary>换架事务 ID（关联先拉后送任务对）。</summary>
     [Column("TXN_ID")] public string? TxnId { get; set; }
     /// <summary>下发参数快照（position/param）。</summary>

@@ -1,11 +1,24 @@
-# Findings — UI 布局优化（看板 / 料架 / RCS）
+# Findings — 监控看板悬浮卡片视觉升级
 
-## 决策（用户确认「都改」）
-1. 监控看板对齐原型：机台卡（门/安全 + 双工位 + accent 刻度）+ 右侧实时告警流；KPI 保留；「最近加工记录」让位给告警流。
-2. 料架页左右分栏：左=列表+绑定，右=槽位网格+校正/盘点底栏，消除纵向挤压。
-3. RCS Tab 收口：默认「任务列表」→「报文流水」→「连接&下发」→「位置映射」。
+## Spec / Plan
+- Spec：`docs/superpowers/specs/2026-07-10-dashboard-neon-float-design.md`
+- Plan：`docs/superpowers/plans/2026-07-10-dashboard-neon-float-plan.md`
 
-## 数据源
-- 机台卡：`ISignalStateStore` 按 EquipmentId 聚合 PositionStatus + MachineStatus；机台名经 `IEquipmentConfigService.GetEquipmentOptionsAsync` 缓存。
-- 告警流：`IAlarmEventService.GetAlarmsAsync(unhandledOnly:false, limit)` + MarkHandled；AlarmRaised/AlarmsChanged 刷新。
-- 料架/RCS：仅 XAML 结构与 Tab 顺序，业务命令不变。
+## 用户确认决策
+1. 范围：仅监控看板（A）
+2. 光晕：克制，默认几乎无光，选中/告警才亮（A）
+3. 波形：纯装饰，不绑数据（A）
+4. 状态图标：圆点 → 矢量，保留彩色标签（A）
+5. 落地：看板专用 Style 包，不改全局 `Panel`（方案 1）
+6. Spec 全文已批准（2026-07-10）
+
+## 与现有设计基线的关系
+- `docs/UI设计文档.md` 原禁止霓虹/装饰悬浮 → 收窄为「全局禁止，监控看板允许克制例外」
+- 签名元素（机台卡 `CalibrationTicks`）保留
+- 全局 `AccentColor`/`AlarmColor` 不动；看板另增 `DashAccent`/`DashAlarm`
+
+## 技术锚点
+- Dashboard 模板：`PageTemplates.xaml` → `DataTemplate` for `DashboardViewModel`
+- 全局 Panel：`Styles.xaml` `x:Key="Panel"`（无阴影）
+- 资源合并：`App.xaml` Tokens → Styles → **DashboardStyles（新）** → PageTemplates
+- 状态键：`StateBadge` 字符串 `ok|run|warn|alarm|ng|idle|offline`

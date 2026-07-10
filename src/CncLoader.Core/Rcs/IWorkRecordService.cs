@@ -31,7 +31,7 @@ public sealed record WorkRecordStartArgs
     public required string PositionCode { get; init; }
     public long WorkLineId { get; init; } = 1;
     public long? CraftworkId { get; init; }
-    public string? ElectrodeId { get; init; }
+    public string? MaterialId { get; init; }
     public string? MaterialCode { get; init; }
     /// <summary>关联 RCS 任务 ID（上料任务，溯源用）。</summary>
     public string? RcsTaskId { get; init; }
@@ -43,7 +43,7 @@ public sealed record WorkRecordRow(
     long Id,
     long EquipmentId,
     string PositionCode,
-    string? ElectrodeId,
+    string? MaterialId,
     DateTime? WorkStartTime,
     DateTime? WorkEndTime,
     string WorkResult,    // "" 进行中 / "0" OK / "1" NG / "2" 异常

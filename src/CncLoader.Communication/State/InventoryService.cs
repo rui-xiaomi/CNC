@@ -65,7 +65,7 @@ public sealed class InventoryService : IInventoryService
             var msg = $"料架 {frameId} 未录入 LOCATION_MAP（station/shelf），请先配置位置映射";
             _logger.LogWarning("盘点拒发：{Msg}", msg);
             InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, msg));
-            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}", ct);
+            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}", msg, ct);
             return "";
         }
 
@@ -81,8 +81,10 @@ public sealed class InventoryService : IInventoryService
 
         if (!r.Success || string.IsNullOrEmpty(r.TaskId))
         {
-            InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, r.Error ?? r.Message));
-            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}", ct);
+            var err = r.Error ?? r.Message ?? "未知错误";
+            InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, err));
+            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}",
+                $"盘点下发失败（料架 {frameId}）：{err}", ct);
             return "";
         }
 
@@ -134,7 +136,7 @@ public sealed class InventoryService : IInventoryService
 
             var corrected = await _slots.CorrectFromInventoryAsync(info.FrameId, info.PosStart, e.Products);
             _active.TryRemove(info.TaskId, out _);
-            _logger.LogInformation("盘点完成 料架 {Frame} 任务 {Task} 校正 {C} 个电极", info.FrameId, info.TaskId, corrected);
+            _logger.LogInformation("盘点完成 料架 {Frame} 任务 {Task} 校正 {C} 个物料", info.FrameId, info.TaskId, corrected);
             InventoryCompleted?.Invoke(this, new InventoryResultEvent(info.FrameId, info.TaskId, "COMPLETED", e.Code, e.Products, corrected, null));
         }
         catch (Exception ex)

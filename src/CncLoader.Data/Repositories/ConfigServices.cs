@@ -34,6 +34,8 @@ public sealed class WorkLineService : IWorkLineService
     private readonly IDbContextFactory<CncDbContext> _factory;
     public WorkLineService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
 
+    public event EventHandler? WorkLinesChanged;
+
     public async Task<IReadOnlyList<WorkLineListItem>> GetAllAsync(CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -87,6 +89,7 @@ public sealed class WorkLineService : IWorkLineService
         entity.Author = author;
         entity.UpdateTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
+        WorkLinesChanged?.Invoke(this, EventArgs.Empty);
         return entity.Id;
     }
 
@@ -111,6 +114,7 @@ public sealed class WorkLineService : IWorkLineService
         entity.Author = author;
         entity.UpdateTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
+        WorkLinesChanged?.Invoke(this, EventArgs.Empty);
     }
 }
 
@@ -584,7 +588,7 @@ public sealed class FrameService : IFrameService
             s.LayerNo,
             s.PosInLayer,
             $"{s.LayerNo}层{s.PosInLayer}位",
-            s.SlotState == "1" || s.SlotState == "3" ? s.ElectrodeId : null,
+            s.SlotState == "1" || s.SlotState == "3" ? s.MaterialId : null,
             s.SlotState,
             s.SlotState == "1")).ToList();
 

@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:conv="clr-namespace:CncLoader.UI.Converters"
         xmlns:vm="clr-namespace:CncLoader.UI.ViewModels"
-        Title="CNC 自动化上下料客户端" Height="820" Width="1280"
+        Title="智造云枢 LineOS" Height="820" Width="1280"
         MinHeight="600" MinWidth="1000"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource BgBrush}"
@@ -49,7 +49,9 @@
                               Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"
                               Data="M9,0 V2 M9,16 V18 M0,9 H2 M16,9 H18"/>
                     </Grid>
-                    <TextBlock Text="CNC 自动化上下料客户端" Foreground="{StaticResource ChromeFgBrush}"
+                    <TextBlock Text="智造云枢" Foreground="{StaticResource ChromeFgBrush}"
+                               FontFamily="{StaticResource FontCond}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock Text="LineOS" Foreground="{StaticResource ChromeFgDimBrush}" Margin="8,0,0,0"
                                FontFamily="{StaticResource FontCond}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <TextBlock Text="v1.0" Foreground="{StaticResource ChromeFgDimBrush}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>

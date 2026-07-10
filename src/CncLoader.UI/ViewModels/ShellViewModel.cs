@@ -37,6 +37,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _store.MachineChanged += OnMachineChanged;
         _alarms.AlarmRaised += OnAlarmRaised;
         _alarms.AlarmsChanged += (_, _) => _ = RefreshAlarmCountAsync();
+        _workLineService.WorkLinesChanged += OnWorkLinesChanged;
 
         NavItems = new ObservableCollection<NavItem>(BuildNavItems());
         WorkLines = new ObservableCollection<WorkLineListItem>();
@@ -101,14 +102,23 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private void OnWorkLinesChanged(object? sender, EventArgs e)
+        => Application.Current?.Dispatcher.BeginInvoke(() => _ = LoadWorkLinesAsync());
+
     private async Task LoadWorkLinesAsync()
     {
         try
         {
+            var keepId = SelectedWorkLine?.Id;
             var lines = await _workLineService.GetAllAsync();
             WorkLines.Clear();
             foreach (var l in lines) WorkLines.Add(l);
-            SelectedWorkLine = WorkLines.FirstOrDefault();
+            // 优先保持当前选中线体；改名后用同 Id 新对象刷新标题栏文案
+            SelectedWorkLine = (keepId is long id ? WorkLines.FirstOrDefault(l => l.Id == id) : null)
+                               ?? WorkLines.FirstOrDefault();
+            // 同引用未变时也强制刷一次显示名（防御）
+            if (SelectedWorkLine is not null)
+                WorkLineName = $"{SelectedWorkLine.Name} ({SelectedWorkLine.Code})";
         }
         catch
         {
@@ -216,6 +226,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _navigation.Navigated -= OnNavigated;
         _store.MachineChanged -= OnMachineChanged;
         _alarms.AlarmRaised -= OnAlarmRaised;
+        _workLineService.WorkLinesChanged -= OnWorkLinesChanged;
     }
 }
 

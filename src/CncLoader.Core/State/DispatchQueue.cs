@@ -31,8 +31,8 @@ public sealed record DispatchItem
     /// <summary>直接交接到下一台机时的目标机台/工位（登记待入库）。</summary>
     public long? DestEquipmentId { get; init; }
     public long? DestPositionId { get; init; }
-    /// <summary>随件电极码（供入库落账/交接溯源）。</summary>
-    public string? ElectrodeId { get; init; }
+    /// <summary>随件物料码（供入库落账/交接溯源）。</summary>
+    public string? MaterialId { get; init; }
     /// <summary>下料结果（true=OK / false=NG）。上料忽略。下料终点（选位/中转/NG/下料架）由单消费者出队后统一决策，故结果随请求入队。</summary>
     public bool IsOk { get; init; } = true;
 }

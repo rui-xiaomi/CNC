@@ -57,7 +57,7 @@ public sealed record TransitDispatchArgs
     public long? EquipmentId { get; init; }
     public long? PositionId { get; init; }
     public long? CraftworkId { get; init; }
-    public string? ElectrodeId { get; init; }
+    public string? MaterialId { get; init; }
     public string? TxnId { get; init; }
     public RcsTaskKind Kind { get; init; } = RcsTaskKind.Transit;
     public string? Author { get; init; }
@@ -77,7 +77,7 @@ public sealed record GrabDispatchArgs
     public required IReadOnlyList<GrabItem> Items { get; init; }
     public long? EquipmentId { get; init; }
     public long? PositionId { get; init; }
-    public string? ElectrodeId { get; init; }
+    public string? MaterialId { get; init; }
     public string? Author { get; init; }
 }
 

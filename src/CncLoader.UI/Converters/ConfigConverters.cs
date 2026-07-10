@@ -100,8 +100,8 @@ public sealed class CancelFlagConverter : IMultiValueConverter
     public object[] ConvertBack(object? value, Type[] t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
-/// <summary>加工位状态徽标 → 状态色 Brush（监控看板 StateBadge 字符串转 Brush）。
-/// offline→FgMuted / alarm→Alarm / run→Run / ok→Ok / ng→Alarm / idle→Idle。</summary>
+/// <summary>加工位状态徽标 → 状态色 Brush（对齐原型 token）。
+/// offline→FgMuted / alarm→Alarm / run→Run / ok→Ok / ng→Ng(#F97316) / warn→Warn / idle→Idle。</summary>
 public sealed class StateBadgeToBrushConverter : IValueConverter
 {
     public object Convert(object? value, Type t, object? p, CultureInfo c)
@@ -114,10 +114,124 @@ public sealed class StateBadgeToBrushConverter : IValueConverter
             "warn" => "WarnBrush",
             "run" => "RunBrush",
             "ok" => "OkBrush",
-            "ng" => "AlarmBrush",
+            "ng" => "NgBrush",
             _ => "IdleBrush"
         };
         return System.Windows.Application.Current?.TryFindResource(name) ?? System.Windows.Media.Brushes.Gray;
+    }
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
+/// <summary>状态徽标 → soft tint（对齐原型 color-mix：status 18%/14%/22% + Surface）。</summary>
+public sealed class StateBadgeToSoftBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        var key = value as string ?? "idle";
+        var name = key switch
+        {
+            "offline" => "SoftOfflineBrush",
+            "alarm" => "SoftAlarmBrush",
+            "warn" => "SoftWarnBrush",
+            "run" => "SoftRunBrush",
+            "ok" => "SoftOkBrush",
+            "ng" => "SoftNgBrush",
+            _ => "SoftIdleBrush"
+        };
+        return System.Windows.Application.Current?.TryFindResource(name)
+               ?? System.Windows.Application.Current?.TryFindResource("Surface2Brush")
+               ?? System.Windows.Media.Brushes.DimGray;
+    }
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
+/// <summary>状态徽标 → 14×14 矢量 Geometry（监控看板状态图标；非 emoji）。</summary>
+public sealed class StateBadgeToIconConverter : IValueConverter
+{
+    // EvenOdd 空心圆：外圆 − 内圆
+    private static readonly Geometry IdleRing = Geometry.Parse(
+        "M7,1.2 A5.8,5.8 0 1 1 6.99,1.2 M7,3.4 A3.6,3.6 0 1 1 6.99,3.4");
+    private static readonly Geometry OfflineRing = Geometry.Parse(
+        "M7,1.5 A5.5,5.5 0 1 1 6.99,1.5 M7,3.8 A3.2,3.2 0 1 1 6.99,3.8");
+    private static readonly Geometry OkCheck = Geometry.Parse(
+        "M2.2,7.2 L5.5,10.5 L11.8,3.5 L10.4,2.2 L5.5,7.8 L3.5,5.9 Z");
+    private static readonly Geometry RunTriangle = Geometry.Parse("M2.5,2 L12,7 L2.5,12 Z");
+    private static readonly Geometry WarnTriangle = Geometry.Parse(
+        "M7,1.5 L13,12.5 H1 Z M6.3,5.2 H7.7 V8.2 H6.3 Z M6.3,9.2 H7.7 V10.6 H6.3 Z");
+    private static readonly Geometry AlarmBang = Geometry.Parse(
+        "M7,1.2 L13.2,12.8 H0.8 Z M6.2,5 H7.8 V8.2 H6.2 Z M6.2,9.2 H7.8 V10.8 H6.2 Z");
+    private static readonly Geometry NgSquare = Geometry.Parse("M3,3 H11 V11 H3 Z");
+
+    static StateBadgeToIconConverter()
+    {
+        IdleRing.Freeze();
+        OfflineRing.Freeze();
+        OkCheck.Freeze();
+        RunTriangle.Freeze();
+        WarnTriangle.Freeze();
+        AlarmBang.Freeze();
+        NgSquare.Freeze();
+    }
+
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        var key = value as string ?? "idle";
+        return key switch
+        {
+            "ok" => OkCheck,
+            "run" => RunTriangle,
+            "warn" => WarnTriangle,
+            "alarm" => AlarmBang,
+            "ng" => NgSquare,
+            "offline" => OfflineRing,
+            _ => IdleRing
+        };
+    }
+
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
+/// <summary>看板状态色：idle 用更亮的 DashIdle，避免灰蒙。</summary>
+public sealed class DashStateBadgeToBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        var key = value as string ?? "idle";
+        var name = key switch
+        {
+            "offline" => "FgMutedBrush",
+            "alarm" => "DashAlarmBrush",
+            "warn" => "WarnBrush",
+            "run" => "RunBrush",
+            "ok" => "OkBrush",
+            "ng" => "NgBrush",
+            _ => "DashIdleBrush"
+        };
+        return System.Windows.Application.Current?.TryFindResource(name) ?? System.Windows.Media.Brushes.Gray;
+    }
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
+/// <summary>看板 soft tint：idle/offline 用冷灰蓝，拉开与卡片面对比。</summary>
+public sealed class DashStateBadgeToSoftBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        var key = value as string ?? "idle";
+        var name = key switch
+        {
+            "offline" => "DashSoftOfflineBrush",
+            "alarm" => "SoftAlarmBrush",
+            "warn" => "SoftWarnBrush",
+            "run" => "SoftRunBrush",
+            "ok" => "SoftOkBrush",
+            "ng" => "SoftNgBrush",
+            // 空闲用干净 Surface2，避免 soft 灰洗导致整页发灰
+            _ => "DashSurface2Brush"
+        };
+        return System.Windows.Application.Current?.TryFindResource(name)
+               ?? System.Windows.Application.Current?.TryFindResource("DashSurface2Brush")
+               ?? System.Windows.Media.Brushes.DimGray;
     }
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }

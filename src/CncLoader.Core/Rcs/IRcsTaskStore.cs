@@ -51,7 +51,7 @@ public sealed record RcsTaskRecord
     public long? EquipmentId { get; init; }
     public long? PositionId { get; init; }
     public long? CraftworkId { get; init; }
-    public string? ElectrodeId { get; init; }
+    public string? MaterialId { get; init; }
     public string? TxnId { get; init; }
     public string? ReqParam { get; init; }
     public string? Author { get; init; }
@@ -71,7 +71,7 @@ public sealed record RcsTaskRow(
     string ToCode,
     long? EquipmentId,
     long? PositionId,
-    string? ElectrodeId,
+    string? MaterialId,
     string? TxnId,
     string? ReqParam,
     int RedoCount,

@@ -27,7 +27,7 @@ public sealed class SlotAccountService : ISlotAccountService
     private const string ReservePut = "RSV_PUT";
     private const string ReserveTake = "RSV_TAKE";
 
-    public async Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? electrodeId, CancellationToken ct = default)
+    public async Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? materialId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -47,14 +47,14 @@ public sealed class SlotAccountService : ISlotAccountService
                 .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Empty)
                 .ExecuteUpdateAsync(set => set
                     .SetProperty(s => s.SlotState, SlotStates.Reserved)
-                    .SetProperty(s => s.ElectrodeId, electrodeId)
+                    .SetProperty(s => s.MaterialId, materialId)
                     .SetProperty(s => s.Remark, taskId)
                     .SetProperty(s => s.BindSource, ReservePut)
                     .SetProperty(s => s.BindTime, (DateTime?)now), ct);
             if (affected == 1)
             {
-                _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, electrodeId);
-                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, electrodeId);
+                _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}", frameId, slot.SlotNo, taskId, materialId);
+                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, materialId);
             }
             _logger.LogDebug("入库预记料架 {Frame} 槽 {Slot} 被并发占用，重选", frameId, slot.SlotNo);
         }
@@ -72,7 +72,7 @@ public sealed class SlotAccountService : ISlotAccountService
             var slot = await db.FrameSlots.AsNoTracking()
                 .Where(s => s.FrameId == frameId && s.SlotState == SlotStates.Occupied)
                 .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
-                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer, s.ElectrodeId })
+                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer, s.MaterialId })
                 .FirstOrDefaultAsync(ct);
             if (slot is null) return null;
 
@@ -85,8 +85,8 @@ public sealed class SlotAccountService : ISlotAccountService
                     .SetProperty(s => s.BindTime, (DateTime?)now), ct);
             if (affected == 1)
             {
-                _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 电极={El}", frameId, slot.SlotNo, taskId, slot.ElectrodeId);
-                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.ElectrodeId);
+                _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}", frameId, slot.SlotNo, taskId, slot.MaterialId);
+                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.MaterialId);
             }
             _logger.LogDebug("取料预记料架 {Frame} 槽 {Slot} 被并发取走，重选", frameId, slot.SlotNo);
         }
@@ -111,11 +111,11 @@ public sealed class SlotAccountService : ISlotAccountService
         }
 
         slot.SlotState = SlotStates.Empty;
-        slot.ElectrodeId = null;
+        slot.MaterialId = null;
         slot.Remark = null;
         slot.BindTime = null;
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("取料落账料架 {Frame} 槽 {Slot} taskId={Task}（电极已取走）", slot.FrameId, slot.SlotNo, taskId);
+        _logger.LogInformation("取料落账料架 {Frame} 槽 {Slot} taskId={Task}（物料已取走）", slot.FrameId, slot.SlotNo, taskId);
         return true;
     }
 
@@ -131,7 +131,7 @@ public sealed class SlotAccountService : ISlotAccountService
             return false;
         }
 
-        slot.SlotState = SlotStates.Occupied; // 电极未取走，恢复占用
+        slot.SlotState = SlotStates.Occupied; // 物料未取走，恢复占用
         slot.Remark = null;
         slot.BindTime = null;
         await db.SaveChangesAsync(ct);
@@ -146,26 +146,77 @@ public sealed class SlotAccountService : ISlotAccountService
             .Where(s => s.SlotState == SlotStates.Reserved && s.Remark != null)
             .ToListAsync(ct);
         var active = new HashSet<string>(activeTaskIds);
-        var n = 0;
+        var taskIds = reserved.Select(s => s.Remark!).Where(id => !active.Contains(id)).Distinct().ToList();
+        var completed = new HashSet<string>(StringComparer.Ordinal);
+        if (taskIds.Count > 0)
+        {
+            var done = await db.AgvTasks.AsNoTracking()
+                .Where(t => t.RcsTaskId != null && taskIds.Contains(t.RcsTaskId) && t.TaskState == RcsTaskState.Completed)
+                .Select(t => t.RcsTaskId!)
+                .ToListAsync(ct);
+            foreach (var id in done) completed.Add(id);
+        }
+
+        var rolled = 0;
+        var skippedCompleted = 0;
         foreach (var slot in reserved)
         {
             if (slot.Remark != null && active.Contains(slot.Remark)) continue; // 仍在执行，不动
+            var taskId = slot.Remark!;
+            if (completed.Contains(taskId))
+            {
+                // COMPLETED 预记交调度器按 PLC 门 Confirm，此处不落账也不回滚
+                skippedCompleted++;
+                continue;
+            }
             if (slot.BindSource == ReserveTake)
             {
-                slot.SlotState = SlotStates.Occupied; // 取料未完成 → 电极还在
+                slot.SlotState = SlotStates.Occupied; // 取料未完成 → 物料还在
+                slot.Remark = null;
+                slot.BindTime = null;
+                rolled++;
             }
             else
             {
-                slot.SlotState = SlotStates.Empty; // 入库未完成 → 槽位仍空
-                slot.ElectrodeId = null;
+                slot.SlotState = SlotStates.Empty; // 入库未完成/失败 → 槽位仍空
+                slot.MaterialId = null;
+                slot.Remark = null;
+                slot.BindTime = null;
+                rolled++;
             }
-            slot.Remark = null;
-            slot.BindTime = null;
-            n++;
         }
-        if (n > 0) await db.SaveChangesAsync(ct);
-        if (n > 0) _logger.LogInformation("重启对账：回滚陈旧预记 {N} 个槽位", n);
-        return n;
+        if (rolled > 0) await db.SaveChangesAsync(ct);
+        if (rolled > 0 || skippedCompleted > 0)
+            _logger.LogInformation("陈旧预记：回滚 {R}，跳过 COMPLETED 待 PLC 门 {S}", rolled, skippedCompleted);
+        return rolled;
+    }
+
+    public async Task<IReadOnlyList<CompletedPendingConfirm>> ListCompletedPendingConfirmAsync(
+        IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var active = new HashSet<string>(activeTaskIds);
+        var reserved = await db.FrameSlots.AsNoTracking()
+            .Where(s => s.SlotState == SlotStates.Reserved && s.Remark != null)
+            .Select(s => new { s.Remark, s.BindSource, s.FrameId, s.SlotNo })
+            .ToListAsync(ct);
+        var candidates = reserved
+            .Where(s => s.Remark != null && !active.Contains(s.Remark))
+            .Select(s => s.Remark!)
+            .Distinct()
+            .ToList();
+        if (candidates.Count == 0) return Array.Empty<CompletedPendingConfirm>();
+
+        var completed = await db.AgvTasks.AsNoTracking()
+            .Where(t => t.RcsTaskId != null && candidates.Contains(t.RcsTaskId) && t.TaskState == RcsTaskState.Completed)
+            .Select(t => t.RcsTaskId!)
+            .ToListAsync(ct);
+        var done = new HashSet<string>(completed, StringComparer.Ordinal);
+
+        return reserved
+            .Where(s => s.Remark != null && done.Contains(s.Remark))
+            .Select(s => new CompletedPendingConfirm(s.Remark!, s.BindSource == ReserveTake, s.FrameId, s.SlotNo))
+            .ToList();
     }
 
     public async Task<bool> ConfirmAsync(string taskId, CancellationToken ct = default)
@@ -207,7 +258,7 @@ public sealed class SlotAccountService : ISlotAccountService
         }
 
         slot.SlotState = SlotStates.Empty;
-        slot.ElectrodeId = null;
+        slot.MaterialId = null;
         slot.Remark = null;
         slot.BindTime = null;
         await db.SaveChangesAsync(ct);
@@ -225,25 +276,25 @@ public sealed class SlotAccountService : ISlotAccountService
         return new FrameOccupancy(total, occupied, reserved, total - occupied - reserved - slots.Count(s => s.SlotState == SlotStates.Locked));
     }
 
-    public async Task SetSlotAsync(long frameId, int slotNo, string? electrodeId, string slotState, string author, CancellationToken ct = default)
+    public async Task SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var slot = await db.FrameSlots.AsTracking().FirstOrDefaultAsync(s => s.FrameId == frameId && s.SlotNo == slotNo, ct);
         if (slot is null) throw new InvalidOperationException($"料架 {frameId} 槽 {slotNo} 不存在");
 
         slot.SlotState = slotState;
-        slot.ElectrodeId = electrodeId;
+        slot.MaterialId = materialId;
         if (slotState == SlotStates.Empty) { slot.Remark = null; slot.BindTime = null; }
         slot.UpdateTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("人工校正料架 {Frame} 槽 {Slot} → state={State} 电极={El} by {Author}", frameId, slotNo, slotState, electrodeId, author);
+        _logger.LogInformation("人工校正料架 {Frame} 槽 {Slot} → state={State} 物料={El} by {Author}", frameId, slotNo, slotState, materialId, author);
     }
 
-    public async Task<SlotLocation?> LocateElectrodeAsync(string electrodeId, CancellationToken ct = default)
+    public async Task<SlotLocation?> LocateMaterialAsync(string materialId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(electrodeId)) return null;
+        if (string.IsNullOrWhiteSpace(materialId)) return null;
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var slot = await db.FrameSlots.AsNoTracking().FirstOrDefaultAsync(s => s.ElectrodeId == electrodeId, ct);
+        var slot = await db.FrameSlots.AsNoTracking().FirstOrDefaultAsync(s => s.MaterialId == materialId, ct);
         if (slot is null) return null;
         var frame = await db.Frames.AsNoTracking().FirstOrDefaultAsync(f => f.Id == slot.FrameId, ct);
         return new SlotLocation(slot.FrameId, frame?.FrameName ?? "", slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.SlotState);
@@ -278,7 +329,7 @@ public sealed class SlotAccountService : ISlotAccountService
             var code = products[i];
             if (!string.IsNullOrWhiteSpace(code))
             {
-                slot.ElectrodeId = code;
+                slot.MaterialId = code;
                 slot.SlotState = SlotStates.Occupied;
                 slot.BindSource = "RCS_QR";
                 slot.BindTime = now;
@@ -287,20 +338,20 @@ public sealed class SlotAccountService : ISlotAccountService
             else
             {
                 // 扫得空码 → 该槽位清空（盘点发现空位）
-                slot.ElectrodeId = null;
+                slot.MaterialId = null;
                 slot.SlotState = SlotStates.Empty;
             }
             slot.LastVerifyTime = now;
             slot.UpdateTime = now;
         }
-        // 整架打上本次盘点新鲜度（范围外槽位电极不变）
+        // 整架打上本次盘点新鲜度（范围外槽位物料不变）
         foreach (var s in slots)
         {
             s.LastVerifyTime = now;
             s.UpdateTime = now;
         }
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("盘点校正料架 {Frame} 起始孔位 {Start}（层{L}位{P}）数 {N} → 校正 {C} 个电极",
+        _logger.LogInformation("盘点校正料架 {Frame} 起始孔位 {Start}（层{L}位{P}）数 {N} → 校正 {C} 个物料",
             frameId, posStart, startLayer, startPos, products.Count, corrected);
         return corrected;
     }
@@ -318,6 +369,6 @@ public sealed class SlotAccountService : ISlotAccountService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var slots = await db.FrameSlots.AsNoTracking().Where(s => s.FrameId == frameId).OrderBy(s => s.SlotNo).ToListAsync(ct);
-        return slots.Select(s => new SlotRecord(s.FrameId, s.SlotNo, s.LayerNo, s.PosInLayer, s.SlotState, s.ElectrodeId, s.LastVerifyTime)).ToList();
+        return slots.Select(s => new SlotRecord(s.FrameId, s.SlotNo, s.LayerNo, s.PosInLayer, s.SlotState, s.MaterialId, s.LastVerifyTime)).ToList();
     }
 }

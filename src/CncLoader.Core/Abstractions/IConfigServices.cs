@@ -18,6 +18,9 @@ public sealed record WorkLineRef(long WorkLineId, string LineCode);
 /// <summary>线体配置 CRUD 与列表。</summary>
 public interface IWorkLineService
 {
+    /// <summary>线体新增/保存/删除后触发，供标题栏下拉与工序页线体选项即时刷新。</summary>
+    event EventHandler? WorkLinesChanged;
+
     Task<IReadOnlyList<WorkLineListItem>> GetAllAsync(CancellationToken ct = default);
     Task<WorkLineEditModel?> GetByIdAsync(long id, CancellationToken ct = default);
     Task<long> SaveAsync(WorkLineEditModel model, string author, CancellationToken ct = default);
@@ -78,7 +81,7 @@ public interface IEquipmentConfigService
     Task DeleteAsync(long equipmentId, string author, CancellationToken ct = default);
 }
 
-/// <summary>料架配置与槽位/电极追踪。</summary>
+/// <summary>料架配置与槽位/物料追踪。</summary>
 public interface IFrameService
 {
     Task<IReadOnlyList<FrameListItem>> GetAllAsync(CancellationToken ct = default);

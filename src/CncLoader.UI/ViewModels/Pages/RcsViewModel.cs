@@ -303,18 +303,29 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
     partial void OnLocFilterTypeChanged(string value) => ApplyLocationFilter();
 
-    private async Task InitializeAsync()
+    /// <summary>从线体列表刷新 RCS 下发用的线体 Id/编码/AGV（改名后编码变更也同步）。</summary>
+    private async Task RefreshWorkLineContextAsync()
     {
         try
         {
             var lines = await _workLineService.GetAllAsync();
-            var first = lines.FirstOrDefault();
+            var first = lines.FirstOrDefault(l => l.Id == _workLineId) ?? lines.FirstOrDefault();
             if (first is not null)
             {
                 _workLineId = first.Id;
                 _lineCode = string.IsNullOrWhiteSpace(first.Code) ? "LINE" : first.Code;
                 _agvId = first.AgvId;
             }
+        }
+        catch { /* DB 未就绪：保持原值 */ }
+    }
+
+    private async Task InitializeAsync()
+    {
+        try
+        {
+            await RefreshWorkLineContextAsync();
+            _workLineService.WorkLinesChanged += (_, _) => _ = RefreshWorkLineContextAsync();
         }
         catch { /* DB 未就绪：用默认 LINE */ }
 

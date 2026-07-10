@@ -12,15 +12,18 @@ namespace CncLoader.UI.ViewModels.Pages;
 public sealed partial class CraftworkViewModel : PageViewModelBase
 {
     private readonly ICraftworkService _service;
+    private readonly IWorkLineService _workLines;
     private readonly ICurrentUser _user;
 
-    public CraftworkViewModel(ICraftworkService service, ICurrentUser user)
+    public CraftworkViewModel(ICraftworkService service, IWorkLineService workLines, ICurrentUser user)
     {
         _service = service;
+        _workLines = workLines;
         _user = user;
         Crafts = new ObservableCollection<CraftworkListItem>();
         LineFilters = new ObservableCollection<NamedOption>();
         LineOptions = new ObservableCollection<NamedOption>();
+        _workLines.WorkLinesChanged += (_, _) => _ = ReloadLineOptionsAsync();
         _ = InitializeAsync();
     }
 
@@ -52,14 +55,30 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
     {
         try
         {
+            await ReloadLineOptionsAsync();
+            SelectedLineFilter ??= LineFilters.FirstOrDefault();
+        }
+        catch (Exception ex) { StatusMessage = $"加载失败：{ex.Message}"; }
+    }
+
+    /// <summary>线体改名/增删后刷新过滤与编辑下拉，尽量保持当前选中 Id。</summary>
+    private async Task ReloadLineOptionsAsync()
+    {
+        try
+        {
+            var keepFilterId = SelectedLineFilter?.Id;
+            var keepEditId = SelectedEditLine?.Id;
             var lines = await _service.GetWorkLineOptionsAsync();
             LineFilters.Clear();
             LineFilters.Add(new NamedOption(0, "全部线体"));
             LineOptions.Clear();
             foreach (var l in lines) { LineFilters.Add(l); LineOptions.Add(l); }
-            SelectedLineFilter = LineFilters.FirstOrDefault();
+            SelectedLineFilter = (keepFilterId is long fid ? LineFilters.FirstOrDefault(l => l.Id == fid) : null)
+                                 ?? LineFilters.FirstOrDefault();
+            if (keepEditId is long eid)
+                SelectedEditLine = LineOptions.FirstOrDefault(l => l.Id == eid) ?? SelectedEditLine;
         }
-        catch (Exception ex) { StatusMessage = $"加载失败：{ex.Message}"; }
+        catch (Exception ex) { StatusMessage = $"刷新线体选项失败：{ex.Message}"; }
     }
 
     partial void OnSelectedLineFilterChanged(NamedOption? value) => _ = ReloadAsync();

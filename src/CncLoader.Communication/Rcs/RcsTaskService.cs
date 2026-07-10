@@ -50,7 +50,7 @@ public sealed class RcsTaskService : IRcsTaskService
             EquipmentId = args.EquipmentId,
             PositionId = args.PositionId,
             CraftworkId = args.CraftworkId,
-            ElectrodeId = args.ElectrodeId,
+            MaterialId = args.MaterialId,
             TxnId = args.TxnId,
             ReqParam = reqParam,
             Author = args.Author
@@ -89,7 +89,7 @@ public sealed class RcsTaskService : IRcsTaskService
             ToCode = args.DstStation,
             EquipmentId = args.EquipmentId,
             PositionId = args.PositionId,
-            ElectrodeId = args.ElectrodeId,
+            MaterialId = args.MaterialId,
             ReqParam = param,
             Author = args.Author
         }, ct);
