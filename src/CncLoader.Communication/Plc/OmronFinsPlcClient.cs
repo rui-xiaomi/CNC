@@ -29,6 +29,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
     private readonly object _sync = new();
+    private readonly SemaphoreSlim _ioGate = new(1, 1);
 
     private UdpClient? _udp;
     private byte _destNode;
@@ -229,54 +230,71 @@ public sealed class OmronFinsPlcClient : IPlcClient
         }
     }
 
-    /// <summary>发送一帧 FINS 命令并返回完整响应（含已校验的结束码）。</summary>
+    /// <summary>发送一帧 FINS 命令并返回完整响应（含已校验的结束码与 SID）。整次请求串行化，防轮询/写操作串包。</summary>
     private async Task<byte[]> SendAsync(byte mrc, byte src, byte[] body, CancellationToken ct)
     {
-        var udp = _udp ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
-        byte sid;
-        lock (_sync) { sid = unchecked(++_sid); }
+        await _ioGate.WaitAsync(ct);
+        try
+        {
+            var udp = _udp ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
+            byte sid;
+            lock (_sync) { sid = unchecked(++_sid); }
 
-        var frame = new byte[10 + 2 + body.Length];
-        frame[0] = 0x80; // ICF：命令，需响应
-        frame[1] = 0x00; // RSV
-        frame[2] = 0x02; // GCT：网关计数
-        frame[3] = 0x00; // DNA：目的网络号
-        frame[4] = _destNode; // DA1：目的节点号
-        frame[5] = 0x00; // DA2：目的单元号
-        frame[6] = 0x00; // SNA：源网络号
-        frame[7] = _srcNode; // SA1：源节点号
-        frame[8] = 0x00; // SA2：源单元号
-        frame[9] = sid; // SID
-        frame[10] = mrc; // MRC：主命令码
-        frame[11] = src; // SRC：子命令码
-        Array.Copy(body, 0, frame, 12, body.Length);
+            var frame = new byte[10 + 2 + body.Length];
+            frame[0] = 0x80; // ICF：命令，需响应
+            frame[1] = 0x00; // RSV
+            frame[2] = 0x02; // GCT：网关计数
+            frame[3] = 0x00; // DNA：目的网络号
+            frame[4] = _destNode; // DA1：目的节点号
+            frame[5] = 0x00; // DA2：目的单元号
+            frame[6] = 0x00; // SNA：源网络号
+            frame[7] = _srcNode; // SA1：源节点号
+            frame[8] = 0x00; // SA2：源单元号
+            frame[9] = sid; // SID
+            frame[10] = mrc; // MRC：主命令码
+            frame[11] = src; // SRC：子命令码
+            Array.Copy(body, 0, frame, 12, body.Length);
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(_rwTimeoutMs);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(_rwTimeoutMs);
 
-        // 用带 CancellationToken 的重载：超时会真正取消底层 socket 操作，
-        // 避免遗留未完成的 ReceiveAsync 任务在关闭时抛“未观察的 Task 异常”。
-        await udp.SendAsync(frame.AsMemory(0, frame.Length), timeoutCts.Token);
-        var recv = await udp.ReceiveAsync(timeoutCts.Token);
-        var resp = recv.Buffer;
+            // 用带 CancellationToken 的重载：超时会真正取消底层 socket 操作，
+            // 避免遗留未完成的 ReceiveAsync 任务在关闭时抛“未观察的 Task 异常”。
+            await udp.SendAsync(frame.AsMemory(0, frame.Length), timeoutCts.Token);
 
-        if (resp.Length < 14)
-            throw new InvalidOperationException($"FINS 响应过短（{resp.Length} 字节）");
-        // 结束码 resp[12..13] 含 3 个状态标志位，必须剥离后再判成败：
-        //   MRES bit7 = 网络中继错误；SRES bit7 = PLC 致命错误；SRES bit6 = PLC 非致命错误。
-        // 其中「非致命错误」（如电池欠压）不影响本次读写结果，若一并当作失败会导致
-        // 带该标志的正常响应被误判为连接失败，整机永远连不上。
-        var mres = resp[12];
-        var sres = resp[13];
-        var relayError = (mres & 0x80) != 0;
-        var pcFatalError = (sres & 0x80) != 0;
-        var pcNonFatalError = (sres & 0x40) != 0;
-        var realCode = ((mres & 0x7F) << 8) | (sres & 0x3F);
-        if (relayError || pcFatalError || realCode != 0)
-            throw new InvalidOperationException($"FINS 错误码 {mres:X2}{sres:X2}");
-        if (pcNonFatalError)
-            _logger.LogWarning("PLC {PlcId} 存在非致命错误（如电池欠压），通信正常但建议现场检查。", PlcId);
-        return resp;
+            // UDP 可能滞留旧响应：丢弃 SID 不匹配的包，直到匹配或超时。
+            byte[] resp;
+            while (true)
+            {
+                var recv = await udp.ReceiveAsync(timeoutCts.Token);
+                resp = recv.Buffer;
+                if (resp.Length < 14)
+                    throw new InvalidOperationException($"FINS 响应过短（{resp.Length} 字节）");
+                if (resp[9] == sid) break;
+                _logger.LogDebug("PLC {PlcId} 丢弃 SID 不匹配的 FINS 响应（期望 {Sid:X2}，收到 {Got:X2}）",
+                    PlcId, sid, resp[9]);
+            }
+
+            // 结束码 resp[12..13] 含 3 个状态标志位，必须剥离后再判成败：
+            //   MRES bit7 = 网络中继错误；SRES bit7 = PLC 致命错误；SRES bit6 = PLC 非致命错误。
+            // 其中「非致命错误」（如电池欠压）不影响本次读写结果，若一并当作失败会导致
+            // 带该标志的正常响应被误判为连接失败，整机永远连不上。
+            var mres = resp[12];
+            var sres = resp[13];
+            var relayError = (mres & 0x80) != 0;
+            var pcFatalError = (sres & 0x80) != 0;
+            var pcNonFatalError = (sres & 0x40) != 0;
+            var realCode = ((mres & 0x7F) << 8) | (sres & 0x3F);
+            if (relayError || pcFatalError || realCode != 0)
+                throw new InvalidOperationException($"FINS 错误码 {mres:X2}{sres:X2}");
+            if (pcNonFatalError)
+                _logger.LogWarning("PLC {PlcId} 存在非致命错误（如电池欠压），通信正常但建议现场检查。", PlcId);
+            return resp;
+        }
+        finally
+        {
+            _ioGate.Release();
+        }
     }
 
     private static (byte AreaCode, int Offset) ResolveAddress(string registerAddress)
@@ -307,5 +325,6 @@ public sealed class OmronFinsPlcClient : IPlcClient
     public void Dispose()
     {
         _udp?.Dispose();
+        _ioGate.Dispose();
     }
 }

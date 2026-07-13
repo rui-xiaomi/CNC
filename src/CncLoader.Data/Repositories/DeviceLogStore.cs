@@ -59,6 +59,14 @@ public sealed class DeviceLogStore : IDeviceLogStore
         return rows.Select(ToRow).ToList();
     }
 
+    public async Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.DeviceLogs
+            .Where(x => x.CreateTime != null && x.CreateTime < cutoff)
+            .ExecuteDeleteAsync(ct);
+    }
+
     private static DeviceLogRow ToRow(DeviceLog e)
     {
         var time = e.CreateTime ?? DateTime.Now;

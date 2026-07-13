@@ -156,4 +156,13 @@ public sealed class LoggingOptions
     public string Directory { get; set; } = "logs";
     public string MinimumLevel { get; set; } = "Information";
     public int RetainedFileCountLimit { get; set; } = 31;
+
+    /// <summary>
+    /// 成功的 PLC 读/连/断/心跳是否落库 MAS_AUTO_DEVICE_LOG。
+    /// 默认 false：轮询读只写文件（Debug），库表仅保留写操作与失败记录，避免现场库无限膨胀。
+    /// </summary>
+    public bool PersistSuccessfulReads { get; set; }
+
+    /// <summary>设备流水表保留天数；≤0 表示不自动清理。默认 14。</summary>
+    public int DeviceLogRetentionDays { get; set; } = 14;
 }

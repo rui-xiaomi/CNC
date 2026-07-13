@@ -22,6 +22,7 @@ public static class CommunicationServiceCollectionExtensions
     public static IServiceCollection AddCncCommunication(this IServiceCollection services)
     {
         services.AddSingleton<IDeviceLogger, CompositeDeviceLogger>();
+        services.AddHostedService<DeviceLogPurgeService>();
 
         services.AddSingleton<IPlcClientFactory>(sp =>
         {

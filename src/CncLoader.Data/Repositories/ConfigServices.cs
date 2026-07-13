@@ -747,6 +747,9 @@ public sealed class FrameService : IFrameService
 
     public async Task DeleteFrameAsync(long id, string author, CancellationToken ct = default)
     {
+        var check = await CheckDeleteFrameAsync(id, ct);
+        if (!check.CanDelete) throw new InvalidOperationException(check.Message);
+
         await using var db = await _factory.CreateDbContextAsync(ct);
         var frame = await db.Frames.FirstOrDefaultAsync(f => f.Id == id, ct);
         if (frame is null) return;

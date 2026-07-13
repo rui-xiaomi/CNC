@@ -19,13 +19,16 @@ public sealed class RcsTaskService : IRcsTaskService
     private readonly IRcsClient _client;
     private readonly IRcsTaskStore _store;
     private readonly IRcsMessageLog _msgLog;
+    private readonly IRcsCallbackProcessor _callbackProcessor;
     private readonly ILogger<RcsTaskService> _logger;
 
-    public RcsTaskService(IRcsClient client, IRcsTaskStore store, IRcsMessageLog msgLog, ILogger<RcsTaskService> logger)
+    public RcsTaskService(IRcsClient client, IRcsTaskStore store, IRcsMessageLog msgLog,
+        IRcsCallbackProcessor callbackProcessor, ILogger<RcsTaskService> logger)
     {
         _client = client;
         _store = store;
         _msgLog = msgLog;
+        _callbackProcessor = callbackProcessor;
         _logger = logger;
     }
 
@@ -163,6 +166,7 @@ public sealed class RcsTaskService : IRcsTaskService
         await _store.IncrementRedoAsync(rcsTaskId, ct);
         var result = await BuildAndSendAsync(row, "redo", ct);
         await FinishAsync(rcsTaskId, result, ct);
+        if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
         return result;
     }
 
@@ -177,6 +181,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
         var result = await BuildAndSendAsync(row, "redo", ct);
         await FinishAsync(rcsTaskId, result, ct);
+        if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
         return result;
     }
 

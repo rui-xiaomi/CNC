@@ -446,24 +446,33 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         var updated = plcs.FirstOrDefault(p => p.PlcId == plcId);
         if (updated is null) return;
 
-        // 替换列表项会让 DataGrid 把 SelectedItem 置空（连带 SelectedPlc=null），
-        // 故在替换前先记住是否选中，替换后无条件恢复，避免选中丢失导致单次读/写无目标。
-        var wasSelected = SelectedPlc?.PlcId == plcId;
-
-        var idx = -1;
-        for (var i = 0; i < PlcRows.Count; i++)
-        {
-            if (PlcRows[i].PlcId != plcId) continue;
-            idx = i;
-            PlcRows[i] = PlcRowVm.From(updated);
-            break;
-        }
-
         var online = plcs.Count(p => p.IsConnected);
-        OnlineSummary = $"{online} / {plcs.Count} 在线";
+        var summary = $"{online} / {plcs.Count} 在线";
+        var row = PlcRowVm.From(updated);
 
-        if (idx >= 0 && wasSelected)
-            SelectedPlc = PlcRows[idx];
+        // ConnectionChanged 可能来自后台 IO 线程；ObservableCollection 必须在 UI 线程改。
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+        await dispatcher.InvokeAsync(() =>
+        {
+            // 替换列表项会让 DataGrid 把 SelectedItem 置空（连带 SelectedPlc=null），
+            // 故在替换前先记住是否选中，替换后无条件恢复，避免选中丢失导致单次读/写无目标。
+            var wasSelected = SelectedPlc?.PlcId == plcId;
+
+            var idx = -1;
+            for (var i = 0; i < PlcRows.Count; i++)
+            {
+                if (PlcRows[i].PlcId != plcId) continue;
+                idx = i;
+                PlcRows[i] = row;
+                break;
+            }
+
+            OnlineSummary = summary;
+
+            if (idx >= 0 && wasSelected)
+                SelectedPlc = PlcRows[idx];
+        });
     }
 
     private void PrependLog(string line)

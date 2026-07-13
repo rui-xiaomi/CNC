@@ -647,9 +647,12 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
     private void OnChangeFrameProgress(object? sender, ChangeFrameProgressEvent e)
     {
-        Append($"↻ 换架 {e.TxnId} {e.Step} {e.State}{(string.IsNullOrEmpty(e.Message) ? "" : " " + e.Message)}");
-        if (e.State == "COMPLETED") HandyControl.Controls.Growl.Success($"换架 {e.TxnId} 完成");
-        else if (e.State == "FAILED" || e.Step == ChangeFrameStep.Alarm) HandyControl.Controls.Growl.Warning($"换架 {e.TxnId} 异常：{e.Message}");
+        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+        {
+            Append($"↻ 换架 {e.TxnId} {e.Step} {e.State}{(string.IsNullOrEmpty(e.Message) ? "" : " " + e.Message)}");
+            if (e.State == "COMPLETED") HandyControl.Controls.Growl.Success($"换架 {e.TxnId} 完成");
+            else if (e.State == "FAILED" || e.Step == ChangeFrameStep.Alarm) HandyControl.Controls.Growl.Warning($"换架 {e.TxnId} 异常：{e.Message}");
+        });
         _ = RefreshChangeFrameTransactionsAsync();
     }
 

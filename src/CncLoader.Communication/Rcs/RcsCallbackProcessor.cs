@@ -202,6 +202,19 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
         }
     }
 
+    public void ForgetTask(string taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return;
+        var pushPrefix = $"push:{taskId}:";
+        var scanPrefix = $"scan:{taskId}:";
+        lock (_seenLock)
+        {
+            var remove = _seen.Where(k => k.StartsWith(pushPrefix, StringComparison.Ordinal)
+                                          || k.StartsWith(scanPrefix, StringComparison.Ordinal)).ToList();
+            foreach (var k in remove) _seen.Remove(k);
+        }
+    }
+
     private async Task LogInAsync(string iface, string path, string? taskId, string reqBody, string ackBody, CancellationToken ct)
     {
         try

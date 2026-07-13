@@ -12,4 +12,7 @@ public interface IDeviceLogStore
     Task<long> AppendAsync(DeviceLogEntry entry, CancellationToken ct = default);
     Task UpdateAsync(long id, string? response, bool success, int? costMs, string? error, CancellationToken ct = default);
     Task<IReadOnlyList<DeviceLogRow>> GetRecentAsync(long? deviceId, int limit = 50, CancellationToken ct = default);
+
+    /// <summary>删除早于 cutoff 的流水，返回删除行数。</summary>
+    Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 }

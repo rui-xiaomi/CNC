@@ -15,4 +15,10 @@ public interface IRcsCallbackProcessor
 
     /// <summary>warnCallback：严重告警推送（10s/次，data 数组）。</summary>
     Task<string> HandleWarnCallbackAsync(string rawBody, CancellationToken ct = default);
+
+    /// <summary>
+    /// redo / redispatch 成功后调用：清除该 taskId 的 push/scan 去重键，
+    /// 允许同 taskId 再次 FAILED 进入自动 redo 链（仍保留同一次失败的重复推送去重）。
+    /// </summary>
+    void ForgetTask(string taskId);
 }

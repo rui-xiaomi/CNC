@@ -90,15 +90,15 @@ public sealed class RcsTaskStore : IRcsTaskStore
     public async Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
-        if (t is null) return false;
-        if (t.RedoCount >= maxRedo) return false;
-        t.RedoCount += 1;
-        t.TaskState = RcsTaskState.Dispatched;
-        t.TaskStatus = "1";
-        t.ErrorMsg = null;
-        await db.SaveChangesAsync(ct);
-        return true;
+        // 条件更新：回调与轮询并发时最多一人成功，严格遵守 MaxAutoRedo。
+        var affected = await db.AgvTasks
+            .Where(x => x.RcsTaskId == rcsTaskId && x.RedoCount < maxRedo)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.RedoCount, t => t.RedoCount + 1)
+                .SetProperty(t => t.TaskState, RcsTaskState.Dispatched)
+                .SetProperty(t => t.TaskStatus, "1")
+                .SetProperty(t => t.ErrorMsg, (string?)null), ct);
+        return affected > 0;
     }
 
     public async Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)

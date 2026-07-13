@@ -20,6 +20,7 @@ public sealed class NModbusPlcClient : IPlcClient
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
     private readonly object _sync = new();
+    private readonly SemaphoreSlim _ioGate = new(1, 1);
 
     private TcpClient? _tcp;
     private IModbusMaster? _master;
@@ -119,57 +120,73 @@ public sealed class NModbusPlcClient : IPlcClient
 
     public async Task<int[]> ReadRegistersAsync(string registerAddress, int length, CancellationToken ct = default)
     {
-        var master = _master ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
-        var start = (ushort)RegisterAddress.ToRegisterIndex(registerAddress);
-        var sw = Stopwatch.StartNew();
+        await _ioGate.WaitAsync(ct);
         try
         {
-            var regs = await master.ReadHoldingRegistersAsync(SlaveAddress, start, (ushort)length);
-            var result = Array.ConvertAll(regs, r => (int)r);
-            _deviceLogger.Log(new DeviceLogEntry
+            var master = _master ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
+            var start = (ushort)RegisterAddress.ToRegisterIndex(registerAddress);
+            var sw = Stopwatch.StartNew();
+            try
             {
-                DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
-                RegisterAddress = registerAddress, Response = string.Join(',', result),
-                Success = true, CostMs = (int)sw.ElapsedMilliseconds
-            });
-            return result;
+                var regs = await master.ReadHoldingRegistersAsync(SlaveAddress, start, (ushort)length);
+                var result = Array.ConvertAll(regs, r => (int)r);
+                _deviceLogger.Log(new DeviceLogEntry
+                {
+                    DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
+                    RegisterAddress = registerAddress, Response = string.Join(',', result),
+                    Success = true, CostMs = (int)sw.ElapsedMilliseconds
+                });
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _deviceLogger.Log(new DeviceLogEntry
+                {
+                    DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
+                    RegisterAddress = registerAddress, Success = false, Error = ex.Message,
+                    CostMs = (int)sw.ElapsedMilliseconds
+                });
+                throw;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            _deviceLogger.Log(new DeviceLogEntry
-            {
-                DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
-                RegisterAddress = registerAddress, Success = false, Error = ex.Message,
-                CostMs = (int)sw.ElapsedMilliseconds
-            });
-            throw;
+            _ioGate.Release();
         }
     }
 
     public async Task WriteRegisterAsync(string registerAddress, int value, CancellationToken ct = default)
     {
-        var master = _master ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
-        var addr = (ushort)RegisterAddress.ToRegisterIndex(registerAddress);
-        var sw = Stopwatch.StartNew();
+        await _ioGate.WaitAsync(ct);
         try
         {
-            await master.WriteSingleRegisterAsync(SlaveAddress, addr, (ushort)value);
-            _deviceLogger.Log(new DeviceLogEntry
+            var master = _master ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
+            var addr = (ushort)RegisterAddress.ToRegisterIndex(registerAddress);
+            var sw = Stopwatch.StartNew();
+            try
             {
-                DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
-                RegisterAddress = registerAddress, Request = value.ToString(),
-                Success = true, CostMs = (int)sw.ElapsedMilliseconds
-            });
+                await master.WriteSingleRegisterAsync(SlaveAddress, addr, (ushort)value);
+                _deviceLogger.Log(new DeviceLogEntry
+                {
+                    DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
+                    RegisterAddress = registerAddress, Request = value.ToString(),
+                    Success = true, CostMs = (int)sw.ElapsedMilliseconds
+                });
+            }
+            catch (Exception ex)
+            {
+                _deviceLogger.Log(new DeviceLogEntry
+                {
+                    DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
+                    RegisterAddress = registerAddress, Request = value.ToString(),
+                    Success = false, Error = ex.Message, CostMs = (int)sw.ElapsedMilliseconds
+                });
+                throw;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            _deviceLogger.Log(new DeviceLogEntry
-            {
-                DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
-                RegisterAddress = registerAddress, Request = value.ToString(),
-                Success = false, Error = ex.Message, CostMs = (int)sw.ElapsedMilliseconds
-            });
-            throw;
+            _ioGate.Release();
         }
     }
 
@@ -184,5 +201,6 @@ public sealed class NModbusPlcClient : IPlcClient
     {
         _master?.Dispose();
         _tcp?.Dispose();
+        _ioGate.Dispose();
     }
 }

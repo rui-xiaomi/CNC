@@ -106,6 +106,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             var pullErr = pull.Error ?? pull.Message ?? "未知错误";
             Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", $"第一发下发失败：{pullErr}");
             await _alarms.RaiseRcsTaskCanceledAsync(txnId, $"换架第一发（拉旧架）下发失败：{pullErr}", ct);
+            _active.TryRemove(txnId, out _);
             return txnId;
         }
 
@@ -132,6 +133,10 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             {
                 if (e.TaskState == RcsTaskState.Completed)
                 {
+                    // 回调+轮询可能各触发一次 Completed；只允许一次下发第二发。
+                    if (Interlocked.CompareExchange(ref ctx.PushDispatched, 1, 0) != 0)
+                        return;
+
                     _logger.LogInformation("换架 {Txn} 第一发完成，下发第二发 送新架", ctx.TxnId);
                     var push = await _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
                     {
@@ -150,6 +155,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                         var pushErr = push.Error ?? push.Message ?? "未知错误";
                         Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, "FAILED", $"第二发下发失败：{pushErr}");
                         await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId, $"换架第二发（送新架）下发失败：{pushErr}");
+                        _active.TryRemove(ctx.TxnId, out _);
                     }
                 }
                 else if (e.TaskState == RcsTaskState.Canceled || await IsRedoExhausted(e.TaskId))
@@ -209,6 +215,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
         public string BufferCell = "";
         public string? PullTaskId;
         public string? PushTaskId;
+        public int PushDispatched;
         public string? Author;
         public long WorkLineId;
         public string LineCode = "LINE";
