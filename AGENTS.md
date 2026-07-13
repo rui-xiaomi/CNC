@@ -53,6 +53,7 @@ alwaysApply: true
 - Alarm 粘滞、启动对账完成前不开自动派工、缺 LOCATION_MAP 拒发：是安全设计，不是 bug
 - `Plc.MaxReconnectAttempts` 已配置但未实现自动重连循环：已知技术债，评审可跳过，勿假装已实现
 - 演示 SQL / `tools/FrameSeedReset` 会清空槽位：仅测试库，**禁止在现场生产库执行**
+- `RcsCallbackProcessor.ForgetTask` 只从 `_seen` 删键、`_seenOrder` 留僵尸项：不影响正确性，**暂不处理**（详见 `findings.md`）
 
 ## 参考文档
 - 改动产品/调度/RCS 流程前，必须先读 `docs/客户端开发文档.md`（唯一开发方案）

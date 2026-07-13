@@ -1,4 +1,4 @@
-# Task Plan — CNC 自动化上下料 WPF 客户端
+﻿# Task Plan — CNC 自动化上下料 WPF 客户端
 
 ## Goal（目标）
 据 `docs/` 权威文档，从零开发 WPF 桌面客户端，管理线边 CNC 尺寸检测计量站的自动化上下料。客户端仅经 IP/TCP 与 PLC 通信（不直连机台），一机一 PLC、机台双加工位并行。分阶段交付，每阶段完成暂停演示等用户确认。
@@ -87,7 +87,7 @@
 7. 机台新增（模态对话框，保存自动建 2 加工位+绑PLC）/料架新增（预建层×每层槽位）/关联料架配置（写 MAS_AUTO_FRAME_BIND）均真写库——已实测：eq3→4(EQ04+工位1/2)、frame3→4(测试料架 2×5 预建10槽)，验证后已清理测试行还原种子
 8. **删除 CRUD**：线体/工序/机台 列表"操作"列加删除按钮 → CheckDelete 引用校验 → 不可删 Growl.Warning 提示引用数 → 可删 MessageBox 二次确认 → 软删 State='1'；机台删除级联软删其 2 个加工位。线体编辑表单与列表底部对齐、内容自适应、保存/取消按钮贴底
 
-### Phase 4 — RCS 对接 + 核心上下料流程　Status: 进行中（按开发文档 §10 v3 的 7 步推进，每步暂停确认）
+### Phase 4 — RCS 对接 + 核心上下料流程　Status: 已完成（待用户确认；现场项归 Phase 6）
 【v2 改写】上料/下料由"直接执行"改为"下发 RCS 任务 → 回调/轮询跟踪 → PLC 复核 → 写启动"三段式；含 RCS 通信层（RcsClient 4 出站 + RcsCallbackHost 3 回调 + 报文流水 + 状态映射 + RcsSimulator）、双加工位并行状态机改造、电极槽位账目（盘点制）、加工记录。契约见开发文档 §12 与 `docs/agv对外接口.docx`。
 
 - [x] 4.0 DB schema 变更（Session 19）：迁移脚本 `docs/sql/migration_phase4_rcs.sql`（幂等+回滚）+ 同步 `cnc_schema.sql`——`MAS_AUTO_AGV_TASK` 扩展 RCS 全生命周期列（RCS_TASK_ID/RCS_KIND/RCS_STATUS/TASK_STATE/PRIORITY/DISPATCH_TIME/REDO_COUNT/CANCEL_MANUAL_FLAG/POSITION_ID/ELECTRODE_ID/TXN_ID/REQ_PARAM）；新增 `MAS_AUTO_LOCATION_MAP`/`MAS_AUTO_RCS_MSG_LOG`；`FRAME_SLOT` 加 BIND_SOURCE/LAST_VERIFY_TIME；`FRAME_BIND.FRAME_ROLE` 语义扩展 0/1/2/3=上料/下料/中转/NG；EF 实体同步。已应用到本机 cnc_auto（MySQL 8.4）并校验幂等；`数据库文档.md` 同步。
@@ -140,8 +140,30 @@ AGV / 扫码枪连通性测试（仅测试，不纳入调度/来料校验）。
 5. 扫码枪连接/最近扫码：状态徽标"已连接 N"绿 + 表格 时间/来源/扫码内容（mono 字体）
 6. 两页布局按原型一比一：单 panel max-width 700、表单字段左标签 84px、终端深色 TermBrush
 
-### Phase 6 — 联调验收　Status: pending
-现场真机联调、异常场景、地址表复核、验收要点核对。
+### Phase 6 — 联调验收　Status: 进行中（现场为主；下列为可执行清单）
+现场真机联调、异常场景、地址表复核、验收要点核对。依据 `docs/客户端开发文档.md` §10/§11 与 `docs/演示实操手册.md` §7。
+
+**联调前配置（工位机）** — 主文档：`docs/现场联调配置清单.md`；示例：`src/CncLoader.App/appsettings.Field.example.json`
+- [x] 配置对照表与示例 json 已写入文档（2026-07-13）；**现场实际改值仍待勾**
+- [ ] `Plc.UseSimulator=false`、`Rcs.UseSimulator=false`；首轮 `WaterMonitorEnabled`/`InventoryAutoEnabled` 保持 `false`
+- [ ] DB：`MAS_AUTO_WORKLINE_PLC` 真实 IP/协议；`MAS_AUTO_PLC_POINT` 与 `docs/测试机信号表.md` 一致（**待真机验证**）
+- [ ] DB：`MAS_AUTO_LOCATION_MAP` + `MAS_AUTO_FRAME_BIND`（含中转 role2 / NG role3）与现场 RCS 编码一致
+- [ ] RCS：`BaseUrl`/`ClientCode`/`CallbackHost|Port` 报备；防火墙放行；回调可达（改回调端口需重启 App）
+- [ ] 安装 .NET 8 Desktop + ASP.NET Core 8；单实例 Mutex 勿双开
+- [ ] 日志：默认成功读不落库；排障可临时 `MinimumLevel=Debug` + `PersistSuccessfulReads=true`，联调完改回
+
+**联调顺序（每步验完再下一步）**
+- [ ] ① 网络：RCS 出站 OK + 入站回调 OK（RCS 页测试回调）
+- [ ] ② PLC 逐点读/写（写二次确认 + 回读）（**待真机验证**）
+- [ ] ③ RCS 单任务手动下发 → 回调/轮询 → COMPLETED
+- [ ] ④ 单加工位慢速全流程（人盯 AGV + PLC 双条件启动）
+- [ ] ⑤ 双位并行 + 异常（断网/取消/redo 上限/复核不过 → Alarm → ResetAlarm）
+- [ ] ⑥ 换架 / 盘点实测（确认水位/自动盘点开关策略后再开）
+- [ ] ⑦ 按开发文档 §11 验收签字
+
+**代码侧已就绪、勿在现场误跑**
+- 审查高危修复已合入（队列/PLC 串行/Dispose 占闸/水位/_redo/删架校验/设备流水收敛）；`ForgetTask`/`_seenOrder` 僵尸项见 `findings.md`，暂不处理
+- 禁止现场执行 `refill_upload_frame_electrodes.sql` / `FrameSeedReset`
 
 ### Phase 7 — 监控看板悬浮卡片视觉升级　Status: 已完成（待目视确认）
 Spec：`docs/superpowers/specs/2026-07-10-dashboard-neon-float-design.md`  
@@ -170,3 +192,12 @@ Plan：`docs/superpowers/plans/2026-07-10-dashboard-neon-float-plan.md`
 
 ## 自主边界提醒
 删文件/改密钥配置/DB schema 变更/git commit/装全局依赖 等动手前先问用户。
+
+## 已完成（归档）
+- Phase 1 基础架构（已确认）
+- Phase 2 PLC 管理（待用户确认验收）
+- Phase 3 配置管理（待用户确认验收）
+- Phase 4 RCS + 上下料全流程 ①~⑦ + 上线缺口 7 项（待用户确认；现场录入归 Phase 6）
+- Phase 5 外设测试页（待用户确认验收）
+- Phase 7 监控看板悬浮卡片（构建通过，待目视）
+- 2026-07-13：审查高危 H1–H7/M4/M8/M11 + 设备流水收敛 + PLC Dispose 占 `_ioGate` + `AGENTS.md`/`reviewer` agent

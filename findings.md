@@ -30,3 +30,15 @@
 - **现象**：redo 成功后 `ForgetTask` 只从 `_seen`（HashSet）删除 `push:{taskId}:*` / `scan:{taskId}:*`，`_seenOrder`（Queue）仍保留对应字符串
 - **影响**：不影响正确性。容量顶满（4000）时 FIFO 淘汰会对已不在 `_seen` 的键多做几次无效 `Remove`
 - **决策**：已知技术债，**暂不处理**（对抗评审 [可选] 项，2026-07-13）
+
+## 本轮结论（Session 74 · 2026-07-13 `/continue`）
+- Phase 4 代码步骤已全部勾完，计划状态改为「已完成（待用户确认）」；下一主线为 **Phase 6 现场联调**（清单已写入 `task_plan.md`）。
+- 审查高危修复、PLC Dispose 占闸、设备流水收敛、`AGENTS.md`/`reviewer` 已落地；`ForgetTask`/`_seenOrder` 僵尸项维持技术债。
+- Phase 6 中凡涉及真 PLC/FINS/现场网络的项一律标 **待真机验证**，不得在无真机证据下声称完成。
+- 本地 `main` 相对 `origin/main` 可能有未 push 提交；push 须用户确认。
+
+## Session 75 · 联调前配置核对（选项 A）
+- 新增 `docs/现场联调配置清单.md`：演示默认 vs 现场必改对照表 + 环境/DB/日志自检勾选。
+- 新增 `src/CncLoader.App/appsettings.Field.example.json`（双模拟器关、Scheduler 默认关、无真实口令）。
+- 更新 `docs/演示实操手册.md` §7、`docs/README.md` 索引；`task_plan` Phase 6「文档已备、现场改值待勾」。
+- **未**把仓库默认 `UseSimulator` 改成 false（避免破坏本机演示）；现场用示例文件改配。
