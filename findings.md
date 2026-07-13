@@ -22,3 +22,11 @@
 - 全局 Panel：`Styles.xaml` `x:Key="Panel"`（无阴影）
 - 资源合并：`App.xaml` Tokens → Styles → **DashboardStyles（新）** → PageTemplates
 - 状态键：`StateBadge` 字符串 `ok|run|warn|alarm|ng|idle|offline`
+
+## 已知技术债（暂不处理）
+
+### RCS 回调去重：`ForgetTask` 与 `_seenOrder` 僵尸项
+- **位置**：`src/CncLoader.Communication/Rcs/RcsCallbackProcessor.cs` — `ForgetTask` / `MarkSeen`
+- **现象**：redo 成功后 `ForgetTask` 只从 `_seen`（HashSet）删除 `push:{taskId}:*` / `scan:{taskId}:*`，`_seenOrder`（Queue）仍保留对应字符串
+- **影响**：不影响正确性。容量顶满（4000）时 FIFO 淘汰会对已不在 `_seen` 的键多做几次无效 `Remove`
+- **决策**：已知技术债，**暂不处理**（对抗评审 [可选] 项，2026-07-13）

@@ -119,20 +119,28 @@ public sealed class OmronFinsPlcClient : IPlcClient
         await SendAsync(0x01, 0x01, body, ct);
     }
 
-    public Task DisconnectAsync()
+    public async Task DisconnectAsync()
     {
-        lock (_sync)
+        // 先占 _ioGate，等在途读写结束，再关连接，避免轮询 finally Release 撞到已释放的 gate/套接字。
+        await _ioGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            _udp?.Close();
-            _udp?.Dispose();
-            _udp = null;
+            lock (_sync)
+            {
+                _udp?.Close();
+                _udp?.Dispose();
+                _udp = null;
+            }
+            SetState(PlcConnectionState.Disconnected);
+            _deviceLogger.Log(new DeviceLogEntry
+            {
+                DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Disconnect, Success = true
+            });
         }
-        SetState(PlcConnectionState.Disconnected);
-        _deviceLogger.Log(new DeviceLogEntry
+        finally
         {
-            DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Disconnect, Success = true
-        });
-        return Task.CompletedTask;
+            _ioGate.Release();
+        }
     }
 
     public async Task<bool> HeartbeatAsync(CancellationToken ct = default)
@@ -324,7 +332,19 @@ public sealed class OmronFinsPlcClient : IPlcClient
 
     public void Dispose()
     {
-        _udp?.Dispose();
-        _ioGate.Dispose();
+        // 持锁销毁：不 Release，避免 Release→Dispose 窗口内其它线程再 Wait/Release。
+        _ioGate.Wait();
+        try
+        {
+            lock (_sync)
+            {
+                _udp?.Dispose();
+                _udp = null;
+            }
+        }
+        finally
+        {
+            _ioGate.Dispose();
+        }
     }
 }
