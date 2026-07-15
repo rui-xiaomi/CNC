@@ -319,45 +319,62 @@
                                     <Border Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
                                             BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,10">
                                         <StackPanel>
-                                            <DockPanel Margin="0,0,0,6" LastChildFill="False">
-                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" DockPanel.Dock="Left">
-                                                    <TextBlock Text="RCS 连接配置" Style="{StaticResource MutedText}" FontSize="11" VerticalAlignment="Center"/>
-                                                    <Border Margin="12,0,0,0" BorderBrush="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
-                                                            BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
-                                                            ToolTip="出站：客户端 → RCS">
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <Ellipse Width="8" Height="8" Margin="0,0,6,0"
-                                                                     Fill="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"/>
-                                                            <TextBlock Text="{Binding ConnectionHealthText}" FontSize="11"
-                                                                       Foreground="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
-                                                                       VerticalAlignment="Center"/>
-                                                        </StackPanel>
-                                                    </Border>
-                                                    <Border Margin="8,0,0,0" BorderBrush="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
-                                                            BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
-                                                            ToolTip="入站：RCS → 本机回调口">
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <Ellipse Width="8" Height="8" Margin="0,0,6,0"
-                                                                     Fill="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"/>
-                                                            <TextBlock Text="{Binding CallbackHealthText}" FontSize="11"
-                                                                       Foreground="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
-                                                                       VerticalAlignment="Center"/>
-                                                        </StackPanel>
-                                                    </Border>
-                                                </StackPanel>
-                                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                                            <!-- 标题+状态一行；按钮单独一行，避免窄栏裁切「保存」 -->
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                <TextBlock Text="RCS 连接配置" Style="{StaticResource MutedText}" FontSize="11" VerticalAlignment="Center"/>
+                                                <Border Margin="10,0,0,0" BorderBrush="{Binding RcsModeBrushKey, Converter={StaticResource BrushConv}}"
+                                                        BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
+                                                        Background="{StaticResource SurfaceBrush}"
+                                                        ToolTip="{Binding RcsModeHint}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                                                 Fill="{Binding RcsModeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                                        <TextBlock Text="{Binding RcsModeText}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{Binding RcsModeBrushKey, Converter={StaticResource BrushConv}}"
+                                                                   VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Margin="8,0,0,0" BorderBrush="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                        BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
+                                                        ToolTip="出站：客户端 → RCS">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                                                 Fill="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"/>
+                                                        <TextBlock Text="{Binding ConnectionHealthText}" FontSize="11"
+                                                                   Foreground="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                                   VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Margin="8,0,0,0" BorderBrush="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                        BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
+                                                        ToolTip="仅测本机 Kestrel 回调口；不代表 RCS→工控机网络已通">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                                                 Fill="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"/>
+                                                        <TextBlock Text="{Binding CallbackHealthText}" FontSize="11"
+                                                                   Foreground="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                                   VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                            <DockPanel Margin="0,0,0,6" LastChildFill="True">
+                                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
                                                     <Button Content="测试连接" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" FontSize="12"
                                                             Margin="0,0,8,0" Command="{Binding TestConnectionCommand}"
                                                             IsEnabled="{Binding IsTestingConnection, Converter={StaticResource InverseConv}}"
                                                             ToolTip="向 RCS 发 queryTask，验证出站连通"/>
-                                                    <Button Content="测试回调" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" FontSize="12"
+                                                    <Button Content="测试本机监听" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" FontSize="12"
                                                             Margin="0,0,8,0" Command="{Binding TestCallbackCommand}"
                                                             IsEnabled="{Binding IsTestingCallback, Converter={StaticResource InverseConv}}"
-                                                            ToolTip="对本机回调口 POST pushTaskStatus 探针，验证入站可达"/>
+                                                            ToolTip="对本机回调口 POST 探针：只能证明本机 Kestrel 正常，不代表 RCS 服务器→工控机回调端口网络已打通"/>
                                                     <Button Content="保存" Style="{StaticResource PrimaryButton}" Height="26" Padding="14,0" FontSize="12"
                                                             Command="{Binding SaveConnectionCommand}"
                                                             IsEnabled="{Binding IsSavingConnection, Converter={StaticResource InverseConv}}"/>
                                                 </StackPanel>
+                                                <TextBlock FontSize="11" FontFamily="{StaticResource FontMono}" VerticalAlignment="Center"
+                                                           Foreground="{Binding RcsModeBrushKey, Converter={StaticResource BrushConv}}"
+                                                           TextWrapping="Wrap" Margin="0,0,10,0"
+                                                           Text="{Binding EffectiveBaseUrl, StringFormat=生效 BaseUrl：{0}}"/>
                                             </DockPanel>
                                             <Grid Margin="0,0,0,6">
                                                 <Grid.ColumnDefinitions>
@@ -402,6 +419,17 @@
 
                                     <!-- 手动下发 -->
                                     <TextBlock Text="手动下发" Style="{StaticResource PanelTitle}" Margin="0,0,0,8"/>
+                                    <Border Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                                            BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,8">
+                                        <StackPanel>
+                                            <CheckBox Content="暂停自动派工 / 仅手动测试"
+                                                      IsChecked="{Binding PauseAutoDispatch}"
+                                                      Foreground="{StaticResource FgBrush}" FontSize="12"
+                                                      ToolTip="开启后 PositionScheduler 不再产生或下发新的自动上料/下料任务；本页手工下发仍可用；已下发任务继续跟踪与安全收口"/>
+                                            <TextBlock Text="{Binding AutoDispatchStatusText}" Margin="0,6,0,0" FontSize="11" TextWrapping="Wrap"
+                                                       Foreground="{Binding AutoDispatchStatusBrushKey, Converter={StaticResource BrushConv}}"/>
+                                        </StackPanel>
+                                    </Border>
                                     <Grid Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="72"/><ColumnDefinition Width="*"/>
@@ -411,19 +439,20 @@
                                         <ComboBox Grid.Column="1" ItemsSource="{Binding KindOptions}" SelectedItem="{Binding SelectedKind}"
                                                   Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}" Margin="0,0,10,0"/>
                                         <TextBlock Grid.Column="2" Text="优先级" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="3" Text="{Binding Priority, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                        <TextBox Grid.Column="3" Text="{Binding Priority, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                                 ToolTip="协议范围 1～10，大者优先"/>
                                     </Grid>
                                     <Grid Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding FromLabelText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
                                         <TextBox Grid.Column="1" Text="{Binding FromCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
-                                                 ToolTip="RCS 点位编码（LOCATION_MAP.RCS_CODE）"/>
+                                                 ToolTip="可直接填现场 RCS cell 编码；不强制 LOCATION_MAP"/>
                                     </Grid>
                                     <Grid Margin="0,0,0,8" Visibility="{Binding ShowToCode, Converter={StaticResource BoolVisConv}}">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding ToLabelText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
                                         <TextBox Grid.Column="1" Text="{Binding ToCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
-                                                 ToolTip="RCS 点位编码（LOCATION_MAP.RCS_CODE）"/>
+                                                 ToolTip="可直接填现场 RCS cell 编码；不强制 LOCATION_MAP"/>
                                     </Grid>
 
                                     <!-- 抓取参数（仅抓取时显示） -->
@@ -477,11 +506,14 @@
                                         </Grid>
                                     </Border>
 
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                                         <Button Content="下发" Style="{StaticResource PrimaryButton}" Command="{Binding DispatchCommand}"
-                                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseConv}}"/>
+                                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseConv}}"
+                                                ToolTip="真实 RCS 须先测试连接；点到点手工任务不联动 PLC / 槽位账"/>
                                         <Button Content="查询任务" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding QueryCommand}"/>
                                     </StackPanel>
+                                    <TextBlock Text="{Binding DispatchGateHint}" FontSize="11"
+                                               Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                                     <!-- 任务操作 -->
                                     <Border Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"

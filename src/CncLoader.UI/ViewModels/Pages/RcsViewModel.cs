@@ -1,10 +1,12 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Windows;
 using CncLoader.Common.Configuration;
 using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using Microsoft.Extensions.Options;
 
 namespace CncLoader.UI.ViewModels.Pages;
@@ -26,6 +28,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private readonly IRcsConnectionConfigService _connConfig;
     private readonly IRcsRuntimeConfig _runtime;
     private readonly IRcsCallbackListener _callbackListener;
+    private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
     private readonly RcsOptions _options;
 
@@ -35,12 +38,16 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private string _lineCode = "LINE";
     private bool _suppressPositionReload;
     private bool _suppressLocTypeSideEffects;
+    /// <summary>真实 RCS 模式下「测试连接」成功时锁定的 BaseUrl+ClientCode；配置变更即失效。</summary>
+    private string? _verifiedConnectionKey;
+    private bool _suppressConnectionVerifyInvalidation;
+    private bool _suppressPauseSideEffects;
 
     public RcsViewModel(IRcsTaskService rcs, ILocationMapService locationMap,
         IWorkLineService workLineService, IEquipmentConfigService equipment, IFrameService frames,
         IRcsCallbackNotifier callbacks, IChangeFrameOrchestrator changeFrame,
         IRcsConnectionConfigService connConfig, IRcsRuntimeConfig runtime,
-        IRcsCallbackListener callbackListener, ICurrentUser user,
+        IRcsCallbackListener callbackListener, IPositionScheduler scheduler, ICurrentUser user,
         IOptions<AppOptions> options)
     {
         _rcs = rcs;
@@ -53,6 +60,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
         _connConfig = connConfig;
         _runtime = runtime;
         _callbackListener = callbackListener;
+        _scheduler = scheduler;
         _user = user;
         _options = options.Value.Rcs;
 
@@ -75,6 +83,11 @@ public sealed partial class RcsViewModel : PageViewModelBase
         LocFrameOptions = new ObservableCollection<NamedOption>();
 
         LoadConnectionFromRuntime();
+        RefreshModeBanner();
+        _suppressPauseSideEffects = true;
+        try { PauseAutoDispatch = _scheduler.IsAutoDispatchPaused; }
+        finally { _suppressPauseSideEffects = false; }
+        RefreshAutoDispatchStatusText();
 
         _callbacks.TaskStatusReceived += OnTaskStatusReceived;
         _callbacks.ScanResultReceived += OnScanResultReceived;
@@ -88,13 +101,106 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private void LoadConnectionFromRuntime()
     {
         var snap = _runtime.Snapshot();
-        BaseUrl = snap.BaseUrl;
-        ClientCode = snap.ClientCode;
-        CallbackHost = snap.CallbackHost;
-        CallbackPort = snap.CallbackPort;
-        RequestTimeoutMs = snap.RequestTimeoutMs;
-        MaxRetries = snap.MaxRetries;
-        PollIntervalMs = snap.PollIntervalMs;
+        _suppressConnectionVerifyInvalidation = true;
+        try
+        {
+            BaseUrl = snap.BaseUrl;
+            ClientCode = snap.ClientCode;
+            CallbackHost = snap.CallbackHost;
+            CallbackPort = snap.CallbackPort;
+            RequestTimeoutMs = snap.RequestTimeoutMs;
+            MaxRetries = snap.MaxRetries;
+            PollIntervalMs = snap.PollIntervalMs;
+        }
+        finally { _suppressConnectionVerifyInvalidation = false; }
+        EffectiveBaseUrl = snap.BaseUrl;
+        RefreshModeBanner();
+    }
+
+    private void RefreshModeBanner()
+    {
+        if (_options.UseSimulator)
+        {
+            RcsModeText = "模拟器";
+            RcsModeBrushKey = "WarnBrush";
+            RcsModeHint = "当前为 RCS 模拟器模式（Rcs.UseSimulator=true）";
+        }
+        else
+        {
+            RcsModeText = "真实 RCS";
+            RcsModeBrushKey = "AccentBrush";
+            RcsModeHint = "当前对接真实 RCS（Rcs.UseSimulator=false）";
+        }
+    }
+
+    private void RefreshAutoDispatchStatusText()
+    {
+        AutoDispatchStatusText = PauseAutoDispatch
+            ? "已暂停自动派工：调度器不再产生/下发新的自动上料、下料任务；手工下发与任务跟踪仍可用"
+            : "自动派工运行中（默认）";
+        AutoDispatchStatusBrushKey = PauseAutoDispatch ? "WarnBrush" : "OkBrush";
+    }
+
+    private static string ConnectionKey(string? baseUrl, string? clientCode)
+        => $"{(baseUrl ?? "").Trim()}|{ (clientCode ?? "").Trim()}";
+
+    private void InvalidateConnectionVerification(string reason)
+    {
+        if (_verifiedConnectionKey is null)
+        {
+            RefreshDispatchGateHint();
+            return;
+        }
+        _verifiedConnectionKey = null;
+        if (ConnectionHealthBrushKey == "OkBrush")
+        {
+            ConnectionHealthText = "需重新测试";
+            ConnectionHealthBrushKey = "WarnBrush";
+        }
+        Append($"> 连通验证已失效：{reason}");
+        RefreshDispatchGateHint();
+    }
+
+    private void RefreshDispatchGateHint()
+    {
+        if (_options.UseSimulator)
+        {
+            DispatchGateHint = "";
+            return;
+        }
+        if (_verifiedConnectionKey is null
+            || !string.Equals(_verifiedConnectionKey, ConnectionKey(BaseUrl, ClientCode), StringComparison.Ordinal))
+        {
+            DispatchGateHint = "请先测试真实 RCS 连接（修改地址/clientCode 后需重新测试）";
+            return;
+        }
+        DispatchGateHint = "";
+    }
+
+    partial void OnBaseUrlChanged(string value)
+    {
+        if (_suppressConnectionVerifyInvalidation) return;
+        InvalidateConnectionVerification("BaseUrl 已修改");
+    }
+
+    partial void OnClientCodeChanged(string value)
+    {
+        if (_suppressConnectionVerifyInvalidation) return;
+        InvalidateConnectionVerification("ClientCode 已修改");
+    }
+
+    partial void OnPauseAutoDispatchChanged(bool value)
+    {
+        if (_suppressPauseSideEffects) return;
+        _scheduler.SetAutoDispatchPaused(value);
+        RefreshAutoDispatchStatusText();
+        Append(value
+            ? "> 已开启「暂停自动派工 / 仅手动测试」"
+            : "> 已关闭「暂停自动派工」，恢复自动上下料派工");
+        if (value)
+            HandyControl.Controls.Growl.Warning("已暂停自动派工：仅允许本页手工下发测试。");
+        else
+            HandyControl.Controls.Growl.Success("已恢复自动派工。");
     }
 
     private void OnTaskStatusReceived(object? sender, RcsTaskStatusEvent e)
@@ -159,6 +265,19 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [ObservableProperty] private bool _isTestingCallback;
     [ObservableProperty] private string _callbackHealthText = "未测试";
     [ObservableProperty] private string _callbackHealthBrushKey = "IdleBrush";
+
+    /// <summary>Rcs.UseSimulator 模式文案：模拟器 / 真实 RCS。</summary>
+    [ObservableProperty] private string _rcsModeText = "";
+    [ObservableProperty] private string _rcsModeBrushKey = "IdleBrush";
+    [ObservableProperty] private string _rcsModeHint = "";
+    /// <summary>运行时实际生效的出站 BaseUrl（非猜测）。</summary>
+    [ObservableProperty] private string _effectiveBaseUrl = "";
+    /// <summary>暂停自动派工 / 仅手动测试（进程内）。</summary>
+    [ObservableProperty] private bool _pauseAutoDispatch;
+    [ObservableProperty] private string _autoDispatchStatusText = "";
+    [ObservableProperty] private string _autoDispatchStatusBrushKey = "OkBrush";
+    /// <summary>真实 RCS 下发门禁提示。</summary>
+    [ObservableProperty] private string _dispatchGateHint = "";
 
     // 手动下发表单
     [ObservableProperty] private string _selectedKind = "搬运";
@@ -352,6 +471,9 @@ public sealed partial class RcsViewModel : PageViewModelBase
         catch { LoadConnectionFromRuntime(); }
 
         RefreshCallbackListenHint();
+        EffectiveBaseUrl = _runtime.BaseUrl;
+        RefreshModeBanner();
+        RefreshDispatchGateHint();
 
         await LoadLocationRefOptionsAsync();
         await RefreshTasksAsync();
@@ -359,12 +481,12 @@ public sealed partial class RcsViewModel : PageViewModelBase
         await RefreshLocationsAsync();
     }
 
-    /// <summary>根据宿主启动结果刷新回调状态灯（未点「测试回调」时也能看到是否在听）。</summary>
+    /// <summary>根据宿主启动结果刷新回调状态灯（未点「测试本机监听」时也能看到是否在听）。</summary>
     private void RefreshCallbackListenHint()
     {
         if (_callbackListener.IsListening)
         {
-            CallbackHealthText = $"监听 {_callbackListener.BoundHost}:{_callbackListener.BoundPort}";
+            CallbackHealthText = $"本机监听 {_callbackListener.BoundHost}:{_callbackListener.BoundPort}";
             CallbackHealthBrushKey = "OkBrush";
         }
         else
@@ -441,6 +563,11 @@ public sealed partial class RcsViewModel : PageViewModelBase
             _agvId = saved.AgvId;
             _runtime.Apply(saved);
             LoadConnectionFromRuntime();
+            // 保存可能改写出站目标；与已验证键不一致则失效（Load 用 suppress，此处显式比对）。
+            if (!string.Equals(_verifiedConnectionKey, ConnectionKey(saved.BaseUrl, saved.ClientCode), StringComparison.Ordinal))
+                InvalidateConnectionVerification("连接配置已保存且出站目标变更");
+            else
+                RefreshDispatchGateHint();
 
             var callbackChanged = !string.Equals(saved.CallbackHost, _runtime.BootCallbackHost, StringComparison.OrdinalIgnoreCase)
                                   || saved.CallbackPort != _runtime.BootCallbackPort;
@@ -509,47 +636,84 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [RelayCommand]
     private async Task DispatchAsync()
     {
+        if (!TryValidateManualDispatch(out var from, out var to, out var error))
+        {
+            HandyControl.Controls.Growl.Warning(error);
+            StatusMessage = error;
+            return;
+        }
+
+        if (!_options.UseSimulator)
+        {
+            var key = ConnectionKey(BaseUrl, ClientCode);
+            if (_verifiedConnectionKey is null
+                || !string.Equals(_verifiedConnectionKey, key, StringComparison.Ordinal))
+            {
+                const string gate = "请先测试真实 RCS 连接";
+                HandyControl.Controls.Growl.Warning(gate);
+                StatusMessage = gate;
+                RefreshDispatchGateHint();
+                return;
+            }
+
+            var confirmMsg =
+                $"当前 RCS BaseUrl：{_runtime.BaseUrl}\n" +
+                $"任务类型：{SelectedKind}\n" +
+                $"起点：{from}\n" +
+                $"终点：{(ShowIdentifyParams ? "（识别无终点）" : to)}\n" +
+                $"优先级：{Priority}\n\n" +
+                "请确认现场人员、设备和路径已经清场";
+            var confirm = HandyControl.Controls.MessageBox.Show(
+                confirmMsg, "真实 RCS 下发确认",
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.OK)
+            {
+                Append("> 用户取消真实 RCS 下发（未落库、未发 HTTP）");
+                return;
+            }
+        }
+
         IsBusy = true;
         try
         {
             RcsResult r;
             if (ShowGrabParams)
             {
-                Append($"> 抓取 {FromCode} → {ToCode} 孔位 {SrcNo}/{SrcPos}→{DstNo}/{DstPos}");
+                Append($"> 抓取 {from} → {to} 孔位 {SrcNo}/{SrcPos}→{DstNo}/{DstPos}");
                 r = await _rcs.DispatchGrabAsync(new GrabDispatchArgs
                 {
                     WorkLineId = _workLineId,
                     LineCode = _lineCode,
                     Priority = Priority,
-                    SrcStation = FromCode,
-                    DstStation = ToCode,
+                    SrcStation = from,
+                    DstStation = to,
                     Items = new[] { new GrabItem { SrcNo = SrcNo, SrcPos = SrcPos, DstNo = DstNo, DstPos = DstPos, Data = GrabData } }
                 });
             }
             else if (ShowIdentifyParams)
             {
-                Append($"> 识别 {FromCode} 起始 {PosStart} 数量 {IdentifyCount}");
+                Append($"> 识别 {from} 起始 {PosStart} 数量 {IdentifyCount}");
                 r = await _rcs.DispatchIdentifyAsync(new IdentifyDispatchArgs
                 {
                     WorkLineId = _workLineId,
                     LineCode = _lineCode,
                     Priority = Priority,
-                    Station = FromCode,
+                    Station = from,
                     PosStart = PosStart,
                     Count = IdentifyCount
                 });
             }
             else
             {
-                Append($"> 搬运 {FromCode} → {ToCode}");
+                Append($"> 搬运 {from} → {to}");
                 r = await _rcs.DispatchTransitAsync(new TransitDispatchArgs
                 {
                     WorkLineId = _workLineId,
                     LineCode = _lineCode,
                     TaskType = "2",
                     Priority = Priority,
-                    FromCode = FromCode,
-                    ToCode = ToCode
+                    FromCode = from,
+                    ToCode = to
                 });
             }
             ReportResult(r);
@@ -571,6 +735,44 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 SelectedTask = Tasks.FirstOrDefault(t => t.RcsTaskId == newestId);
             }
         }
+    }
+
+    /// <summary>手工下发校验：优先级 1～10；搬运点到点起终点非空且不同。不生成假点位、不查 LOCATION_MAP。</summary>
+    private bool TryValidateManualDispatch(out string from, out string to, out string error)
+    {
+        from = (FromCode ?? "").Trim();
+        to = (ToCode ?? "").Trim();
+        error = "";
+
+        if (Priority is < 1 or > 10)
+        {
+            error = "优先级须为协议允许范围 1～10。";
+            return false;
+        }
+
+        if (ShowIdentifyParams)
+        {
+            if (string.IsNullOrWhiteSpace(from))
+            {
+                error = "请填写料架站编码。";
+                return false;
+            }
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+        {
+            error = ShowGrabParams ? "请填写源站与目标站。" : "起点和终点不能为空。";
+            return false;
+        }
+
+        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase))
+        {
+            error = ShowGrabParams ? "源站与目标站不能相同。" : "起点和终点不能相同。";
+            return false;
+        }
+
+        return true;
     }
 
     [RelayCommand]
@@ -699,30 +901,37 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 PollIntervalMs = PollIntervalMs
             });
 
+            EffectiveBaseUrl = _runtime.BaseUrl;
             Append($"> 测试连接 queryTask → {_runtime.BaseUrl}");
             var r = await _rcs.QueryAsync(new QueryTaskRequest { PageIndex = 1, PageSize = 1 });
             if (r.Success)
             {
                 ConnectionHealthText = $"连通 {r.ElapsedMs}ms";
                 ConnectionHealthBrushKey = "OkBrush";
+                _verifiedConnectionKey = ConnectionKey(BaseUrl, ClientCode);
                 Append($"< 连通 OK {r.ElapsedMs}ms");
                 HandyControl.Controls.Growl.Success($"RCS 连通成功 {r.ElapsedMs}ms");
+                RefreshDispatchGateHint();
             }
             else
             {
                 var detail = r.Error ?? r.Message ?? "失败";
                 ConnectionHealthText = "不通";
                 ConnectionHealthBrushKey = "AlarmBrush";
+                _verifiedConnectionKey = null;
                 Append($"< 连通失败 HTTP{r.HttpStatus} {detail}");
                 HandyControl.Controls.Growl.Warning($"RCS 连通失败：{detail}");
+                RefreshDispatchGateHint();
             }
         }
         catch (Exception ex)
         {
             ConnectionHealthText = "不通";
             ConnectionHealthBrushKey = "AlarmBrush";
+            _verifiedConnectionKey = null;
             Append($"< 连通异常 {ex.Message}");
             HandyControl.Controls.Growl.Error($"测试异常：{ex.Message}");
+            RefreshDispatchGateHint();
         }
         finally
         {
@@ -756,7 +965,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
             // 空 taskId 探针：处理器会应答但不改任务态、不派发事件。
             var body = """{"taskId":"","data":{"system":{"error_code":0,"msg":"callback-probe"}}}""";
-            Append($"> 测试回调 POST {url}");
+            Append($"> 测试本机监听 POST {url}");
 
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             using var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
@@ -767,25 +976,26 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
             if (resp.IsSuccessStatusCode)
             {
-                CallbackHealthText = $"可达 {sw.ElapsedMilliseconds}ms";
+                CallbackHealthText = $"本机可达 {sw.ElapsedMilliseconds}ms";
                 CallbackHealthBrushKey = "OkBrush";
-                Append($"< 回调 OK HTTP{(int)resp.StatusCode} {sw.ElapsedMilliseconds}ms {ack}");
-                HandyControl.Controls.Growl.Success($"回调可达 {sw.ElapsedMilliseconds}ms");
+                Append($"< 本机监听 OK HTTP{(int)resp.StatusCode} {sw.ElapsedMilliseconds}ms（仅证明本机 Kestrel；不代表 RCS→工控机网络已通） {ack}");
+                HandyControl.Controls.Growl.Success(
+                    $"本机监听可达 {sw.ElapsedMilliseconds}ms（不代表 RCS 服务器回调网络已打通）");
             }
             else
             {
-                CallbackHealthText = "不通";
+                CallbackHealthText = "本机不通";
                 CallbackHealthBrushKey = "AlarmBrush";
-                Append($"< 回调失败 HTTP{(int)resp.StatusCode} {ack}");
-                HandyControl.Controls.Growl.Warning($"回调不通：HTTP{(int)resp.StatusCode}");
+                Append($"< 本机监听失败 HTTP{(int)resp.StatusCode} {ack}");
+                HandyControl.Controls.Growl.Warning($"本机监听不通：HTTP{(int)resp.StatusCode}");
             }
         }
         catch (Exception ex)
         {
-            CallbackHealthText = "不通";
+            CallbackHealthText = "本机不通";
             CallbackHealthBrushKey = "AlarmBrush";
-            Append($"< 回调异常 {ex.Message}");
-            HandyControl.Controls.Growl.Error($"回调测试异常：{ex.Message}");
+            Append($"< 本机监听异常 {ex.Message}");
+            HandyControl.Controls.Growl.Error($"本机监听测试异常：{ex.Message}");
         }
         finally
         {

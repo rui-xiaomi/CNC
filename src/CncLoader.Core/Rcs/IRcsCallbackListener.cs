@@ -2,7 +2,7 @@ namespace CncLoader.Core.Rcs;
 
 /// <summary>
 /// 本机 RCS 回调监听状态（由 <c>RcsCallbackHost</c> 实现）。
-/// 供 UI「测试回调」判断 Kestrel 是否已绑定，以及探测实际监听地址。
+/// 供 UI「测试本机监听」判断 Kestrel 是否已绑定，以及探测实际监听地址。
 /// </summary>
 public interface IRcsCallbackListener
 {

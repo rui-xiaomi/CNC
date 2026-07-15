@@ -42,3 +42,9 @@
 - 新增 `src/CncLoader.App/appsettings.Field.example.json`（双模拟器关、Scheduler 默认关、无真实口令）。
 - 更新 `docs/演示实操手册.md` §7、`docs/README.md` 索引；`task_plan` Phase 6「文档已备、现场改值待勾」。
 - **未**把仓库默认 `UseSimulator` 改成 false（避免破坏本机演示）；现场用示例文件改配。
+
+## Session 76 · RCS 点到点联调页（2026-07-15）
+- 模式取自 `Rcs.UseSimulator`，展示生效 `IRcsRuntimeConfig.BaseUrl`。
+- 暂停自动派工 = 进程内 `volatile` 标志，闸在 UploadRequested / Done 入队 / DispatchLoop / TryDispatchUpload / DispatchOne；**不**停 PLC 轮询、回调、Tracker、已下发任务收口；换架/水位/盘点自动未纳入本开关。
+- 真实 RCS：须本次运行「测试连接」成功且 BaseUrl+ClientCode 未改；下发前二次确认；取消不落库不 HTTP。
+- 手工点到点不查 LOCATION_MAP、不写 POS_TEST_START、不改槽位账（沿用原 `DispatchTransitAsync` 手工路径）。

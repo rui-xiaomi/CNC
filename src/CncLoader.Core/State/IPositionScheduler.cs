@@ -11,8 +11,20 @@ public interface IPositionScheduler
     /// <summary>对账是否完成（完成后才开始自动派工）。</summary>
     bool IsReconciled { get; }
 
+    /// <summary>
+    /// 是否暂停新自动上料/下料 RCS 派工（仅当前进程，默认 false）。
+    /// 开启后不产生、不下发新的自动上下料任务；已下发任务的回调/轮询/PLC 复核/收口不受影响。
+    /// </summary>
+    bool IsAutoDispatchPaused { get; }
+
     /// <summary>对账完成时触发（UI 可订阅以刷新看板/提示）。</summary>
     event EventHandler? Reconciled;
+
+    /// <summary>
+    /// 设置「仅手动测试 / 暂停自动派工」。线程安全；开关变更写日志。
+    /// 不影响手工 RCS 下发、PLC 轮询、回调宿主、任务跟踪器。
+    /// </summary>
+    void SetAutoDispatchPaused(bool paused);
 
     /// <summary>人工恢复：把指定加工位从 ALARM 重置回 WAIT_LOAD（解除报警后调用）。</summary>
     Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default);

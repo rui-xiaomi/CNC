@@ -185,6 +185,12 @@ Plan：`docs/superpowers/plans/2026-07-10-dashboard-neon-float-plan.md`
 
 ---
 
+### 现场点到点联调页增强（2026-07-15）　Status: 已完成（待现场试用）
+- [x] RCS 模式标识（`Rcs.UseSimulator` + 生效 BaseUrl）
+- [x] 暂停自动派工 / 仅手动测试（进程内，PositionScheduler）
+- [x] 手工点到点校验 + 真实 RCS 二次确认 + 连通门禁
+- [x] 「测试回调」→「测试本机监听」文案；build 0/0
+
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|

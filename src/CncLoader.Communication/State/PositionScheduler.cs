@@ -63,6 +63,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     private Task? _loopTask;
     private Task? _dispatchTask;
     private readonly RcsCallbackNotifier? _notifier;
+    /// <summary>0=自动派工开，1=暂停新自动上下料派工（进程内，volatile 供 UI/调度循环可见）。</summary>
+    private volatile int _autoDispatchPaused;
 
     public PositionScheduler(
         ISignalStateStore store,
@@ -148,7 +150,19 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     }
 
     public bool IsReconciled { get; private set; }
+    public bool IsAutoDispatchPaused => _autoDispatchPaused != 0;
     public event EventHandler? Reconciled;
+
+    public void SetAutoDispatchPaused(bool paused)
+    {
+        var next = paused ? 1 : 0;
+        var prev = Interlocked.Exchange(ref _autoDispatchPaused, next);
+        if (prev == next) return;
+        if (paused)
+            _logger.LogWarning("已开启「暂停自动派工 / 仅手动测试」：不再产生或下发新的自动上料/下料 RCS 任务；已下发任务跟踪与 PLC 复核继续。");
+        else
+            _logger.LogInformation("已关闭「暂停自动派工 / 仅手动测试」：恢复 PositionScheduler 自动上料/下料派工。");
+    }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -855,7 +869,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 // Layer 1：工位不自己查料/选槽，只标记"请求上料"，由单一调度消费者统一决策
                 // （查料→选槽→原子预记→下发都在单消费者里串行，结构上杜绝两位同时看到同一件料）。
                 // 有在途直送登记时不请求自取（与中转回流互斥）。
-                if (allowLoad == true && hasMat == false && string.IsNullOrEmpty(ctx.CurrentTaskId)
+                // 暂停自动派工时不置请求，恢复后下一 tick 再评估。
+                if (!IsAutoDispatchPaused
+                    && allowLoad == true && hasMat == false && string.IsNullOrEmpty(ctx.CurrentTaskId)
                     && !_expectedInbound.ContainsKey((ctx.EquipmentId, ctx.PositionId)))
                 {
                     ctx.UploadRequested = true;
@@ -930,7 +946,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 {
                     var isOk = next == PositionState.DoneOk;
                     if (ctx.WorkRecordId > 0)
+                    {
                         await _workRecords.RecordResultAsync(ctx.WorkRecordId, isOk ? "0" : "1", null, ct);
+                        // 暂停自动派工时本 tick 不下料入队，清零避免每 tick 重复写结果日志。
+                        if (IsAutoDispatchPaused) ctx.WorkRecordId = 0;
+                    }
+                    if (IsAutoDispatchPaused)
+                        break; // 保持 Done*，恢复自动派工后再入下料队
                     if (await EnqueueUnloadAsync(ctx, isOk, ct)) next = PositionState.Dispatching;
                     else next = PositionState.Alarm;
                 }
@@ -1205,6 +1227,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         {
             try
             {
+                // 暂停时不 dequeue / 不上料分配，避免把已入队请求发出去；队列保留至恢复。
+                if (IsAutoDispatchPaused)
+                {
+                    await Task.Delay(200, ct);
+                    continue;
+                }
+
                 var item = _queue.Dequeue();
                 if (item is not null)
                 {
@@ -1249,6 +1278,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// 返回 Queued（已下发）/ WaitMaterial（无料或有在途直送，保持等待）/ Failed（路由缺失或下发失败，已置 Alarm）。</summary>
     private async Task<UploadDecision> TryDispatchUploadAsync(PositionContext ctx, CancellationToken ct)
     {
+        if (IsAutoDispatchPaused) return UploadDecision.WaitMaterial;
+
         // 下发前再断言：直送在途则禁止自取，勿清交接登记
         if (_expectedInbound.ContainsKey((ctx.EquipmentId, ctx.PositionId)))
             return UploadDecision.WaitMaterial;
@@ -1334,6 +1365,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// 选位与登记同在此串行完成，前一件登记落地后后一件才选位，两件下料不会抢到同一下游空工位。</summary>
     private async Task DispatchOneAsync(DispatchItem item, CancellationToken ct)
     {
+        if (IsAutoDispatchPaused)
+        {
+            // 防御：暂停期间不应出队；若竞态已出队则重新入队，避免丢掉下料请求。
+            _queue.Enqueue(item);
+            return;
+        }
+
         var ctx = _contexts.GetOrAdd((item.EquipmentId, item.PositionId), k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
 
         // 终点决策（NG架/选下游空工位/中转架/下料架）在消费者内串行完成。
