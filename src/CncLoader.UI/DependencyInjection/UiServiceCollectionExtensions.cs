@@ -1,4 +1,6 @@
+using CncLoader.Core.Abstractions;
 using CncLoader.UI.Navigation;
+using CncLoader.UI.Services;
 using CncLoader.UI.ViewModels;
 using CncLoader.UI.ViewModels.Pages;
 using CncLoader.UI.Views;
@@ -11,6 +13,8 @@ public static class UiServiceCollectionExtensions
     /// <summary>注册 UI 层：页面 ViewModel、导航服务、外壳与主窗口。</summary>
     public static IServiceCollection AddCncUi(this IServiceCollection services)
     {
+        services.AddSingleton<IUserNotificationService, HandyControlUserNotificationService>();
+
         // 8 个页面 ViewModel（同时以 PageViewModelBase 暴露给导航服务）
         services.AddSingleton<DashboardViewModel>();
         services.AddSingleton<WorkLineViewModel>();

@@ -15,11 +15,16 @@ namespace CncLoader.Data.Repositories;
 public sealed class SlotAccountService : ISlotAccountService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
+    private readonly ISlotAccountStore _slotStore;
     private readonly ILogger<SlotAccountService> _logger;
 
-    public SlotAccountService(IDbContextFactory<CncDbContext> factory, ILogger<SlotAccountService> logger)
+    public SlotAccountService(
+        IDbContextFactory<CncDbContext> factory,
+        ISlotAccountStore slotStore,
+        ILogger<SlotAccountService> logger)
     {
         _factory = factory;
+        _slotStore = slotStore;
         _logger = logger;
     }
 
@@ -30,113 +35,40 @@ public sealed class SlotAccountService : ISlotAccountService
     public async Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? materialId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var now = DateTime.Now;
-        // 候选（首个空槽）+ 带条件原子 UPDATE（WHERE SLOT_STATE='0'）。影响行数=0 表示该槽已被并发写入者占用 → 重选下一个候选。
-        while (true)
-        {
-            ct.ThrowIfCancellationRequested();
-            var slot = await db.FrameSlots.AsNoTracking()
-                .Where(s => s.FrameId == frameId && s.SlotState == SlotStates.Empty)
-                .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
-                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer })
-                .FirstOrDefaultAsync(ct);
-            if (slot is null) return null;
-
-            var affected = await db.FrameSlots
-                .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Empty)
-                .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.SlotState, SlotStates.Reserved)
-                    .SetProperty(s => s.MaterialId, materialId)
-                    .SetProperty(s => s.Remark, taskId)
-                    .SetProperty(s => s.BindSource, ReservePut)
-                    .SetProperty(s => s.BindTime, (DateTime?)now), ct);
-            if (affected == 1)
-            {
-                _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}", frameId, slot.SlotNo, taskId, materialId);
-                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, materialId);
-            }
-            _logger.LogDebug("入库预记料架 {Frame} 槽 {Slot} 被并发占用，重选", frameId, slot.SlotNo);
-        }
+        // 行为保持：候选选取 + WHERE Empty 原子更新已下沉至 ISlotAccountStore（可测并发接缝）。
+        var reserved = await _slotStore.ReservePutAsync(frameId, taskId, materialId, ct);
+        if (reserved is not null)
+            _logger.LogInformation("入库预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}",
+                frameId, reserved.SlotNo, taskId, materialId);
+        return reserved;
     }
 
     public async Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var now = DateTime.Now;
-        // 候选（首个占用槽）+ 带条件原子 UPDATE（WHERE SLOT_STATE='1'）。影响行数=0 表示该槽已被并发写入者取走 → 重选下一个候选，直到成功或无占用槽（无料）。
-        while (true)
-        {
-            ct.ThrowIfCancellationRequested();
-            var slot = await db.FrameSlots.AsNoTracking()
-                .Where(s => s.FrameId == frameId && s.SlotState == SlotStates.Occupied)
-                .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
-                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer, s.MaterialId })
-                .FirstOrDefaultAsync(ct);
-            if (slot is null) return null;
-
-            var affected = await db.FrameSlots
-                .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Occupied)
-                .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.SlotState, SlotStates.Reserved)
-                    .SetProperty(s => s.Remark, taskId)
-                    .SetProperty(s => s.BindSource, ReserveTake)
-                    .SetProperty(s => s.BindTime, (DateTime?)now), ct);
-            if (affected == 1)
-            {
-                _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}", frameId, slot.SlotNo, taskId, slot.MaterialId);
-                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.MaterialId);
-            }
-            _logger.LogDebug("取料预记料架 {Frame} 槽 {Slot} 被并发取走，重选", frameId, slot.SlotNo);
-        }
+        var reserved = await _slotStore.ReserveTakeAsync(frameId, taskId, ct);
+        if (reserved is not null)
+            _logger.LogInformation("取料预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}",
+                frameId, reserved.SlotNo, taskId, reserved.MaterialId);
+        return reserved;
     }
 
     public async Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return false;
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var slot = await db.FrameSlots.AsTracking().FirstOrDefaultAsync(s => s.Remark == taskId, ct);
-        if (slot is null) return false;
-
-        if (slot.SlotState == SlotStates.Empty)
-        {
-            _logger.LogDebug("取料落账幂等：taskId={Task} 已清空槽 {Slot}", taskId, slot.SlotNo);
-            return true; // redo 同 taskId 不重复
-        }
-        if (slot.SlotState != SlotStates.Reserved)
-        {
-            _logger.LogWarning("取料落账失败：taskId={Task} 槽 {Slot} 状态={State} 非预记", taskId, slot.SlotNo, slot.SlotState);
-            return false;
-        }
-
-        slot.SlotState = SlotStates.Empty;
-        slot.MaterialId = null;
-        slot.Remark = null;
-        slot.BindTime = null;
-        await db.SaveChangesAsync(ct);
-        _logger.LogInformation("取料落账料架 {Frame} 槽 {Slot} taskId={Task}（物料已取走）", slot.FrameId, slot.SlotNo, taskId);
-        return true;
+        var ok = await _slotStore.ConfirmTakeAsync(taskId, ct);
+        if (ok) _logger.LogInformation("取料落账 taskId={Task}", taskId);
+        else _logger.LogWarning("取料落账失败：taskId={Task}", taskId);
+        return ok;
     }
 
     public async Task<bool> RollbackTakeAsync(string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return false;
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var slot = await db.FrameSlots.AsTracking()
-            .FirstOrDefaultAsync(s => s.Remark == taskId && s.SlotState == SlotStates.Reserved, ct);
-        if (slot is null)
-        {
-            _logger.LogDebug("取料回滚：taskId={Task} 无预记槽（可能已落账或已回滚）", taskId);
-            return false;
-        }
-
-        slot.SlotState = SlotStates.Occupied; // 物料未取走，恢复占用
-        slot.Remark = null;
-        slot.BindTime = null;
-        await db.SaveChangesAsync(ct);
-        _logger.LogInformation("取料回滚料架 {Frame} 槽 {Slot} taskId={Task}（恢复占用）", slot.FrameId, slot.SlotNo, taskId);
-        return true;
+        var ok = await _slotStore.RollbackTakeAsync(taskId, ct);
+        if (ok) _logger.LogInformation("取料回滚 taskId={Task}", taskId);
+        else _logger.LogDebug("取料回滚：taskId={Task} 无预记槽（可能已落账或已回滚）", taskId);
+        return ok;
     }
 
     public async Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
@@ -222,48 +154,19 @@ public sealed class SlotAccountService : ISlotAccountService
     public async Task<bool> ConfirmAsync(string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return false;
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var slot = await db.FrameSlots.AsTracking().FirstOrDefaultAsync(s => s.Remark == taskId, ct);
-        if (slot is null) return false;
-
-        if (slot.SlotState == SlotStates.Occupied)
-        {
-            _logger.LogDebug("落账幂等：taskId={Task} 已落账槽 {Slot}", taskId, slot.SlotNo);
-            return true; // redo 同 taskId 不重复记账
-        }
-        if (slot.SlotState != SlotStates.Reserved)
-        {
-            _logger.LogWarning("落账失败：taskId={Task} 槽 {Slot} 状态={State} 非预记", taskId, slot.SlotNo, slot.SlotState);
-            return false;
-        }
-
-        slot.SlotState = SlotStates.Occupied;
-        slot.BindSource = "CONFIRMED"; // ≤10 字符（BIND_SOURCE VARCHAR(10)）
-        slot.BindTime = DateTime.Now;
-        // REMARK 保留 taskId 作为幂等判定与审计
-        await db.SaveChangesAsync(ct);
-        _logger.LogInformation("落账料架 {Frame} 槽 {Slot} taskId={Task}", slot.FrameId, slot.SlotNo, taskId);
-        return true;
+        var ok = await _slotStore.ConfirmPutAsync(taskId, ct);
+        if (ok) _logger.LogInformation("落账 taskId={Task}", taskId);
+        else _logger.LogWarning("落账失败：taskId={Task}", taskId);
+        return ok;
     }
 
     public async Task<bool> RollbackAsync(string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return false;
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var slot = await db.FrameSlots.AsTracking().FirstOrDefaultAsync(s => s.Remark == taskId && s.SlotState == SlotStates.Reserved, ct);
-        if (slot is null)
-        {
-            _logger.LogDebug("回滚：taskId={Task} 无预记槽（可能已落账或已回滚）", taskId);
-            return false;
-        }
-
-        slot.SlotState = SlotStates.Empty;
-        slot.MaterialId = null;
-        slot.Remark = null;
-        slot.BindTime = null;
-        await db.SaveChangesAsync(ct);
-        _logger.LogInformation("回滚预记料架 {Frame} 槽 {Slot} taskId={Task}", slot.FrameId, slot.SlotNo, taskId);
-        return true;
+        var ok = await _slotStore.RollbackPutAsync(taskId, ct);
+        if (ok) _logger.LogInformation("回滚预记 taskId={Task}", taskId);
+        else _logger.LogDebug("回滚：taskId={Task} 无预记槽（可能已落账或已回滚）", taskId);
+        return ok;
     }
 
     public async Task<FrameOccupancy> GetOccupancyAsync(long frameId, CancellationToken ct = default)
@@ -276,18 +179,126 @@ public sealed class SlotAccountService : ISlotAccountService
         return new FrameOccupancy(total, occupied, reserved, total - occupied - reserved - slots.Count(s => s.SlotState == SlotStates.Locked));
     }
 
-    public async Task SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default)
+    public async Task<SlotMutationResult> SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var slot = await db.FrameSlots.AsTracking().FirstOrDefaultAsync(s => s.FrameId == frameId && s.SlotNo == slotNo, ct);
-        if (slot is null) throw new InvalidOperationException($"料架 {frameId} 槽 {slotNo} 不存在");
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            var normalized = NormalizeExternalSlotState(slotState);
+            if (normalized is null)
+            {
+                var isReservedTarget = string.Equals(
+                    (slotState ?? string.Empty).Trim(), SlotStates.Reserved, StringComparison.Ordinal);
+                _logger.LogWarning(
+                    "人工校正拒绝非法目标状态：料架 {Frame} 槽 {Slot} target={State} by {Author}",
+                    frameId, slotNo, slotState, author);
+                return SlotMutationResult.From(
+                    SlotMutationStatus.InvalidTargetState, frameId, slotNo, null,
+                    isReservedTarget
+                        ? "预记状态只能由派工流程创建，不能人工设置"
+                        : "不支持的槽位状态，不能人工设置");
+            }
 
-        slot.SlotState = slotState;
-        slot.MaterialId = materialId;
-        if (slotState == SlotStates.Empty) { slot.Remark = null; slot.BindTime = null; }
-        slot.UpdateTime = DateTime.Now;
-        await db.SaveChangesAsync(ct);
-        _logger.LogInformation("人工校正料架 {Frame} 槽 {Slot} → state={State} 物料={El} by {Author}", frameId, slotNo, slotState, materialId, author);
+            var clearRemarkAndBindTime = normalized == SlotStates.Empty;
+            var now = DateTime.Now;
+
+            // 不先查状态再放行：直接条件原子写；affected=0 再只读分类。
+            var attempt = await _slotStore.TrySetExternalSlotAsync(
+                frameId, slotNo, normalized, materialId, clearRemarkAndBindTime, now, ct);
+
+            if (attempt.InvalidTargetState)
+            {
+                _logger.LogWarning(
+                    "Store 拒绝非法目标状态：料架 {Frame} 槽 {Slot} target={State}",
+                    frameId, slotNo, normalized);
+                return SlotMutationResult.From(
+                    SlotMutationStatus.InvalidTargetState, frameId, slotNo, attempt.Current,
+                    "预记状态只能由派工流程创建，不能人工设置");
+            }
+
+            if (attempt.AffectedRows == 1)
+            {
+                _logger.LogInformation(
+                    "人工校正料架 {Frame} 槽 {Slot} → state={State} 物料={El} by {Author}",
+                    frameId, slotNo, normalized, materialId, author);
+                return SlotMutationResult.From(SlotMutationStatus.Updated, frameId, slotNo, attempt.Current);
+            }
+
+            var current = attempt.Current;
+            if (current is null)
+            {
+                return SlotMutationResult.From(
+                    SlotMutationStatus.NotFound, frameId, slotNo, null,
+                    $"料架 {frameId} 槽 {slotNo} 不存在");
+            }
+
+            if (current.SlotState == SlotStates.Reserved)
+            {
+                if (IsAnomalousReservation(current))
+                {
+                    _logger.LogWarning(
+                        "异常预记数据不一致：料架 {Frame} 槽 {Slot} STATE=Reserved 但 REMARK/BIND_SOURCE 异常（REMARK空={EmptyRemark}, BIND_SOURCE={Bind}），拒绝外部校正",
+                        frameId, slotNo, string.IsNullOrEmpty(current.Remark), current.BindSource);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "槽位已被任务预记，不能人工校正：料架 {Frame} 槽 {Slot}",
+                        frameId, slotNo);
+                }
+
+                return SlotMutationResult.From(
+                    SlotMutationStatus.ReservationConflict, frameId, slotNo, current,
+                    "槽位已被任务预记，不能人工校正");
+            }
+
+            if (MatchesExternalTarget(current, slotState, materialId, clearRemarkAndBindTime))
+            {
+                return SlotMutationResult.From(SlotMutationStatus.Unchanged, frameId, slotNo, current);
+            }
+
+            _logger.LogWarning(
+                "人工校正并发冲突：料架 {Frame} 槽 {Slot} 非预记但与目标不一致（当前 state={State} material={El}）",
+                frameId, slotNo, current.SlotState, current.MaterialId);
+            return SlotMutationResult.From(
+                SlotMutationStatus.ConcurrencyConflict, frameId, slotNo, current,
+                "槽位已被并发修改，请刷新后重试");
+        }
+        catch (OperationCanceledException)
+        {
+            return SlotMutationResult.From(SlotMutationStatus.Cancelled, frameId, slotNo, null, "操作已取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "人工校正料架 {Frame} 槽 {Slot} 数据库异常", frameId, slotNo);
+            return SlotMutationResult.From(
+                SlotMutationStatus.DatabaseError, frameId, slotNo, null, ex.Message);
+        }
+    }
+
+    private static bool IsAnomalousReservation(SlotRow slot) =>
+        string.IsNullOrEmpty(slot.Remark)
+        || (slot.BindSource != ReservePut && slot.BindSource != ReserveTake);
+
+    /// <summary>
+    /// 外部写仅允许空/占用/锁定；Reserved 与未知串（含 "03"/空格变体未归一为合法码）一律拒绝。
+    /// </summary>
+    private static string? NormalizeExternalSlotState(string? slotState)
+    {
+        var s = (slotState ?? string.Empty).Trim();
+        if (s is SlotStates.Empty or SlotStates.Occupied or SlotStates.Locked)
+            return s;
+        return null;
+    }
+
+    private static bool MatchesExternalTarget(
+        SlotRow current, string targetState, string? materialId, bool clearRemarkAndBindTime)
+    {
+        if (current.SlotState != targetState) return false;
+        if (!string.Equals(current.MaterialId, materialId, StringComparison.Ordinal)) return false;
+        if (clearRemarkAndBindTime)
+            return current.Remark is null && current.BindTime is null;
+        return true;
     }
 
     public async Task<SlotLocation?> LocateMaterialAsync(string materialId, CancellationToken ct = default)
@@ -300,61 +311,181 @@ public sealed class SlotAccountService : ISlotAccountService
         return new SlotLocation(slot.FrameId, frame?.FrameName ?? "", slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.SlotState);
     }
 
-    public async Task<int> CorrectFromInventoryAsync(long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default)
+    public async Task<InventoryCorrectionResult> CorrectFromInventoryAsync(
+        long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        // 按层→层内位物理顺序对齐 identifyQR「按下发孔位顺序」回扫结果
-        var slots = await db.FrameSlots.AsTracking()
-            .Where(s => s.FrameId == frameId)
-            .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
-            .ToListAsync(ct);
-        if (slots.Count == 0 || products.Count == 0) return 0;
-
-        var (startLayer, startPos) = DecodeIdentifyHole(posStart);
-        var startIdx = slots.FindIndex(s => s.LayerNo == startLayer && s.PosInLayer == startPos);
-        if (startIdx < 0)
+        const int conflictSlotsCap = 10;
+        await using var session = await _slotStore.OpenAsync(ct);
+        try
         {
-            _logger.LogWarning("盘点校正料架 {Frame} 起始孔位 {Hole}（层{L}位{P}）无对应槽位，跳过",
-                frameId, posStart, startLayer, startPos);
-            return 0;
-        }
-
-        var now = DateTime.Now;
-        var corrected = 0;
-        for (var i = 0; i < products.Count; i++)
-        {
-            var idx = startIdx + i;
-            if (idx >= slots.Count) break;
-            var slot = slots[idx];
-            var code = products[i];
-            if (!string.IsNullOrWhiteSpace(code))
+            var slots = (await session.FindByFrameOrderedAsync(frameId, ct)).ToList();
+            if (slots.Count == 0 || products.Count == 0)
             {
-                slot.MaterialId = code;
-                slot.SlotState = SlotStates.Occupied;
-                slot.BindSource = "RCS_QR";
-                slot.BindTime = now;
-                corrected++;
+                await session.RollbackAsync(ct);
+                return InventoryCorrectionResult.Empty();
+            }
+
+            var (startLayer, startPos) = DecodeIdentifyHole(posStart);
+            var startIdx = slots.FindIndex(s => s.LayerNo == startLayer && s.PosInLayer == startPos);
+            if (startIdx < 0)
+            {
+                _logger.LogWarning("盘点校正料架 {Frame} 起始孔位 {Hole}（层{L}位{P}）无对应槽位，跳过",
+                    frameId, posStart, startLayer, startPos);
+                await session.RollbackAsync(ct);
+                return InventoryCorrectionResult.Empty();
+            }
+
+            var now = DateTime.Now;
+            var updated = 0;
+            var unchanged = 0;
+            var conflicts = 0;
+            var notFound = 0;
+            var concurrency = 0;
+            var anomalousReserved = 0;
+            var conflictSlots = new List<SlotMutationSnapshot>();
+
+            for (var i = 0; i < products.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var idx = startIdx + i;
+                if (idx >= slots.Count)
+                {
+                    notFound++;
+                    continue;
+                }
+
+                var slot = slots[idx];
+                var code = products[i];
+                var hasCode = !string.IsNullOrWhiteSpace(code);
+                var targetState = hasCode ? SlotStates.Occupied : SlotStates.Empty;
+                var targetMaterial = hasCode ? code.Trim() : null;
+
+                if (slot.SlotState == SlotStates.Reserved)
+                {
+                    conflicts++;
+                    if (IsAnomalousReservation(slot)) anomalousReserved++;
+                    if (conflictSlots.Count < conflictSlotsCap)
+                        conflictSlots.Add(ToConflictSnapshot(slot));
+                    continue;
+                }
+
+                if (MatchesInventoryTarget(slot, targetState, targetMaterial))
+                {
+                    unchanged++;
+                    continue;
+                }
+
+                var extras = hasCode
+                    ? new InventorySlotWriteExtras("RCS_QR", now, now, ApplyBindFields: true)
+                    : new InventorySlotWriteExtras(LastVerifyTime: now, ApplyBindFields: false);
+
+                var attempt = await session.TrySetExternalSlotAsync(
+                    frameId, slot.SlotNo, targetState, targetMaterial,
+                    clearRemarkAndBindTime: false, now, ct, extras);
+
+                if (attempt.AffectedRows == 1)
+                {
+                    updated++;
+                    continue;
+                }
+
+                // affected=0：只读分类，禁止无条件写。
+                var current = attempt.Current;
+                if (current is null)
+                {
+                    notFound++;
+                    continue;
+                }
+
+                if (current.SlotState == SlotStates.Reserved)
+                {
+                    conflicts++;
+                    if (IsAnomalousReservation(current)) anomalousReserved++;
+                    if (conflictSlots.Count < conflictSlotsCap)
+                        conflictSlots.Add(ToConflictSnapshot(current));
+                    continue;
+                }
+
+                if (MatchesInventoryTarget(current, targetState, targetMaterial))
+                {
+                    unchanged++;
+                    continue;
+                }
+
+                concurrency++;
+            }
+
+            InventoryCorrectionResult result;
+            if (updated > 0)
+            {
+                await session.CommitAsync(ct);
             }
             else
             {
-                // 扫得空码 → 该槽位清空（盘点发现空位）
-                slot.MaterialId = null;
-                slot.SlotState = SlotStates.Empty;
+                await session.RollbackAsync(ct);
             }
-            slot.LastVerifyTime = now;
-            slot.UpdateTime = now;
+
+            var status = (conflicts > 0 || notFound > 0 || concurrency > 0)
+                ? InventoryCorrectionStatus.CompletedWithWarnings
+                : InventoryCorrectionStatus.Completed;
+
+            result = new InventoryCorrectionResult(
+                status,
+                RequestedCount: products.Count,
+                UpdatedCount: updated,
+                UnchangedCount: unchanged,
+                ReservationConflictCount: conflicts,
+                NotFoundCount: notFound,
+                ConflictSlots: conflictSlots,
+                ConcurrencyConflictCount: concurrency);
+
+            if (conflicts > 0)
+            {
+                var slotNos = string.Join(',', conflictSlots.Select(s => s.SlotNo));
+                _logger.LogWarning(
+                    "盘点跳过预记槽：料架 {Frame} 请求 {Req} 更新 {Upd} 冲突 {Conflict} 槽位[{Slots}]",
+                    frameId, result.RequestedCount, result.UpdatedCount, result.ReservationConflictCount, slotNos);
+            }
+
+            if (anomalousReserved > 0)
+            {
+                _logger.LogWarning(
+                    "盘点发现异常预记 {N} 个（REMARK/BIND_SOURCE 异常），均已跳过未覆盖：料架 {Frame}",
+                    anomalousReserved, frameId);
+            }
+
+            _logger.LogInformation(
+                "盘点校正料架 {Frame} 起始孔位 {Start}（层{L}位{P}）请求 {Req} → 更新 {Upd} 未变 {Unch} 冲突 {Conflict} 未找到 {Nf} 并发 {Cc}",
+                frameId, posStart, startLayer, startPos, result.RequestedCount,
+                result.UpdatedCount, result.UnchangedCount, result.ReservationConflictCount,
+                result.NotFoundCount, result.ConcurrencyConflictCount);
+
+            return result;
         }
-        // 整架打上本次盘点新鲜度（范围外槽位物料不变）
-        foreach (var s in slots)
+        catch (OperationCanceledException)
         {
-            s.LastVerifyTime = now;
-            s.UpdateTime = now;
+            try { await session.RollbackAsync(CancellationToken.None); } catch { /* ignore */ }
+            return new InventoryCorrectionResult(
+                InventoryCorrectionStatus.Cancelled, products.Count, 0, 0, 0, 0,
+                Array.Empty<SlotMutationSnapshot>(), "操作已取消");
         }
-        await db.SaveChangesAsync(ct);
-        _logger.LogInformation("盘点校正料架 {Frame} 起始孔位 {Start}（层{L}位{P}）数 {N} → 校正 {C} 个物料",
-            frameId, posStart, startLayer, startPos, products.Count, corrected);
-        return corrected;
+        catch (Exception ex)
+        {
+            try { await session.RollbackAsync(CancellationToken.None); } catch { /* ignore */ }
+            _logger.LogError(ex, "盘点校正料架 {Frame} 数据库异常，已整批回滚", frameId);
+            return new InventoryCorrectionResult(
+                InventoryCorrectionStatus.DatabaseError, products.Count, 0, 0, 0, 0,
+                Array.Empty<SlotMutationSnapshot>(), "槽位操作失败，请查看日志");
+        }
     }
+
+    private static bool MatchesInventoryTarget(SlotRow current, string targetState, string? materialId) =>
+        current.SlotState == targetState
+        && string.Equals(current.MaterialId, materialId, StringComparison.Ordinal);
+
+    /// <summary>冲突快照脱敏：不携带完整 taskId（REMARK）。</summary>
+    private static SlotMutationSnapshot ToConflictSnapshot(SlotRow s) =>
+        new(s.Id, s.FrameId, s.SlotNo, s.SlotState, s.MaterialId, Remark: null, s.BindSource, s.BindTime);
 
     /// <summary>identifyQR 孔位：三位数百位=面/层、后两位=层内位（101→1层1位）。&lt;100 兼容为第 1 面层内位。</summary>
     private static (int layer, int pos) DecodeIdentifyHole(int hole)

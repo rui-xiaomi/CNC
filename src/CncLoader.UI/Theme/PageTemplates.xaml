@@ -2084,6 +2084,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*" MinHeight="200"/>
             </Grid.RowDefinitions>
 
@@ -2157,8 +2158,27 @@
                 </Border>
             </UniformGrid>
 
+            <!-- ①b 启动对账状态条（全局调度门闩；与工位 Alarm / PLC 在线 / RCS 连接灯分离） -->
+            <Border Grid.Row="1" Style="{StaticResource DashPanel}" Margin="0,0,0,8" Padding="12,8"
+                    Background="{Binding ReconcileSoftBrushKey, Converter={StaticResource BrushConv}}"
+                    AutomationProperties.Name="启动对账状态"
+                    ToolTip="{Binding ReconcileDetailToolTip}">
+                <DockPanel LastChildFill="True">
+                    <Ellipse DockPanel.Dock="Left" Width="9" Height="9" Margin="0,0,10,0" VerticalAlignment="Center"
+                             Fill="{Binding ReconcileBrushKey, Converter={StaticResource BrushConv}}"/>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding ReconcileTitle}" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{Binding ReconcileBrushKey, Converter={StaticResource BrushConv}}"/>
+                        <TextBlock Text="{Binding ReconcileSubText}" Style="{StaticResource MutedText}" FontSize="11"
+                                   Margin="0,3,0,0" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                   MaxHeight="36"
+                                   ToolTip="{Binding ReconcileDetailToolTip}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
             <!-- ② 产线流：DashPanel + 选中青光 + 状态矢量图标 -->
-            <Border Grid.Row="1" Style="{StaticResource DashPanel}" Margin="0,0,0,8" Padding="12,8">
+            <Border Grid.Row="2" Style="{StaticResource DashPanel}" Margin="0,0,0,8" Padding="12,8">
                 <DockPanel>
                     <Border DockPanel.Dock="Left" BorderBrush="{StaticResource DashBorderBrush}" BorderThickness="0,0,1,0"
                             Padding="0,0,12,0" Margin="0,0,8,0" VerticalAlignment="Stretch">
@@ -2380,7 +2400,7 @@
             </Border>
 
             <!-- ③ 主区：左右共用行高——上段机台∥记录，下段机台∥告警 -->
-            <Grid Grid.Row="2">
+            <Grid Grid.Row="3">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="1.06*" MinWidth="300"/>
                     <ColumnDefinition Width="8"/>

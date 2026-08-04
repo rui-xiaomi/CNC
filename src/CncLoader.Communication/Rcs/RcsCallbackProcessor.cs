@@ -9,6 +9,7 @@ namespace CncLoader.Communication.Rcs;
 /// RCS 回调处理器实现：解析原始报文 → 落库(IN 报文流水) + 幂等去重 + 任务态推进 / 告警落库 + 派发内部事件。
 /// 只做短逻辑，长逻辑（跟踪/复核/账目）由订阅 <see cref="RcsCallbackNotifier"/> 事件的后续步骤处理。
 /// 所有 Handle* 都吞掉自身异常并总能返回应答报文，避免让 RCS 侧收到 5xx 而反复重推。
+/// 去重：in-flight + final seen；仅必要持久化明确成功后提交 final seen。
 /// </summary>
 public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
 {
@@ -22,12 +23,7 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
     private readonly IAlarmEventService _alarms;
     private readonly RcsCallbackNotifier _notifier;
     private readonly ILogger<RcsCallbackProcessor> _logger;
-
-    // 幂等去重（内存有界集合，防重推）：按 taskId+结果 / 告警三元组去重。
-    private readonly HashSet<string> _seen = new();
-    private readonly Queue<string> _seenOrder = new();
-    private readonly object _seenLock = new();
-    private const int SeenCapacity = 4000;
+    private readonly CallbackDeduplicationGate _dedupe = new();
 
     public RcsCallbackProcessor(
         IRcsMessageLog msgLog,
@@ -65,18 +61,34 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
 
             var state = RcsErrorCode.ToTaskState(errorCode);
             var dedupKey = $"push:{taskId}:{errorCode}";
-            if (MarkSeen(dedupKey))
-            {
+            var result = await _dedupe.ExecuteAsync(dedupKey, async token =>
                 await _store.UpdateStateAsync(taskId, state,
                     rcsStatus: state.ToLowerInvariant(),
-                    error: errorCode == RcsErrorCode.Success ? null : msg, ct);
-                _notifier.RaiseTaskStatus(new RcsTaskStatusEvent(taskId, errorCode, msg, state));
-                _logger.LogInformation("pushTaskStatus 任务 {TaskId} error_code={Code} → {State}", taskId, errorCode, state);
-            }
-            else
+                    error: errorCode == RcsErrorCode.Success ? null : msg, token), ct);
+
+            // final seen 仅在 UpdateStateAsync=true 后提交；false/异常不进 seen、不发成功事件。
+            switch (result.Outcome)
             {
-                _logger.LogDebug("pushTaskStatus 重复推送忽略：{Key}", dedupKey);
+                case CallbackDedupOutcome.Persisted:
+                    _notifier.RaiseTaskStatus(new RcsTaskStatusEvent(taskId, errorCode, msg, state));
+                    _logger.LogInformation("pushTaskStatus 任务 {TaskId} error_code={Code} → {State}",
+                        taskId, errorCode, state);
+                    break;
+                case CallbackDedupOutcome.Duplicate:
+                    _logger.LogDebug("pushTaskStatus 重复推送忽略：{Key}", SanitizeKey(dedupKey));
+                    break;
+                case CallbackDedupOutcome.Failed:
+                    _logger.LogWarning(
+                        "pushTaskStatus 持久化失败：type=push key={Key} stage=UpdateStateAsync error={Error}",
+                        SanitizeKey(dedupKey), result.ErrorMessage);
+                    await TryLogInAsync(RcsCallbackInterfaces.PushTaskStatus, RcsCallbackInterfaces.PushTaskStatusPath,
+                        taskId, rawBody, result.ErrorMessage ?? "UpdateStateAsync failed", ct);
+                    break;
+                case CallbackDedupOutcome.Cancelled:
+                    _logger.LogDebug("pushTaskStatus 处理取消：key={Key}", SanitizeKey(dedupKey));
+                    break;
             }
+
             return ack;
         }
         catch (Exception ex)
@@ -112,20 +124,34 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
 
             var state = RcsErrorCode.ToTaskState(errorCode);
             var dedupKey = $"scan:{taskId}:{errorCode}";
-            if (MarkSeen(dedupKey))
-            {
+            var result = await _dedupe.ExecuteAsync(dedupKey, async token =>
                 await _store.UpdateStateAsync(taskId, state,
                     rcsStatus: state.ToLowerInvariant(),
-                    error: errorCode == RcsErrorCode.Success ? null : msg, ct);
-                // 盘点校正（按 code+顺序全量落账）在步骤⑥订阅本事件实现；本步骤只落库+派发。
-                _notifier.RaiseScanResult(new RcsScanResultEvent(taskId, errorCode, code, products, msg));
-                _logger.LogInformation("scanTaskStatus 任务 {TaskId} 料架 {Code} 扫得 {N} 个二维码 → {State}",
-                    taskId, code, products.Count, state);
-            }
-            else
+                    error: errorCode == RcsErrorCode.Success ? null : msg, token), ct);
+
+            switch (result.Outcome)
             {
-                _logger.LogDebug("scanTaskStatus 重复推送忽略：{Key}", dedupKey);
+                case CallbackDedupOutcome.Persisted:
+                    // 盘点校正（按 code+顺序全量落账）在步骤⑥订阅本事件实现；本步骤只落库+派发。
+                    _notifier.RaiseScanResult(new RcsScanResultEvent(taskId, errorCode, code, products, msg));
+                    _logger.LogInformation("scanTaskStatus 任务 {TaskId} 料架 {Code} 扫得 {N} 个二维码 → {State}",
+                        taskId, code, products.Count, state);
+                    break;
+                case CallbackDedupOutcome.Duplicate:
+                    _logger.LogDebug("scanTaskStatus 重复推送忽略：{Key}", SanitizeKey(dedupKey));
+                    break;
+                case CallbackDedupOutcome.Failed:
+                    _logger.LogWarning(
+                        "scanTaskStatus 持久化失败：type=scan key={Key} stage=UpdateStateAsync error={Error}",
+                        SanitizeKey(dedupKey), result.ErrorMessage);
+                    await TryLogInAsync(RcsCallbackInterfaces.ScanTaskStatus, RcsCallbackInterfaces.ScanTaskStatusPath,
+                        taskId, rawBody, result.ErrorMessage ?? "UpdateStateAsync failed", ct);
+                    break;
+                case CallbackDedupOutcome.Cancelled:
+                    _logger.LogDebug("scanTaskStatus 处理取消：key={Key}", SanitizeKey(dedupKey));
+                    break;
             }
+
             return ack;
         }
         catch (Exception ex)
@@ -164,17 +190,33 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
 
                 // 去重键 = robotCode + beginTime + warnContent（同一告警 10s/次重推）。
                 var dedupKey = $"warn:{robotCode}|{beginTime}|{warnContent}";
-                if (!MarkSeen(dedupKey))
+                var result = await _dedupe.ExecuteAsync(dedupKey, async token =>
                 {
-                    _logger.LogDebug("warnCallback 重复告警忽略：{Key}", dedupKey);
-                    continue;
-                }
+                    await _alarms.RaiseRcsWarnAsync(robotCode, beginTime, warnContent, taskCode, token);
+                    return true;
+                }, ct);
 
-                await _alarms.RaiseRcsWarnAsync(robotCode, beginTime, warnContent, taskCode, ct);
-                _notifier.RaiseWarn(new RcsWarnEvent(robotCode, beginTime, warnContent, taskCode));
-                _logger.LogWarning("warnCallback 严重告警 车{Robot} {Content}{Task}",
-                    robotCode, warnContent, string.IsNullOrWhiteSpace(taskCode) ? "" : $"（任务 {taskCode}）");
+                switch (result.Outcome)
+                {
+                    case CallbackDedupOutcome.Persisted:
+                        _notifier.RaiseWarn(new RcsWarnEvent(robotCode, beginTime, warnContent, taskCode));
+                        _logger.LogWarning("warnCallback 严重告警 车{Robot} {Content}{Task}",
+                            robotCode, warnContent, string.IsNullOrWhiteSpace(taskCode) ? "" : $"（任务 {taskCode}）");
+                        break;
+                    case CallbackDedupOutcome.Duplicate:
+                        _logger.LogDebug("warnCallback 重复告警忽略：{Key}", SanitizeKey(dedupKey));
+                        break;
+                    case CallbackDedupOutcome.Failed:
+                        _logger.LogWarning(
+                            "warnCallback 持久化失败：type=warn key={Key} stage=RaiseRcsWarnAsync error={Error}",
+                            SanitizeKey(dedupKey), result.ErrorMessage);
+                        break;
+                    case CallbackDedupOutcome.Cancelled:
+                        _logger.LogDebug("warnCallback 处理取消：key={Key}", SanitizeKey(dedupKey));
+                        break;
+                }
             }
+
             return ack;
         }
         catch (Exception ex)
@@ -189,31 +231,7 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
     private static string BuildAck(string? taskId)
         => JsonSerializer.Serialize(new { taskId = taskId ?? "" }, AckJsonOpt);
 
-    /// <summary>返回 true 表示首次出现（应处理）；false 表示重复（应跳过）。</summary>
-    private bool MarkSeen(string key)
-    {
-        lock (_seenLock)
-        {
-            if (!_seen.Add(key)) return false;
-            _seenOrder.Enqueue(key);
-            while (_seenOrder.Count > SeenCapacity)
-                _seen.Remove(_seenOrder.Dequeue());
-            return true;
-        }
-    }
-
-    public void ForgetTask(string taskId)
-    {
-        if (string.IsNullOrWhiteSpace(taskId)) return;
-        var pushPrefix = $"push:{taskId}:";
-        var scanPrefix = $"scan:{taskId}:";
-        lock (_seenLock)
-        {
-            var remove = _seen.Where(k => k.StartsWith(pushPrefix, StringComparison.Ordinal)
-                                          || k.StartsWith(scanPrefix, StringComparison.Ordinal)).ToList();
-            foreach (var k in remove) _seen.Remove(k);
-        }
-    }
+    public void ForgetTask(string taskId) => _dedupe.ForgetTask(taskId);
 
     private async Task LogInAsync(string iface, string path, string? taskId, string reqBody, string ackBody, CancellationToken ct)
     {
@@ -283,4 +301,8 @@ public sealed class RcsCallbackProcessor : IRcsCallbackProcessor
 
     private static string Truncate(string? s)
         => s is null ? "" : (s.Length > 1000 ? s[..1000] : s);
+
+    /// <summary>脱敏去重键：截断过长内容，避免 warnContent 等完整敏感字段刷屏。</summary>
+    private static string SanitizeKey(string key)
+        => key.Length <= 120 ? key : key[..120] + "…";
 }

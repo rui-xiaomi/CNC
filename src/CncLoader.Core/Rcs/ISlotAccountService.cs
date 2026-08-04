@@ -42,15 +42,19 @@ public interface ISlotAccountService
     /// <summary>料架占用统计（total/occupied/reserved/empty），供水位监视器与 UI。</summary>
     Task<FrameOccupancy> GetOccupancyAsync(long frameId, CancellationToken ct = default);
 
-    /// <summary>人工校正：直接设置槽位物料码与状态（处理账实不符后人工闭环）。</summary>
-    Task SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default);
+    /// <summary>
+    /// 人工校正/清槽：条件更新槽位物料码与状态。
+    /// 遇 Reserved 返回 <see cref="SlotMutationStatus.ReservationConflict"/>，不得覆盖预记字段。
+    /// </summary>
+    Task<SlotMutationResult> SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default);
 
     /// <summary>物料反查：按物料码找所在料架+槽位（UI 高亮 + NG 处理定位）。</summary>
     Task<SlotLocation?> LocateMaterialAsync(string materialId, CancellationToken ct = default);
 
     /// <summary>盘点校正：posStart 为 identifyQR 孔位（三位数、百位=面/层，如 101=1层1位），
-    /// products 按下发孔位顺序映射到 LAYER_NO/POS_IN_LAYER 物理序；范围外槽位物料不变，整架 LAST_VERIFY_TIME=now。返回校正数。</summary>
-    Task<int> CorrectFromInventoryAsync(long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default);
+    /// products 按下发孔位顺序映射到 LAYER_NO/POS_IN_LAYER 物理序；范围外槽位物料不变，整架 LAST_VERIFY_TIME=now。
+    /// 返回 <see cref="InventoryCorrectionResult"/> 计数字段（D5）；Reserved 跳过为 GREEN。</summary>
+    Task<InventoryCorrectionResult> CorrectFromInventoryAsync(long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default);
 
     /// <summary>取料架全部槽位（按 SlotNo 顺序），供盘点/NG 处理/UI。</summary>
     Task<IReadOnlyList<SlotRecord>> GetSlotsAsync(long frameId, CancellationToken ct = default);

@@ -17,6 +17,8 @@ public interface IInventoryService
 }
 
 /// <summary>盘点结果事件。</summary>
+/// <param name="CorrectedCount">兼容字段：等同 <see cref="Correction"/>.<see cref="InventoryCorrectionResult.UpdatedCount"/>（若有）。</param>
+/// <param name="Correction">批量校正计数骨架；旧路径可为 null。</param>
 public sealed record InventoryResultEvent(
     long FrameId,
     string TaskId,
@@ -24,7 +26,8 @@ public sealed record InventoryResultEvent(
     string? Code,           // 被扫料架编号（scanTaskStatus.code，与 taskId 双重校验）
     IReadOnlyList<string> Products,
     int CorrectedCount,
-    string? Error);
+    string? Error,
+    InventoryCorrectionResult? Correction = null);
 
 /// <summary>进行中的盘点任务信息。</summary>
 public sealed record InventoryTaskInfo(long FrameId, string TaskId, int PosStart, int Count, DateTime StartedAt);

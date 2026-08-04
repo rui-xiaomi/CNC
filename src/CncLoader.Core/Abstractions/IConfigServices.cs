@@ -71,6 +71,11 @@ public interface IEquipmentConfigService
     Task<long?> GetFrameBindingByRoleAsync(long equipmentId, FrameRole role, CancellationToken ct = default);
     /// <summary>求同线下一道工序（CraftworkNode 次大者）的全部启用机台 ID；本机为末道工序或无下一工序则返回空。供 OK 件工序间流转路由。</summary>
     Task<IReadOnlyList<long>> GetNextProcessEquipmentsAsync(long equipmentId, CancellationToken ct = default);
+    /// <summary>
+    /// 同线是否配置了后续工序节点（忽略 STATE）。
+    /// 用于区分「真末道 → 可下料架/命名区」与「有后续但全部不可用 → 拒发、不回退命名区」。
+    /// </summary>
+    Task<bool> HasSubsequentProcessAsync(long equipmentId, CancellationToken ct = default);
     /// <summary>反查机台所属线体（机台→工序→线体）。找不到返回 null。</summary>
     Task<WorkLineRef?> GetWorkLineByEquipmentAsync(long equipmentId, CancellationToken ct = default);
     /// <summary>设置机台上/下料架绑定（null 表示清除该角色）。</summary>

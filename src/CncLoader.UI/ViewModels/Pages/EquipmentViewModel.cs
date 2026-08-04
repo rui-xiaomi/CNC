@@ -71,7 +71,7 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
         foreach (var row in _positionRows.Values)
         {
             var live = _store.GetPosition(_selectedEquipmentId, row.Id);
-            row.Update(live?.State ?? PositionState.Offline);
+            row.Update(live?.State ?? PositionState.Offline, live?.StatusDetail);
         }
     }
 
@@ -123,7 +123,8 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
         foreach (var p in positions)
         {
             var live = _store.GetPosition(equipmentId, p.Id);
-            var row = new EquipmentPositionRowVm(p.Id, p.Name, p.Code, live?.State ?? PositionState.Offline);
+            var row = new EquipmentPositionRowVm(p.Id, p.Name, p.Code,
+                live?.State ?? PositionState.Offline, live?.StatusDetail);
             _positionRows[p.Id] = row;
             Positions.Add(row);
         }
@@ -266,12 +267,13 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
 /// <summary>机台详情加工位行（实时状态来自 ISignalStateStore）。</summary>
 public sealed partial class EquipmentPositionRowVm : ObservableObject
 {
-    public EquipmentPositionRowVm(long id, string name, string code, PositionState state)
+    public EquipmentPositionRowVm(long id, string name, string code, PositionState state, string? statusDetail)
     {
         Id = id;
         Name = name;
         Code = code;
         _state = state;
+        _statusDetail = statusDetail;
     }
 
     public long Id { get; }
@@ -283,7 +285,11 @@ public sealed partial class EquipmentPositionRowVm : ObservableObject
     [NotifyPropertyChangedFor(nameof(StateBadge))]
     private PositionState _state;
 
-    public string StateDisplay => PositionStateNames.ToDisplay(State);
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StateDisplay))]
+    private string? _statusDetail;
+
+    public string StateDisplay => StatusDetail ?? PositionStateNames.ToDisplay(State);
     public string StateBadge => State switch
     {
         PositionState.Offline => "offline",
@@ -295,5 +301,9 @@ public sealed partial class EquipmentPositionRowVm : ObservableObject
         _ => "idle"
     };
 
-    public void Update(PositionState state) => State = state;
+    public void Update(PositionState state, string? statusDetail)
+    {
+        State = state;
+        StatusDetail = statusDetail;
+    }
 }

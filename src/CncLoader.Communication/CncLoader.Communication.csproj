@@ -20,4 +20,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="CncLoader.Core.Tests" />
+  </ItemGroup>
+
 </Project>

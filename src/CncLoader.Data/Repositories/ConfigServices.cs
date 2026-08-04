@@ -228,7 +228,13 @@ public sealed class CraftworkService : ICraftworkService
 public sealed class EquipmentConfigService : IEquipmentConfigService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
-    public EquipmentConfigService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
+    private readonly IEquipmentRoutingStore _routing;
+
+    public EquipmentConfigService(IDbContextFactory<CncDbContext> factory, IEquipmentRoutingStore routing)
+    {
+        _factory = factory;
+        _routing = routing;
+    }
 
     public async Task<IReadOnlyList<NamedOption>> GetCraftworkOptionsAsync(CancellationToken ct = default)
     {
@@ -269,13 +275,13 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
 
     public async Task<WorkLineRef?> GetWorkLineByEquipmentAsync(long equipmentId, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var eq = await db.Equipments.AsNoTracking().FirstOrDefaultAsync(e => e.Id == equipmentId, ct);
-        if (eq is null) return null;
-        var craft = await db.Craftworks.AsNoTracking().FirstOrDefaultAsync(c => c.Id == eq.CraftworkId, ct);
-        if (craft is null) return null;
-        var line = await db.WorkLines.AsNoTracking().FirstOrDefaultAsync(l => l.Id == craft.WorkLineId, ct);
-        if (line is null) return null;
+        // 调度反查：Equipment→Craft→WorkLine 三层均须 STATE=="0"；Service 自身 fail-closed（不信任 store 预过滤）。
+        var eq = await _routing.FindEquipmentAsync(equipmentId, ct);
+        if (eq is null || !ConfigActivity.IsActive(eq.State)) return null;
+        var craft = await _routing.FindCraftworkAsync(eq.CraftworkId, ct);
+        if (craft is null || !ConfigActivity.IsActive(craft.State)) return null;
+        var line = await _routing.FindWorkLineAsync(craft.WorkLineId, ct);
+        if (line is null || !ConfigActivity.IsActive(line.State)) return null;
         return new WorkLineRef(line.Id, line.WorkLineCode);
     }
 
@@ -413,9 +419,9 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
 
     public async Task<EquipmentFrameBindingIds> GetFrameBindingIdsAsync(long equipmentId, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var binds = await db.FrameBinds.AsNoTracking()
-            .Where(b => b.EquipmentId == equipmentId && b.State == ConfigFlags.Active).ToListAsync(ct);
+        var binds = (await _routing.FindFrameBindsByEquipmentAsync(equipmentId, ct))
+            .Where(b => b.State == ConfigFlags.Active)
+            .ToList();
         return new EquipmentFrameBindingIds(
             binds.FirstOrDefault(b => b.FrameRole == "0")?.FrameId,
             binds.FirstOrDefault(b => b.FrameRole == "1")?.FrameId);
@@ -434,34 +440,44 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
 
     public async Task<long?> GetFrameBindingByRoleAsync(long equipmentId, FrameRole role, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
         var roleFlag = ((int)role).ToString();
-        var bind = await db.FrameBinds.AsNoTracking()
-            .FirstOrDefaultAsync(b => b.EquipmentId == equipmentId && b.FrameRole == roleFlag && b.State == ConfigFlags.Active, ct);
+        var bind = (await _routing.FindFrameBindsByEquipmentAsync(equipmentId, ct))
+            .FirstOrDefault(b => b.FrameRole == roleFlag && b.State == ConfigFlags.Active);
         return bind?.FrameId;
     }
 
     public async Task<IReadOnlyList<long>> GetNextProcessEquipmentsAsync(long equipmentId, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var eq = await db.Equipments.AsNoTracking().FirstOrDefaultAsync(e => e.Id == equipmentId, ct);
-        if (eq is null) return Array.Empty<long>();
-        var craft = await db.Craftworks.AsNoTracking().FirstOrDefaultAsync(c => c.Id == eq.CraftworkId && c.State == ConfigFlags.Active, ct);
-        if (craft is null) return Array.Empty<long>();
+        // 下一工序候选：源 Equipment/Craft、父 WorkLine、下游 Craft/Equipment 均须活动；关系缺失 fail-closed。
+        var eq = await _routing.FindEquipmentAsync(equipmentId, ct);
+        if (eq is null || !ConfigActivity.IsActive(eq.State)) return Array.Empty<long>();
+        var craft = await _routing.FindCraftworkAsync(eq.CraftworkId, ct);
+        if (craft is null || !ConfigActivity.IsActive(craft.State)) return Array.Empty<long>();
+        var line = await _routing.FindWorkLineAsync(craft.WorkLineId, ct);
+        if (line is null || !ConfigActivity.IsActive(line.State)) return Array.Empty<long>();
         var currentNode = craft.CraftworkNode ?? 0;
 
-        // 同线、启用、节点 > 当前节点的工序中，取节点最小者作为"下一道工序"
-        var laterCrafts = await db.Craftworks.AsNoTracking()
-            .Where(c => c.WorkLineId == craft.WorkLineId && c.State == ConfigFlags.Active && (c.CraftworkNode ?? 0) > currentNode)
-            .ToListAsync(ct);
+        var laterCrafts = (await _routing.FindCraftworksByWorkLineAsync(craft.WorkLineId, ct))
+            .Where(c => ConfigActivity.IsActive(c.State) && (c.CraftworkNode ?? 0) > currentNode)
+            .ToList();
         if (laterCrafts.Count == 0) return Array.Empty<long>();
         var nextNode = laterCrafts.Min(c => c.CraftworkNode ?? 0);
         var nextCraftIds = laterCrafts.Where(c => (c.CraftworkNode ?? 0) == nextNode).Select(c => c.Id).ToHashSet();
 
-        var eqs = await db.Equipments.AsNoTracking()
-            .Where(e => e.State == ConfigFlags.Active && nextCraftIds.Contains(e.CraftworkId))
-            .Select(e => e.Id).ToListAsync(ct);
-        return eqs;
+        var eqs = await _routing.FindEquipmentsByCraftworkIdsAsync(nextCraftIds, ct);
+        return eqs.Where(e => ConfigActivity.IsActive(e.State)).Select(e => e.Id).ToList();
+    }
+
+    public async Task<bool> HasSubsequentProcessAsync(long equipmentId, CancellationToken ct = default)
+    {
+        // 忽略 STATE：只要同线存在更大 CraftworkNode，即视为“配置了后续工序”。
+        var eq = await _routing.FindEquipmentAsync(equipmentId, ct);
+        if (eq is null) return false;
+        var craft = await _routing.FindCraftworkAsync(eq.CraftworkId, ct);
+        if (craft is null) return false;
+        var currentNode = craft.CraftworkNode ?? 0;
+        var crafts = await _routing.FindCraftworksByWorkLineAsync(craft.WorkLineId, ct);
+        return crafts.Any(c => (c.CraftworkNode ?? 0) > currentNode);
     }
 
     /// <summary>FRAME_ROLE 字符串("0"/"1"/"2"/"3") → FrameRole 枚举。非法值返回 false。</summary>
@@ -534,7 +550,13 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
 public sealed class FrameService : IFrameService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
-    public FrameService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
+    private readonly IFrameStructureStore _structure;
+
+    public FrameService(IDbContextFactory<CncDbContext> factory, IFrameStructureStore structure)
+    {
+        _factory = factory;
+        _structure = structure;
+    }
 
     public async Task<IReadOnlyList<FrameListItem>> GetAllAsync(CancellationToken ct = default)
     {
@@ -693,51 +715,33 @@ public sealed class FrameService : IFrameService
         var layers = Math.Max(1, model.LayerTotal);
         var perLayer = Math.Max(1, model.SlotsPerLayer);
 
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.Id == model.Id, ct);
-        if (frame is null) throw new InvalidOperationException($"料架 {model.Id} 不存在");
+        var current = await _structure.FindAsync(model.Id, ct)
+            ?? throw new InvalidOperationException($"料架 {model.Id} 不存在");
 
-        frame.FrameName = model.Name;
-        frame.FrameCode = string.IsNullOrWhiteSpace(model.Code) ? model.IdentifyCode : model.Code;
-        frame.FrameIdentifyCode = model.IdentifyCode;
-        frame.Author = author;
-        frame.UpdateTime = DateTime.Now;
-
-        var layoutChanged = frame.LayerTotal != layers || frame.SlotsPerLayer != perLayer;
+        var layoutChanged = current.LayerTotal != layers || current.SlotsPerLayer != perLayer;
         if (layoutChanged)
         {
             // 改层数/每层槽数 → 重建空槽：先确认无占用/预记/锁定（非空）槽位，否则拒绝（避免丢账）
-            var nonEmpty = await db.FrameSlots.CountAsync(s => s.FrameId == model.Id && s.SlotState != "0", ct);
+            var nonEmpty = await _structure.CountNonEmptySlotsAsync(model.Id, ct);
             if (nonEmpty > 0)
                 throw new InvalidOperationException($"料架仍有 {nonEmpty} 个占用/预记/锁定槽位，请先清空再改层数或每层槽数。");
-
-            var old = await db.FrameSlots.Where(s => s.FrameId == model.Id).ToListAsync(ct);
-            db.FrameSlots.RemoveRange(old);
-            var total = layers * perLayer;
-            for (var slotNo = 1; slotNo <= total; slotNo++)
-            {
-                db.FrameSlots.Add(new FrameSlot
-                {
-                    FrameId = model.Id, SlotNo = slotNo,
-                    LayerNo = (slotNo - 1) / perLayer + 1,
-                    PosInLayer = (slotNo - 1) % perLayer + 1,
-                    SlotState = "0", UpdateTime = DateTime.Now
-                });
-            }
-            frame.LayerTotal = layers;
-            frame.SlotsPerLayer = perLayer;
-            frame.SlotTotal = total;
         }
-        await db.SaveChangesAsync(ct);
+
+        await _structure.ApplyUpdateAsync(new FrameStructureUpdate(
+            model.Id,
+            model.Name,
+            string.IsNullOrWhiteSpace(model.Code) ? model.IdentifyCode : model.Code,
+            model.IdentifyCode,
+            author,
+            layers,
+            perLayer,
+            RebuildEmptySlots: layoutChanged), ct);
     }
 
     public async Task<DeleteCheckResult> CheckDeleteFrameAsync(long id, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var binds = await db.FrameBinds.AsNoTracking()
-            .CountAsync(b => b.FrameId == id && b.State == ConfigFlags.Active, ct);
-        var occupied = await db.FrameSlots.AsNoTracking()
-            .CountAsync(s => s.FrameId == id && s.SlotState != "0", ct);
+        var binds = await _structure.CountActiveBindsAsync(id, ct);
+        var occupied = await _structure.CountNonEmptySlotsAsync(id, ct);
         if (binds > 0)
             return new DeleteCheckResult(false, binds, $"该料架已被 {binds} 台机台绑定，请先在绑定关系里解绑再删除。");
         if (occupied > 0)
@@ -749,13 +753,6 @@ public sealed class FrameService : IFrameService
     {
         var check = await CheckDeleteFrameAsync(id, ct);
         if (!check.CanDelete) throw new InvalidOperationException(check.Message);
-
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.Id == id, ct);
-        if (frame is null) return;
-        frame.State = "1"; // 软删
-        frame.Author = author;
-        frame.UpdateTime = DateTime.Now;
-        await db.SaveChangesAsync(ct);
+        await _structure.SoftDeleteAsync(id, author, ct);
     }
 }

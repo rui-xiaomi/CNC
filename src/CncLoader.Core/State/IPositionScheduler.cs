@@ -11,14 +11,26 @@ public interface IPositionScheduler
     /// <summary>对账是否完成（完成后才开始自动派工）。</summary>
     bool IsReconciled { get; }
 
+    /// <summary>启动对账生命周期状态。</summary>
+    ReconciliationState ReconciliationState { get; }
+
+    /// <summary>最近一次对账失败原因（成功后清空；取消不写入）。</summary>
+    string? ReconciliationFailureReason { get; }
+
     /// <summary>
     /// 是否暂停新自动上料/下料 RCS 派工（仅当前进程，默认 false）。
     /// 开启后不产生、不下发新的自动上下料任务；已下发任务的回调/轮询/PLC 复核/收口不受影响。
     /// </summary>
     bool IsAutoDispatchPaused { get; }
 
-    /// <summary>对账完成时触发（UI 可订阅以刷新看板/提示）。</summary>
+    /// <summary>对账完成时触发（UI 可订阅以刷新看板/提示）；仅首次成功开闸一次。</summary>
     event EventHandler? Reconciled;
+
+    /// <summary>
+    /// 启动对账状态变化（状态或失败原因变化时触发；相同快照不重复）。
+    /// 可能在后台线程触发，订阅方须自行 marshal 到 UI 线程。
+    /// </summary>
+    event EventHandler<ReconciliationSnapshot>? ReconciliationStateChanged;
 
     /// <summary>
     /// 设置「仅手动测试 / 暂停自动派工」。线程安全；开关变更写日志。

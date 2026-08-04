@@ -1,18 +1,17 @@
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Signals;
-using Microsoft.EntityFrameworkCore;
 
 namespace CncLoader.Data.Repositories;
 
 /// <summary>
 /// 从 MAS_AUTO_PLC_POINT 读取点位定义并投影为领域 <see cref="PlcPointDefinition"/>。
-/// 使用 DbContext 工厂创建短生命周期上下文，可被单例轮询中枢安全调用。
+/// 经 <see cref="IPlcPointRoutingStore"/> 短读；仅投影 STATE="0" 活动点位。
 /// </summary>
 public sealed class PlcPointSource : IPlcPointSource
 {
-    private readonly IDbContextFactory<CncDbContext> _factory;
+    private readonly IPlcPointRoutingStore _routing;
 
-    public PlcPointSource(IDbContextFactory<CncDbContext> factory) => _factory = factory;
+    public PlcPointSource(IPlcPointRoutingStore routing) => _routing = routing;
 
     public Task<IReadOnlyList<PlcPointDefinition>> GetAllAsync(CancellationToken ct = default)
         => QueryAsync(null, null, ct);
@@ -25,15 +24,11 @@ public sealed class PlcPointSource : IPlcPointSource
 
     private async Task<IReadOnlyList<PlcPointDefinition>> QueryAsync(long? plcId, long? equipmentId, CancellationToken ct)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var query = db.PlcPoints.AsNoTracking().Where(p => p.State == "0");
-        if (plcId.HasValue) query = query.Where(p => p.PlcId == plcId.Value);
-        if (equipmentId.HasValue) query = query.Where(p => p.EquipmentId == equipmentId.Value);
-
-        var rows = await query.ToListAsync(ct);
-        var result = new List<PlcPointDefinition>(rows.Count);
+        var rows = await _routing.FindAsync(plcId, equipmentId, ct);
+        var result = new List<PlcPointDefinition>();
         foreach (var p in rows)
         {
+            if (p.State != "0") continue; // 行为保持：仅活动点位
             if (!SignalKeys.TryParse(p.SignalKey, out var key))
                 continue; // 未知信号语义跳过
             result.Add(new PlcPointDefinition

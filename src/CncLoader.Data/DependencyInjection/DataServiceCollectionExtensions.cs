@@ -24,6 +24,7 @@ public static class DataServiceCollectionExtensions
             options.UseMySql(connFactory.BuildConnectionString(), serverVersion);
         });
 
+        services.AddSingleton<IPlcPointRoutingStore, PlcPointRoutingStore>();
         services.AddSingleton<IPlcPointSource, PlcPointSource>();
         services.AddSingleton<IDataHealthProbe, DataHealthProbe>();
 
@@ -34,7 +35,11 @@ public static class DataServiceCollectionExtensions
         // Phase 3 配置管理：线体/工序/机台/料架
         services.AddSingleton<IWorkLineService, WorkLineService>();
         services.AddSingleton<ICraftworkService, CraftworkService>();
+        services.AddSingleton<IEquipmentRoutingStore, EquipmentRoutingStore>();
         services.AddSingleton<IEquipmentConfigService, EquipmentConfigService>();
+        services.AddSingleton<IRoutingAvailabilityValidator, RoutingAvailabilityValidator>();
+        services.AddSingleton<IManagedDispatchRouteResolver, ManagedDispatchRouteResolver>();
+        services.AddSingleton<IFrameStructureStore, FrameStructureStore>();
         services.AddSingleton<IFrameService, FrameService>();
 
         services.AddSingleton<IPlcCatalogService>(sp => new PlcCatalogService(
@@ -44,10 +49,12 @@ public static class DataServiceCollectionExtensions
         // Phase 4 RCS 对接：报文流水 / 任务落库 / 位置映射
         services.AddSingleton<IRcsMessageLog, RcsMessageLog>();
         services.AddSingleton<IRcsTaskStore, RcsTaskStore>();
+        services.AddSingleton<ILocationMapRoutingStore, LocationMapRoutingStore>();
         services.AddSingleton<ILocationMapService, LocationMapService>();
         services.AddSingleton<IRcsConnectionConfigService, RcsConnectionConfigService>();
 
         // Phase 4 步骤⑥a：槽位账目（预记/落账/回滚 + 同架并发互斥 + 人工校正/反查）
+        services.AddSingleton<ISlotAccountStore, SlotAccountStore>();
         services.AddSingleton<ISlotAccountService, SlotAccountService>();
 
         // Phase 4 步骤⑦：加工记录（WORK_RECORD 关联任务/工件/加工位/耗时）

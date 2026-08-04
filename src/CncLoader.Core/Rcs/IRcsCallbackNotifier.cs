@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace CncLoader.Core.Rcs;
 
 /// <summary>
@@ -20,11 +22,70 @@ public interface IRcsCallbackNotifier
 /// <summary>回调事件总线的默认实现（单例；处理器调用 Raise*，订阅方监听事件）。</summary>
 public sealed class RcsCallbackNotifier : IRcsCallbackNotifier
 {
+    private readonly ILogger<RcsCallbackNotifier>? _logger;
+
+    public RcsCallbackNotifier(ILogger<RcsCallbackNotifier>? logger = null)
+    {
+        _logger = logger;
+    }
+
     public event EventHandler<RcsTaskStatusEvent>? TaskStatusReceived;
     public event EventHandler<RcsScanResultEvent>? ScanResultReceived;
     public event EventHandler<RcsWarnEvent>? WarnReceived;
 
-    public void RaiseTaskStatus(RcsTaskStatusEvent e) => TaskStatusReceived?.Invoke(this, e);
-    public void RaiseScanResult(RcsScanResultEvent e) => ScanResultReceived?.Invoke(this, e);
-    public void RaiseWarn(RcsWarnEvent e) => WarnReceived?.Invoke(this, e);
+    public void RaiseTaskStatus(RcsTaskStatusEvent e)
+        => InvokeHandlersSafely(
+            TaskStatusReceived,
+            e,
+            string.Equals(e.Source, "poll", StringComparison.OrdinalIgnoreCase) ? "poll" : "push",
+            SanitizeId(e.TaskId));
+
+    public void RaiseScanResult(RcsScanResultEvent e)
+        => InvokeHandlersSafely(ScanResultReceived, e, "scan", SanitizeId(e.TaskId));
+
+    public void RaiseWarn(RcsWarnEvent e)
+        => InvokeHandlersSafely(WarnReceived, e, "warn", SanitizeWarnSubject(e.RobotCode, e.BeginTime));
+
+    /// <summary>
+    /// 按注册顺序逐个调用订阅者；单订阅者异常记日志并继续，不向外抛、不阻断后续。
+    /// </summary>
+    private void InvokeHandlersSafely<TEvent>(
+        EventHandler<TEvent>? handlers,
+        TEvent args,
+        string callbackType,
+        string subject)
+    {
+        if (handlers is null) return;
+
+        foreach (var d in handlers.GetInvocationList())
+        {
+            try
+            {
+                ((EventHandler<TEvent>)d).Invoke(this, args);
+            }
+            catch (Exception ex)
+            {
+                var subscriber = d.Target?.GetType().Name ?? "static";
+                var method = d.Method.Name;
+                _logger?.LogWarning(ex,
+                    "回调事件订阅者异常：type={CallbackType} subject={Subject} subscriber={Subscriber}.{Method}",
+                    callbackType, subject, subscriber, method);
+            }
+        }
+    }
+
+    private static string SanitizeId(string? id)
+    {
+        if (string.IsNullOrEmpty(id)) return "";
+        return id.Length <= 64 ? id : id[..64] + "…";
+    }
+
+    private static string SanitizeWarnSubject(string? robotCode, string? beginTime)
+    {
+        var robot = SanitizeId(robotCode);
+        var begin = string.IsNullOrEmpty(beginTime)
+            ? ""
+            : (beginTime.Length <= 32 ? beginTime : beginTime[..32] + "…");
+        return $"{robot}|{begin}";
+    }
 }

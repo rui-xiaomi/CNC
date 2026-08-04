@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -11,10 +12,10 @@ using CncLoader.Core.State;
 namespace CncLoader.UI.ViewModels.Pages;
 
 /// <summary>
-/// 监控看板：KPI + 产线流 + 左机台色块卡 | 右上最近加工记录 + 右下实时告警。
+/// 监控看板：KPI + 启动对账状态条 + 产线流 + 左机台色块卡 | 右上最近加工记录 + 右下实时告警。
 /// 位置变化 200ms 节流原地更新；告警/产量/加工记录 2s 轮询 + 事件即时刷新。
 /// </summary>
-public sealed partial class DashboardViewModel : PageViewModelBase
+public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
 {
     private readonly ISignalStateStore _store;
     private readonly IWorkRecordService _workRecords;
@@ -23,6 +24,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     private readonly IFrameService _frames;
     private readonly IWorkLineService _workLines;
     private readonly ICurrentUser _user;
+    private readonly ReconciliationStatusBinder _reconcileBinder;
 
     private readonly Dictionary<long, MachineCardVm> _machines = new();
     private readonly Dictionary<(long Eq, long Pos), PositionCardVm> _positions = new();
@@ -30,6 +32,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     private readonly DispatcherTimer _throttle;
     private readonly DispatcherTimer _statsTimer;
     private volatile bool _positionsDirty;
+    private bool _disposed;
 
     public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms,
         IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user)
@@ -50,6 +53,11 @@ public sealed partial class DashboardViewModel : PageViewModelBase
         _alarms.AlarmRaised += OnAlarmRaised;
         _alarms.AlarmsChanged += (_, _) => _ = RefreshAlarmsAsync();
         _workLines.WorkLinesChanged += (_, _) => _ = RefreshFlowLineCodeAsync();
+
+        // 启动对账状态：构造时读快照；后台事件经 Dispatcher 刷新绑定属性（只展示，不驱动重试）。
+        _reconcileBinder = new ReconciliationStatusBinder(_scheduler, MarshalToUi);
+        SyncReconcileUiFromBinder();
+        _reconcileBinder.Changed += OnReconcileBinderChanged;
 
         _throttle = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(200) };
         _throttle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdateMachinesUi(); } };
@@ -89,6 +97,53 @@ public sealed partial class DashboardViewModel : PageViewModelBase
     [ObservableProperty] private long? _selectedFlowEquipmentId;
     /// <summary>产线流头线体编码（如 LINE01）。</summary>
     [ObservableProperty] private string _flowLineCode = "—";
+
+    /// <summary>启动对账主文案。</summary>
+    [ObservableProperty] private string _reconcileTitle = "启动对账未开始";
+    /// <summary>启动对账副文案（含锁定/原因；可截断）。</summary>
+    [ObservableProperty] private string _reconcileSubText = "自动派工尚未开启";
+    /// <summary>状态色资源键（Idle/Run/Warn/Ok），经 BrushConv 解析，不硬编码色值。</summary>
+    [ObservableProperty] private string _reconcileBrushKey = "IdleBrush";
+    /// <summary>软底色资源键。</summary>
+    [ObservableProperty] private string _reconcileSoftBrushKey = "SoftIdleBrush";
+    /// <summary>完整安全失败原因（ToolTip）；成功后为空。</summary>
+    [ObservableProperty] private string? _reconcileDetailToolTip;
+    /// <summary>对账是否已开闸（自动派工已开启）。</summary>
+    [ObservableProperty] private bool _isReconcileGateOpen;
+
+    private void OnReconcileBinderChanged(object? sender, EventArgs e) => SyncReconcileUiFromBinder();
+
+    private void SyncReconcileUiFromBinder()
+    {
+        ReconcileTitle = _reconcileBinder.Title;
+        ReconcileSubText = _reconcileBinder.SubText;
+        ReconcileBrushKey = _reconcileBinder.BrushKey;
+        ReconcileSoftBrushKey = _reconcileBinder.SoftBrushKey;
+        ReconcileDetailToolTip = _reconcileBinder.DetailToolTip;
+        IsReconcileGateOpen = _reconcileBinder.IsGateOpen;
+    }
+
+    private static void MarshalToUi(Action action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            action();
+        else
+            dispatcher.BeginInvoke(action);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _throttle.Stop();
+        _statsTimer.Stop();
+        _reconcileBinder.Changed -= OnReconcileBinderChanged;
+        _reconcileBinder.Dispose();
+        _store.PositionChanged -= OnStoreChanged;
+        _store.MachineChanged -= OnStoreChanged;
+        _alarms.AlarmRaised -= OnAlarmRaised;
+    }
 
     private async Task InitAsync()
     {
@@ -231,11 +286,12 @@ public sealed partial class DashboardViewModel : PageViewModelBase
                 seenPos.Add(key);
                 if (_positions.TryGetValue(key, out var pos))
                 {
-                    pos.Update(p.State, p.MaterialId, ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
+                    pos.Update(p.State, p.MaterialId, p.StatusDetail,
+                        ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
                 }
                 else
                 {
-                    var posVm = new PositionCardVm(p.EquipmentId, p.PositionId, p.State, p.MaterialId,
+                    var posVm = new PositionCardVm(p.EquipmentId, p.PositionId, p.State, p.MaterialId, p.StatusDetail,
                         ms?.PlcOnline ?? false, ms?.Safe, ms?.DoorOpen);
                     _positions[key] = posVm;
                     card.Positions.Add(posVm);
@@ -627,12 +683,14 @@ public sealed partial class MachineCardVm : ObservableObject
 public sealed partial class PositionCardVm : ObservableObject
 {
     public PositionCardVm(long equipmentId, long positionId, PositionState state, string? materialId,
+        string? statusDetail,
         bool plcOnline, bool? safe, bool? doorOpen)
     {
         EquipmentId = equipmentId;
         PositionId = positionId;
         _state = state;
         _materialId = materialId;
+        _statusDetail = statusDetail;
         _plcOnline = plcOnline;
         _safe = safe;
         _doorOpen = doorOpen;
@@ -653,6 +711,10 @@ public sealed partial class PositionCardVm : ObservableObject
     [NotifyPropertyChangedFor(nameof(MaterialText))]
     private string? _materialId;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StateDisplay))]
+    private string? _statusDetail;
+
     public bool IsAlarm => State == PositionState.Alarm;
     /// <summary>判定态（OK/NG/报警）用大号等宽展示——看板签名元素。</summary>
     public bool IsVerdict => State is PositionState.DoneOk or PositionState.DoneNg or PositionState.Alarm;
@@ -671,7 +733,7 @@ public sealed partial class PositionCardVm : ObservableObject
 
     public string EquipmentText => $"EQ{EquipmentId}";
     public string PositionText => $"工位{PositionId}";
-    public string StateDisplay => PositionStateNames.ToDisplay(State);
+    public string StateDisplay => StatusDetail ?? PositionStateNames.ToDisplay(State);
     public string StateBadge => State switch
     {
         PositionState.Offline => "offline",
@@ -684,10 +746,12 @@ public sealed partial class PositionCardVm : ObservableObject
         _ => "idle"
     };
 
-    public void Update(PositionState state, string? materialId, bool plcOnline, bool? safe, bool? doorOpen)
+    public void Update(PositionState state, string? materialId, string? statusDetail,
+        bool plcOnline, bool? safe, bool? doorOpen)
     {
         State = state;
         MaterialId = materialId;
+        StatusDetail = statusDetail;
         PlcOnline = plcOnline;
         Safe = safe;
         DoorOpen = doorOpen;

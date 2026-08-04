@@ -22,6 +22,8 @@ public sealed record PositionStatus
     public required PositionState State { get; init; }
     /// <summary>当前绑定物料码（调度器透出；无件时为 null）。</summary>
     public string? MaterialId { get; init; }
+    /// <summary>当前状态的补充说明；为空时 UI 使用标准状态名称。</summary>
+    public string? StatusDetail { get; init; }
     public DateTime UpdatedAtUtc { get; init; } = DateTime.UtcNow;
 }
 

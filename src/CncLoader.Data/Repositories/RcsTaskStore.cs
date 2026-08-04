@@ -55,12 +55,12 @@ public sealed class RcsTaskStore : IRcsTaskStore
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
+    public async Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
         string? error = null, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
-        if (t is null) return;
+        if (t is null) return false;
         t.TaskState = taskState;
         if (rcsStatus is not null) t.RcsStatus = rcsStatus;
         if (error is not null) t.ErrorMsg = error.Length > 500 ? error[..500] : error;
@@ -74,6 +74,7 @@ public sealed class RcsTaskStore : IRcsTaskStore
         if (taskState is RcsTaskState.Completed or RcsTaskState.Canceled)
             t.FinishTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
+        return true;
     }
 
     public async Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default)

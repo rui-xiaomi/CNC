@@ -82,7 +82,15 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             return txnId;
         }
 
-        var line = await _equipment.GetWorkLineByEquipmentAsync(equipmentId, ct) ?? new WorkLineRef(1, "LINE");
+        var line = await _equipment.GetWorkLineByEquipmentAsync(equipmentId, ct);
+        if (line is null)
+        {
+            const string msg = "机台线体路由不可用（缺失或已禁用）";
+            _logger.LogWarning("换架失败：机台 {Eq} {Msg}", equipmentId, msg);
+            Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", msg);
+            await _alarms.RaiseRcsTaskNotFoundAsync($"CHANGE-FRAME-{txnId}", $"换架失败：{msg}", ct);
+            return txnId;
+        }
 
         var ctx = new ChangeFrameContext
         {

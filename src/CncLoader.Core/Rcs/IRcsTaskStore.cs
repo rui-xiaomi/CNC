@@ -11,8 +11,11 @@ public interface IRcsTaskStore
     /// <summary>下发成功：置 DISPATCHED + DISPATCH_TIME。</summary>
     Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default);
 
-    /// <summary>更新任务态（可带 RCS 原始态与错误信息）。COMPLETED/CANCELED 时置 FINISH_TIME。</summary>
-    Task UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
+    /// <summary>
+    /// 更新任务态（可带 RCS 原始态与错误信息）。COMPLETED/CANCELED 时置 FINISH_TIME。
+    /// 返回 true=已找到行并保存成功；false=任务行不存在（未落库）；异常/取消照常抛出。
+    /// </summary>
+    Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
         string? error = null, CancellationToken ct = default);
 
     /// <summary>redo：REDO_COUNT+1，态回到 DISPATCHED（同 taskId 幂等重发）。</summary>

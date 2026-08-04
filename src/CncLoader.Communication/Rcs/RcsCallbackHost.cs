@@ -105,21 +105,21 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
         {
             var raw = await ReadBodyAsync(ctx);
             var ack = await _processor.HandlePushTaskStatusAsync(raw, ctx.RequestAborted);
-            return Results.Content(ack, "application/json; charset=utf-8");
+            return RcsCallbackAckResults.FromAckBody(ack);
         });
 
         app.MapPost(RcsCallbackInterfaces.ScanTaskStatusPath, async (HttpContext ctx) =>
         {
             var raw = await ReadBodyAsync(ctx);
             var ack = await _processor.HandleScanTaskStatusAsync(raw, ctx.RequestAborted);
-            return Results.Content(ack, "application/json; charset=utf-8");
+            return RcsCallbackAckResults.FromAckBody(ack);
         });
 
         app.MapPost(RcsCallbackInterfaces.WarnCallbackPath, async (HttpContext ctx) =>
         {
             var raw = await ReadBodyAsync(ctx);
             var ack = await _processor.HandleWarnCallbackAsync(raw, ctx.RequestAborted);
-            return Results.Content(ack, "application/json; charset=utf-8");
+            return RcsCallbackAckResults.FromAckBody(ack);
         });
     }
 

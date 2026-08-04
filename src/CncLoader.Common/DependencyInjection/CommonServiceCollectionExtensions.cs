@@ -15,6 +15,10 @@ public static class CommonServiceCollectionExtensions
     {
         services.AddOptions<AppOptions>()
             .Bind(configuration.GetSection(AppOptions.SectionName))
+            .Validate(options => options.Rcs.HasMatRecheckFailThreshold > 0,
+                "App:Rcs:HasMatRecheckFailThreshold 必须大于 0。")
+            .Validate(options => options.Rcs.ReconcileRetryIntervalMs > 0,
+                "App:Rcs:ReconcileRetryIntervalMs 必须大于 0。")
             .ValidateOnStart();
 
         services.AddSingleton<ISecretProtector, DpapiSecretProtector>();

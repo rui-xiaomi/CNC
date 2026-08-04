@@ -33,20 +33,27 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     private readonly IWorkRecordService _workRecords;
     private readonly IEquipmentConfigService _equipment;
     private readonly ISlotAccountService _slots;
+    private readonly IRoutingAvailabilityValidator _routingValidator;
     private readonly RcsOptions _options;
     private readonly ILogger<PositionScheduler> _logger;
+    private readonly ReservationFirstDispatcher _reservationFirstDispatcher = new();
+    private readonly StartupReconcileCoordinator _reconcileCoordinator = new();
+    private readonly ReconciliationStatePublisher _reconcilePublisher = new();
 
     private readonly ConcurrentDictionary<(long Eq, long Pos), PositionContext> _contexts = new();
     private readonly ConcurrentDictionary<(long Eq, long Pos), (long PlcId, string RegAddr)> _testStartPoints = new();
     private readonly ConcurrentDictionary<(long Eq, long Pos), (long PlcId, string RegAddr, int OnValue, int OffValue)> _hasMatPoints = new();
     // bug#7：每加工位一把信号量，串行化主循环驱动与派工回填对同一 ctx 的读写（不同加工位仍并行）。
     private readonly ConcurrentDictionary<(long Eq, long Pos), SemaphoreSlim> _posGates = new();
-    // bug#6：机台→线体反查缓存（避免每次入队查库）。
+    // bug#6：机台→线体反查缓存（提示用，非活动权威；命中仍须重读配置）。
     private readonly ConcurrentDictionary<long, WorkLineRef> _lineCache = new();
     // 机台→料架绑定 ID 缓存（上/下料架，避免每 tick 查库）。
     private readonly ConcurrentDictionary<long, EquipmentFrameBindingIds> _bindingCache = new();
     // 工序间直接交接的"待入库"登记：目标(机台,工位) → 交接信息（源工位空闲时置位，目标工位见料即接）。
     private readonly ConcurrentDictionary<(long Eq, long Pos), InboundHandoff> _expectedInbound = new();
+    /// <summary>路由拒发 Warning 限频（按机台）。</summary>
+    private readonly ConcurrentDictionary<long, DateTime> _routeWarnStamp = new();
+    private static readonly TimeSpan RouteWarnThrottle = TimeSpan.FromSeconds(30);
     private List<(long Eq, long Pos, long PlcId)> _positions = new();
 
     /// <summary>非 COMPLETED 交接登记最长等待；超时且目标无料则清除（源 hung / 缺失）。</summary>
@@ -62,9 +69,21 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
     private Task? _dispatchTask;
+    private Task? _reconcileRetryTask;
     private readonly RcsCallbackNotifier? _notifier;
     /// <summary>0=自动派工开，1=暂停新自动上下料派工（进程内，volatile 供 UI/调度循环可见）。</summary>
     private volatile int _autoDispatchPaused;
+    private volatile bool _isReconciled;
+    private volatile int _reconciliationState;
+    private string? _reconciliationFailureReason;
+    /// <summary>开闸门闩：0=未开，1=已开（防重复启循环/事件）。</summary>
+    private int _gateOpened;
+    private int _reconcileAttemptCount;
+    private int _reconcileRetryLoopStartCount;
+    /// <summary>生命周期锁：Stop 与开闸的线性化点（先取得锁者决定能否开闸）。</summary>
+    private readonly object _lifecycleLock = new();
+    /// <summary>已进入停止：取得后禁止任何成功开闸副作用。</summary>
+    private bool _stopping;
 
     public PositionScheduler(
         ISignalStateStore store,
@@ -80,6 +99,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         IWorkRecordService workRecords,
         IEquipmentConfigService equipment,
         ISlotAccountService slots,
+        IRoutingAvailabilityValidator routingValidator,
         IPlcWriteHook? writeHook = null,
         RcsCallbackNotifier? notifier = null)
     {
@@ -96,6 +116,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         _workRecords = workRecords;
         _equipment = equipment;
         _slots = slots;
+        _routingValidator = routingValidator ?? throw new ArgumentNullException(nameof(routingValidator));
         _writeHook = writeHook;
         _notifier = notifier;
     }
@@ -126,18 +147,105 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         catch (Exception ex) { _logger.LogWarning(ex, "调度器关闭时播种看板加工位失败"); }
     }
 
-    /// <summary>反查机台所属线体（带缓存）；查不到回退 (1,"LINE") 保证不 NPE。</summary>
-    private async Task<WorkLineRef> ResolveLineAsync(long equipmentId, CancellationToken ct)
+    /// <summary>
+    /// 反查机台所属线体。_lineCache 仅提示/快照，命中后仍须读权威配置；
+    /// 不可用则淘汰缓存并返回 null；禁止默认 LINE / 任意首条线体。
+    /// </summary>
+    private async Task<WorkLineRef?> ResolveLineAsync(long equipmentId, CancellationToken ct)
     {
-        if (_lineCache.TryGetValue(equipmentId, out var cached)) return cached;
-        var line = await _equipment.GetWorkLineByEquipmentAsync(equipmentId, ct);
-        if (line is null)
+        try
         {
-            _logger.LogWarning("机台 {Eq} 线体反查失败，回退 LINE", equipmentId);
-            line = new WorkLineRef(1, "LINE");
+            var line = await _equipment.GetWorkLineByEquipmentAsync(equipmentId, ct);
+            if (line is null)
+            {
+                _lineCache.TryRemove(equipmentId, out _);
+                LogRouteUnavailableThrottled(equipmentId,
+                    $"机台 {equipmentId} 线体路由不可用（缺失或已禁用），拒绝派工");
+                return null;
+            }
+            _lineCache[equipmentId] = line;
+            return line;
         }
-        _lineCache[equipmentId] = line;
-        return line;
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _lineCache.TryRemove(equipmentId, out _);
+            _logger.LogWarning(ex, "机台 {Eq} 线体路由权威查询异常，fail-closed", equipmentId);
+            return null;
+        }
+    }
+
+    private void InvalidateLineCache(long equipmentId) => _lineCache.TryRemove(equipmentId, out _);
+
+    private void LogRouteUnavailableThrottled(long equipmentId, string message)
+    {
+        var now = DateTime.UtcNow;
+        if (_routeWarnStamp.TryGetValue(equipmentId, out var last)
+            && now - last < RouteWarnThrottle)
+            return;
+        _routeWarnStamp[equipmentId] = now;
+        _logger.LogWarning("{Msg}", message);
+    }
+
+    /// <summary>测试接缝：暴露真实 <see cref="ResolveLineAsync"/>（无 LINE 回退；仅成功结果入缓存）。</summary>
+    internal Task<WorkLineRef?> ProbeResolveLineAsync(long equipmentId, CancellationToken ct = default)
+        => ResolveLineAsync(equipmentId, ct);
+
+    /// <summary>测试接缝：线体缓存是否含指定机台。</summary>
+    internal bool ProbeHasLineCache(long equipmentId) => _lineCache.ContainsKey(equipmentId);
+
+    /// <summary>测试接缝：标记已对账，以便 ProbeDispatchOnce 进入上料分配。</summary>
+    internal void ProbeMarkReconciled() => _isReconciled = true;
+
+    /// <summary>测试接缝：播种 WaitLoad+UploadRequested 候选（不经 PLC 循环）。</summary>
+    internal void ProbeSeedUploadCandidate(long equipmentId, long positionId)
+    {
+        var ctx = _contexts.GetOrAdd((equipmentId, positionId),
+            k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+        ctx.State = PositionState.WaitLoad;
+        ctx.UploadRequested = true;
+        ctx.CurrentTaskId = null;
+        ctx.WaitLoadSince = DateTime.Now;
+    }
+
+    /// <summary>测试接缝：播种加工位清单与 WaitLoad 上下文（供直接交接选空闲工位；不改行为）。</summary>
+    internal void ProbeSeedPosition(long equipmentId, long positionId, long plcId = 0)
+    {
+        if (!_positions.Exists(p => p.Eq == equipmentId && p.Pos == positionId))
+            _positions.Add((equipmentId, positionId, plcId));
+        var ctx = _contexts.GetOrAdd((equipmentId, positionId),
+            k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+        if (ctx.State is PositionState.Offline)
+        {
+            ctx.State = PositionState.WaitLoad;
+            ctx.WaitLoadSince = DateTime.Now;
+        }
+    }
+
+    /// <summary>测试接缝：调用真实 <see cref="EnqueueUnloadAsync"/>。</summary>
+    internal Task<bool> ProbeEnqueueUnloadAsync(
+        long equipmentId, long positionId, bool isOk, string? materialId = null, CancellationToken ct = default)
+    {
+        var ctx = _contexts.GetOrAdd((equipmentId, positionId),
+            k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+        if (materialId is not null) ctx.MaterialId = materialId;
+        return EnqueueUnloadAsync(ctx, isOk, ct);
+    }
+
+    /// <summary>测试接缝：是否存在直接交接预登记。</summary>
+    internal bool ProbeHasExpectedInbound(long equipmentId, long positionId)
+        => _expectedInbound.ContainsKey((equipmentId, positionId));
+
+    /// <summary>测试接缝：派工队列长度。</summary>
+    internal int ProbeQueueCount => _queue.Count;
+
+    /// <summary>测试接缝：读取加工位上下文（状态 / Alarm / 当前 taskId）。</summary>
+    internal (PositionState State, bool AlarmRaised, string? CurrentTaskId) ProbeGetContext(
+        long equipmentId, long positionId)
+    {
+        if (!_contexts.TryGetValue((equipmentId, positionId), out var ctx))
+            return (PositionState.Offline, false, null);
+        return (ctx.State, ctx.AlarmRaised, ctx.CurrentTaskId);
     }
 
     /// <summary>取机台上/下料架绑定 ID（带缓存）。</summary>
@@ -149,9 +257,38 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         return ids;
     }
 
-    public bool IsReconciled { get; private set; }
+    public bool IsReconciled => _isReconciled;
+    public ReconciliationState ReconciliationState => (ReconciliationState)_reconciliationState;
+    public string? ReconciliationFailureReason => _reconciliationFailureReason;
     public bool IsAutoDispatchPaused => _autoDispatchPaused != 0;
     public event EventHandler? Reconciled;
+    public event EventHandler<ReconciliationSnapshot>? ReconciliationStateChanged
+    {
+        add => _reconcilePublisher.Changed += value;
+        remove => _reconcilePublisher.Changed -= value;
+    }
+
+    /// <summary>测试接缝：状态推进循环已启动次数（成功开闸后应为 1）。</summary>
+    internal int StateLoopStartCount { get; private set; }
+    /// <summary>测试接缝：自动派工循环已启动次数（成功开闸后应为 1）。</summary>
+    internal int DispatchLoopStartCount { get; private set; }
+    /// <summary>测试接缝：<see cref="Reconciled"/> 已触发次数。</summary>
+    internal int ReconciledRaiseCount { get; private set; }
+    /// <summary>测试接缝：对账重试循环启动次数（应为 0 或 1，禁止并行重试器）。</summary>
+    internal int ReconcileRetryLoopStartCount => Volatile.Read(ref _reconcileRetryLoopStartCount);
+    /// <summary>测试接缝：对账尝试次数（含首次）。</summary>
+    internal int ReconcileAttemptCount => Volatile.Read(ref _reconcileAttemptCount);
+    /// <summary>测试接缝：可替换延迟（避免单测真实等待 5s）；生产默认 <see cref="Task.Delay(int, CancellationToken)"/>。</summary>
+    internal Func<int, CancellationToken, Task>? DelayOverride { get; set; }
+    /// <summary>测试接缝：开闸声明前同步回调（用于注入「停止已先取得生命周期」时序；禁止在回调内 await StopAsync）。</summary>
+    internal Action? BeforeOpenGateClaim { get; set; }
+
+    /// <summary>进入 stopping（StopAsync 首步；可幂等重复调用）。</summary>
+    internal void EnterStopping()
+    {
+        lock (_lifecycleLock)
+            _stopping = true;
+    }
 
     public void SetAutoDispatchPaused(bool paused)
     {
@@ -170,7 +307,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         {
             _logger.LogInformation("加工位状态机调度器未启用（SchedulerEnabled=false）。");
             await SeedDashboardPositionsAsync(cancellationToken);
-            IsReconciled = true;
+            _isReconciled = true;
+            _reconciliationState = (int)ReconciliationState.Succeeded;
+            _reconciliationFailureReason = null;
+            PublishReconcileState();
             return;
         }
 
@@ -198,26 +338,188 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
         catch (Exception ex) { _logger.LogWarning(ex, "装载加工位点位失败，调度器将以空集启动"); }
 
-        // 2. §6.3 启动对账：未完结任务绑定回加工位
-        await ReconcileAsync(cancellationToken);
+        // 2. §6.3 首次对账：fail-closed。失败则保持未开闸，后台单一顺序循环按间隔重试（不阻塞其它 HostedService）。
+        var first = await TryReconcileOnceAsync(_cts.Token);
+        if (first == ReconcileAttemptOutcome.Succeeded)
+        {
+            TryOpenGateAfterSuccess();
+            return;
+        }
+        if (first == ReconcileAttemptOutcome.Cancelled)
+            return;
 
-        IsReconciled = true;
-        Reconciled?.Invoke(this, EventArgs.Empty);
+        EnsureReconcileRetryLoopStarted();
+    }
+
+    /// <summary>
+    /// 成功开闸（幂等）：IsReconciled / 双循环 / Reconciled 事件各至多一次。
+    /// 线性化点：<_lifecycleLock> 内完成 stopping 检查 + 门闩 + 状态字段 + 双循环 Task 创建；
+    /// 事件/日志在锁外触发，避免订阅方重入死锁。
+    /// </summary>
+    internal bool TryOpenGateAfterSuccess()
+    {
+        BeforeOpenGateClaim?.Invoke();
+
+        lock (_lifecycleLock)
+        {
+            // 线性化点：与 EnterStopping 共用锁；stopping 已成立则整段开闸放弃（无半开闸）。
+            if (_stopping) return false;
+            if (_gateOpened != 0) return false;
+
+            _gateOpened = 1;
+            _isReconciled = true;
+            _reconciliationState = (int)ReconciliationState.Succeeded;
+            _reconciliationFailureReason = null;
+            var loopToken = _cts?.Token ?? CancellationToken.None;
+            StateLoopStartCount++;
+            _loopTask = Task.Run(() => LoopAsync(loopToken));
+            DispatchLoopStartCount++;
+            _dispatchTask = Task.Run(() => DispatchLoopAsync(loopToken));
+        }
+
+        // 事件/日志在锁外：避免订阅方重入 Stop/开闸导致死锁。
+        PublishReconcileState();
+        ReconciledRaiseCount++;
+        try { Reconciled?.Invoke(this, EventArgs.Empty); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Reconciled 订阅方异常"); }
         _logger.LogInformation("启动对账完成，开始自动派工");
+        return true;
+    }
 
-        // 3. 启动主循环 + 派工循环
-        _loopTask = Task.Run(() => LoopAsync(_cts.Token));
-        _dispatchTask = Task.Run(() => DispatchLoopAsync(_cts.Token));
+    private void PublishReconcileState()
+    {
+        try
+        {
+            _reconcilePublisher.TryPublish(
+                (ReconciliationState)_reconciliationState,
+                _reconciliationFailureReason,
+                _isReconciled);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "发布 ReconciliationStateChanged 失败");
+        }
+    }
+
+    private void EnsureReconcileRetryLoopStarted()
+    {
+        if (_cts is null) return;
+        if (Volatile.Read(ref _gateOpened) != 0) return; // 已开闸则无需重试
+        if (Interlocked.CompareExchange(ref _reconcileRetryLoopStartCount, 1, 0) != 0)
+            return;
+
+        var token = _cts.Token;
+        _reconcileRetryTask = Task.Run(() => ReconcileRetryLoopAsync(token), CancellationToken.None);
+    }
+
+    private async Task ReconcileRetryLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await DelayMsAsync(_options.ReconcileRetryIntervalMs, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (_isReconciled || Interlocked.CompareExchange(ref _gateOpened, 0, 0) != 0)
+                return;
+
+            var outcome = await TryReconcileOnceAsync(ct).ConfigureAwait(false);
+            if (outcome == ReconcileAttemptOutcome.Succeeded)
+            {
+                TryOpenGateAfterSuccess();
+                return;
+            }
+            if (outcome == ReconcileAttemptOutcome.Cancelled)
+                return;
+        }
+    }
+
+    private async Task<ReconcileAttemptOutcome> TryReconcileOnceAsync(CancellationToken ct)
+    {
+        // 进入每一轮 Reconciling：清空旧失败原因，属性与发布快照同一转换。
+        _reconciliationState = (int)ReconciliationState.Reconciling;
+        _reconciliationFailureReason = null;
+        PublishReconcileState();
+        Interlocked.Increment(ref _reconcileAttemptCount);
+
+        ReconcileRoundResult round;
+        try
+        {
+            round = await ReconcileAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 取消 ≠ 业务失败：不发布 WaitingForRetry / 不改写 FailureReason
+            return ReconcileAttemptOutcome.Cancelled;
+        }
+
+        if (StartupReconcileCoordinator.DecideIsReconciled(round))
+            return ReconcileAttemptOutcome.Succeeded;
+
+        var reason = FormatFailureReason(round);
+        _isReconciled = false;
+        _reconciliationFailureReason = reason;
+        _reconciliationState = (int)ReconciliationState.WaitingForRetry;
+        PublishReconcileState();
+        _logger.LogWarning(
+            "启动对账失败，自动派工已锁定：阶段 {Phase}，原因 {Reason}；将在 {IntervalMs}ms 后自动重试（第 {Attempt} 次已失败）",
+            round.FailedPhase, reason, _options.ReconcileRetryIntervalMs, ReconcileAttemptCount);
+        return ReconcileAttemptOutcome.Failed;
+    }
+
+    private static string FormatFailureReason(ReconcileRoundResult round)
+    {
+        var phase = round.FailedPhase?.ToString() ?? "?";
+        var detail = string.IsNullOrWhiteSpace(round.FailureReason)
+            ? "对账失败"
+            : round.FailureReason!;
+        // FailureReason 已经过协调器 Sanitize；再包一层阶段前缀供看板/日志
+        if (detail.Contains("Password=", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("Pwd=", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("Connection String", StringComparison.OrdinalIgnoreCase))
+        {
+            detail = "对账阶段执行异常（已隐藏敏感连接信息）";
+        }
+        return $"阶段 {phase}：{detail}";
+    }
+
+    private Task DelayMsAsync(int milliseconds, CancellationToken ct)
+        => DelayOverride is not null
+            ? DelayOverride(milliseconds, ct)
+            : Task.Delay(milliseconds, ct);
+
+    private enum ReconcileAttemptOutcome
+    {
+        Succeeded,
+        Failed,
+        Cancelled
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // 先取得 stopping 生命周期控制权，再取消 CTS（禁止随后开闸）。
+        EnterStopping();
         if (_notifier is not null)
             _notifier.TaskStatusReceived -= OnRcsTaskStatusForInbound;
         _cts?.Cancel();
-        await Task.WhenAny(
-            Task.WhenAll(_loopTask ?? Task.CompletedTask, _dispatchTask ?? Task.CompletedTask),
-            Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+        var pending = Task.WhenAll(
+            ObserveAsync(_loopTask),
+            ObserveAsync(_dispatchTask),
+            ObserveAsync(_reconcileRetryTask));
+        await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+    }
+
+    private static async Task ObserveAsync(Task? task)
+    {
+        if (task is null) return;
+        try { await task.ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        catch (Exception) { /* 循环内已记日志；此处仅避免未观察异常 */ }
     }
 
     public async Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default)
@@ -244,6 +546,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             ctx.MaterialId = null;
             ctx.AlarmRaised = false;
             ctx.UploadRequested = false;
+            ctx.HasMatRecheck.Reset();
+            ctx.StatusDetail = null;
+            ctx.AlarmReason = null;
             await ClearInboundAtAsync((equipmentId, positionId), "RESET_ALARM", ct);
             SetState(ctx, PositionState.WaitLoad); // 同步刷看板
             _logger.LogInformation("人工恢复 EQ{Eq} POS{Pos} → WAIT_LOAD（已回滚预记 {Task}）",
@@ -369,85 +674,96 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
     }
 
-    /// <summary>§6.3 启动三方对账：①RCS 未完结任务绑定回工位；①b query 终态收口（落账/回滚预记）；②槽位账陈旧预记按方向回滚；③PLC 账实核对（有料无任务 → 报警等人工）。</summary>
-    private async Task ReconcileAsync(CancellationToken ct)
+    /// <summary>§6.3 启动三方对账：经 <see cref="StartupReconcileCoordinator"/> fail-closed 编排 ①/①b/②/③。</summary>
+    private Task<ReconcileRoundResult> ReconcileAsync(CancellationToken ct)
     {
         var unfinished = new List<string>();
-        // ① RCS 任务对账
-        try
+        return _reconcileCoordinator.RunAsync(
+            c => ReconcilePhaseOneAsync(unfinished, c),
+            c => ReconcilePhaseOneBAsync(unfinished, c),
+            c => ReconcilePhaseTwoAsync(unfinished, c),
+            ReconcilePhaseThreeAsync,
+            ct);
+    }
+
+    /// <summary>① RCS 未完结任务绑定回工位。</summary>
+    private async Task<ReconcilePhaseResult> ReconcilePhaseOneAsync(List<string> unfinished, CancellationToken ct)
+    {
+        unfinished.Clear();
+        unfinished.AddRange(await _taskStore.GetUnfinishedTaskIdsAsync(ct));
+        foreach (var taskId in unfinished)
         {
-            unfinished = (await _taskStore.GetUnfinishedTaskIdsAsync(ct)).ToList();
-            foreach (var taskId in unfinished)
+            var row = await _taskStore.GetByTaskIdAsync(taskId, ct);
+            if (row is null || row.PositionId is null || row.EquipmentId is null) continue;
+            var key = (Eq: row.EquipmentId.Value, Pos: row.PositionId.Value);
+            var ctx = _contexts.GetOrAdd(key, k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+            ctx.CurrentTaskId = taskId;
+            ctx.Phase = row.TaskType == "1" ? PositionPhase.Unload : PositionPhase.Upload;
+            ctx.State = PositionState.Dispatching; // 等 RCS 状态明确后由 loop / ①b 推进
+            _logger.LogInformation("对账①：任务 {TaskId} 绑定回 EQ{Eq} POS{Pos} 阶段 {Phase}", taskId, key.Eq, key.Pos, ctx.Phase);
+        }
+        return ReconcilePhaseResult.Ok(ReconcilePhase.One);
+    }
+
+    /// <summary>①b query 终态收口；Query.Success=false 记失败。</summary>
+    private async Task<ReconcilePhaseResult> ReconcilePhaseOneBAsync(List<string> unfinished, CancellationToken ct)
+    {
+        var (phase, settled) = await SettleTerminalTasksOnReconcileAsync(unfinished, ct);
+        if (!phase.Succeeded) return phase;
+        if (settled.Count > 0)
+        {
+            unfinished.RemoveAll(id => settled.Contains(id));
+            _logger.LogInformation("对账①b：收口终态任务 {N} 个", settled.Count);
+        }
+        return ReconcilePhaseResult.Ok(ReconcilePhase.OneB);
+    }
+
+    /// <summary>② 陈旧预记回滚 + COMPLETED 预记 PLC 门补落账。</summary>
+    private async Task<ReconcilePhaseResult> ReconcilePhaseTwoAsync(List<string> unfinished, CancellationToken ct)
+    {
+        var n = await _slots.RollbackStaleReservationsAsync(unfinished, ct);
+        if (n > 0) _logger.LogInformation("对账②：回滚陈旧槽位预记 {N} 个", n);
+        var c = await SettleCompletedPendingWithPlcAsync(unfinished, ct);
+        if (c > 0) _logger.LogInformation("对账②：PLC 门补落账 COMPLETED 预记 {N} 个", c);
+        return ReconcilePhaseResult.Ok(ReconcilePhase.Two);
+    }
+
+    /// <summary>③ PLC 账实核对：有料无任务 → 工位 Alarm（不等于全局失败）。过程异常 → 全局失败。</summary>
+    private async Task<ReconcilePhaseResult> ReconcilePhaseThreeAsync(CancellationToken ct)
+    {
+        foreach (var (eq, pos, _) in _positions)
+        {
+            _contexts.TryGetValue((eq, pos), out var ctx);
+            if (ctx is not null && !string.IsNullOrEmpty(ctx.CurrentTaskId)) continue; // 已有在途任务，正常
+            if (_expectedInbound.ContainsKey((eq, pos))) continue;
+
+            var machine = _store.GetMachine(eq);
+            if (machine is null || !machine.PlcOnline) continue; // PLC 未上线，交给运行态离线处理
+            var tmp = new PositionContext { EquipmentId = eq, PositionId = pos };
+            var hasMat = await ReadHasMatFreshAsync(tmp, ct);
+            if (hasMat == true)
             {
-                var row = await _taskStore.GetByTaskIdAsync(taskId, ct);
-                if (row is null || row.PositionId is null || row.EquipmentId is null) continue;
-                var key = (Eq: row.EquipmentId.Value, Pos: row.PositionId.Value);
-                var ctx = _contexts.GetOrAdd(key, k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
-                ctx.CurrentTaskId = taskId;
-                ctx.Phase = row.TaskType == "1" ? PositionPhase.Unload : PositionPhase.Upload;
-                ctx.State = PositionState.Dispatching; // 等 RCS 状态明确后由 loop / ①b 推进
-                _logger.LogInformation("对账①：任务 {TaskId} 绑定回 EQ{Eq} POS{Pos} 阶段 {Phase}", taskId, key.Eq, key.Pos, ctx.Phase);
+                var ctxAlarm = _contexts.GetOrAdd((eq, pos), k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+                ctxAlarm.AlarmRaised = true;
+                SetState(ctxAlarm, PositionState.Alarm);
+                await _alarms.RaiseRcsTaskNotFoundAsync($"RECONCILE-EQ{eq}-POS{pos}",
+                    $"启动对账：EQ{eq} POS{pos} PLC 有料但无绑定任务/无待交接（账实不符），请人工确认后点恢复", ct);
+                _logger.LogWarning("对账③：EQ{Eq} POS{Pos} PLC 有料但无任务（账实不符）→ ALARM 等人工确认", eq, pos);
             }
         }
-        catch (Exception ex) { _logger.LogWarning(ex, "启动对账①查询未完结任务失败"); }
-
-        // ①b 向 RCS query 未完结任务：已终态的立刻收口槽位账 + 工位态，并从 active 集合剔除（供②兜底）
-        try
-        {
-            var settled = await SettleTerminalTasksOnReconcileAsync(unfinished, ct);
-            if (settled.Count > 0)
-            {
-                unfinished = unfinished.Where(id => !settled.Contains(id)).ToList();
-                _logger.LogInformation("对账①b：收口终态任务 {N} 个", settled.Count);
-            }
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "启动对账①b 终态收口失败"); }
-
-        // ② 槽位账对账：非 COMPLETED 陈旧预记回滚；COMPLETED 预记按 PLC 门补 Confirm
-        try
-        {
-            var n = await _slots.RollbackStaleReservationsAsync(unfinished, ct);
-            if (n > 0) _logger.LogInformation("对账②：回滚陈旧槽位预记 {N} 个", n);
-            var c = await SettleCompletedPendingWithPlcAsync(unfinished, ct);
-            if (c > 0) _logger.LogInformation("对账②：PLC 门补落账 COMPLETED 预记 {N} 个", c);
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "启动对账②槽位账回滚失败"); }
-
-        // ③ PLC 账实核对：工位有料但无绑定任务/无待交接 → 账实不符，置 ALARM 等人工（三方对完账才开闸）
-        try
-        {
-            foreach (var (eq, pos, _) in _positions)
-            {
-                _contexts.TryGetValue((eq, pos), out var ctx);
-                if (ctx is not null && !string.IsNullOrEmpty(ctx.CurrentTaskId)) continue; // 已有在途任务，正常
-                if (_expectedInbound.ContainsKey((eq, pos))) continue;
-
-                var machine = _store.GetMachine(eq);
-                if (machine is null || !machine.PlcOnline) continue; // PLC 未上线，交给运行态离线处理
-                var tmp = new PositionContext { EquipmentId = eq, PositionId = pos };
-                var hasMat = await ReadHasMatFreshAsync(tmp, ct);
-                if (hasMat == true)
-                {
-                    var ctxAlarm = _contexts.GetOrAdd((eq, pos), k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
-                    ctxAlarm.AlarmRaised = true;
-                    SetState(ctxAlarm, PositionState.Alarm);
-                    await _alarms.RaiseRcsTaskNotFoundAsync($"RECONCILE-EQ{eq}-POS{pos}",
-                        $"启动对账：EQ{eq} POS{pos} PLC 有料但无绑定任务/无待交接（账实不符），请人工确认后点恢复", ct);
-                    _logger.LogWarning("对账③：EQ{Eq} POS{Pos} PLC 有料但无任务（账实不符）→ ALARM 等人工确认", eq, pos);
-                }
-            }
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "启动对账③ PLC 账实核对失败"); }
+        return ReconcilePhaseResult.Ok(ReconcilePhase.Three);
     }
 
     /// <summary>
     /// 对账①b：批量 queryTask，对已终态任务立刻收口——先 PLC 复核再 Confirm/Rollback，避免「RCS 报完成但料未到」误清空槽位。
-    /// 返回已收口的 taskId 集合（应从 active/unfinished 剔除）。
+    /// Query.Success=false / 响应无法解析时返回阶段失败（fail-closed）。
     /// </summary>
-    private async Task<HashSet<string>> SettleTerminalTasksOnReconcileAsync(IReadOnlyList<string> unfinished, CancellationToken ct)
+    private async Task<(ReconcilePhaseResult Phase, HashSet<string> Settled)> SettleTerminalTasksOnReconcileAsync(
+        IReadOnlyList<string> unfinished, CancellationToken ct)
     {
         var settled = new HashSet<string>(StringComparer.Ordinal);
-        if (unfinished.Count == 0) return settled;
+        if (unfinished.Count == 0)
+            return (ReconcilePhaseResult.Ok(ReconcilePhase.OneB), settled);
 
         var req = new QueryTaskRequest
         {
@@ -463,10 +779,12 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             PageSize = Math.Max(10, unfinished.Count)
         };
         var result = await _taskSvc.QueryAsync(req, ct);
-        if (!result.Success)
+        var queryPhase = StartupReconcileCoordinator.MapQueryResult(
+            result.Success, result.Message ?? result.Error);
+        if (!queryPhase.Succeeded)
         {
-            _logger.LogWarning("对账①b queryTask 失败：{Msg}，跳过终态收口（②仍按库内未完结保护预记）", result.Message ?? result.Error);
-            return settled;
+            _logger.LogWarning("对账①b queryTask 失败：{Msg}", result.Message ?? result.Error);
+            return (queryPhase, settled);
         }
 
         foreach (var (taskId, rcsStatus) in ParseQueryItems(result.RawResponse))
@@ -477,7 +795,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             var row = await _taskStore.GetByTaskIdAsync(taskId, ct);
             if (row is null) continue;
             if (row.TaskState != state)
-                await _taskStore.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct);
+            {
+                if (!await _taskStore.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct))
+                    _logger.LogWarning("对账①b：更新任务态未生效（任务不存在）{TaskId} → {State}", taskId, state);
+            }
 
             PositionContext? ctx = null;
             if (row.EquipmentId is long eq && row.PositionId is long pos)
@@ -551,7 +872,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             _logger.LogInformation("对账①b：任务 {TaskId} 终态 {State} 已收口 EQ{Eq} POS{Pos}", taskId, state, ctx.EquipmentId, ctx.PositionId);
         }
 
-        return settled;
+        return (ReconcilePhaseResult.Ok(ReconcilePhase.OneB), settled);
     }
 
     /// <summary>终态槽位收口：COMPLETED 且 PLC 符合阶段预期才 Confirm，否则 Rollback（避免误清空/误入库）。</summary>
@@ -605,9 +926,15 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         {
             try
             {
+                if (!IsReconciled)
+                {
+                    await Task.Delay(_options.SchedulerIntervalMs, ct);
+                    continue;
+                }
                 await DriveAllAsync(ct);
                 await SweepStaleReservationsIfDueAsync(ct);
             }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex) { _logger.LogWarning(ex, "调度器主循环异常"); }
             try { await Task.Delay(_options.SchedulerIntervalMs, ct); }
             catch (OperationCanceledException) { break; }
@@ -820,7 +1147,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         {
             case PositionState.WaitLoad:
                 // 工序间直接交接：上游 OK 件已送入本工位 cell，PLC 见料 + 有待入库登记 → 直接进 Loaded（视同已上料到位）。
-                if (hasMat == true && _expectedInbound.TryGetValue((ctx.EquipmentId, ctx.PositionId), out var inbound))
+                if (hasMat == true
+                    && _expectedInbound.TryGetValue((ctx.EquipmentId, ctx.PositionId), out var inbound)
+                    && inbound.IsDispatched)
                 {
                     _expectedInbound.TryRemove((ctx.EquipmentId, ctx.PositionId), out _);
                     _inboundCompletedGraceWarned.TryRemove((ctx.EquipmentId, ctx.PositionId), out _);
@@ -882,12 +1211,33 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 if (rcsState == RcsTaskState.Completed)
                 {
                     var fresh = await ReadHasMatFreshAsync(ctx, ct);
-                    if (ctx.Phase == PositionPhase.Upload)
-                        next = fresh == true ? PositionState.Loaded : PositionState.Alarm;
-                    else if (ctx.Phase == PositionPhase.Unload)
-                        next = fresh == false ? PositionState.Unloaded : PositionState.Alarm;
-                    else
+                    if (ctx.Phase is not PositionPhase phase)
+                    {
+                        ctx.AlarmReason = "RCS 报完成但任务阶段未知";
                         next = PositionState.Alarm;
+                        break;
+                    }
+
+                    var recheck = ctx.HasMatRecheck.Evaluate(ctx.CurrentTaskId, phase, fresh,
+                        _options.HasMatRecheckFailThreshold);
+                    ctx.StatusDetail = recheck.StatusDetail;
+                    next = recheck.NextState;
+
+                    if (recheck.Decision == HasMatRecheckDecision.Hold)
+                    {
+                        _logger.LogWarning(
+                            "EQ{Eq} POS{Pos} 任务 {Task} HasMat fresh 读取未知，复核中（{Count}/{Threshold}），保持 TRANSPORTING",
+                            ctx.EquipmentId, ctx.PositionId, ctx.CurrentTaskId ?? "—",
+                            recheck.FailureCount, _options.HasMatRecheckFailThreshold);
+                    }
+                    else if (recheck.Decision == HasMatRecheckDecision.Alarm)
+                    {
+                        ctx.AlarmReason = fresh is null
+                            ? $"HasMat 连续复核未知达到阈值 {_options.HasMatRecheckFailThreshold}"
+                            : phase == PositionPhase.Upload
+                                ? "RCS 报完成但 PLC 明确无料（复核不过）"
+                                : "RCS 报完成但 PLC 明确仍有料（复核不过）";
+                    }
                 }
                 break;
             case PositionState.Loaded:
@@ -1034,6 +1384,12 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return false;
         }
         var line = await ResolveLineAsync(ctx.EquipmentId, ct);
+        if (line is null)
+        {
+            _logger.LogWarning("EQ{Eq} POS{Pos} 下料入队失败：线体路由不可用，不入队",
+                ctx.EquipmentId, ctx.PositionId);
+            return false;
+        }
         _queue.Enqueue(new DispatchItem
         {
             EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId, Phase = PositionPhase.Unload,
@@ -1066,7 +1422,16 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         // OK → 下一道工序流转
         var nextEqs = await _equipment.GetNextProcessEquipmentsAsync(ctx.EquipmentId, ct);
         if (nextEqs.Count == 0)
-            return await ResolveDownloadFrameFallbackAsync(ctx, ct); // 末道工序 → 下料架
+        {
+            // 配置了后续工序但全部不可用 → 拒发，禁止回退命名区伪造成功下发
+            if (await _equipment.HasSubsequentProcessAsync(ctx.EquipmentId, ct))
+            {
+                LogRouteUnavailableThrottled(ctx.EquipmentId,
+                    $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 下一工序已配置但无活动可用机台，拒绝下料（不回退命名区）");
+                return null;
+            }
+            return await ResolveDownloadFrameFallbackAsync(ctx, ct); // 真末道 → 下料架
+        }
 
         // 下一工序有空闲工位 → 直接交接
         var idle = FindIdlePositionAmong(nextEqs);
@@ -1084,16 +1449,17 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             if (transit is long tf)
             {
                 var cell = await _routes.ResolveFrameCellAsync(tf, ct);
-                if (cell is not null) return new UnloadDecision(cell, UnloadTarget.TransitFrame, tf, null, null);
+                if (cell is not null) return new UnloadDecision(cell, UnloadTarget.TransitFrame, tf, nextEq, null);
             }
         }
 
-        // 有下一工序但既无空闲工位又无中转架 → 回退下料架（避免件卡在机台）
+        // 有活动下一工序但既无空闲工位又无中转架 → 回退下料架（避免件卡在机台）
         _logger.LogWarning("EQ{Eq} POS{Pos} OK 但下一工序无空闲工位且无中转架，回退下料架", ctx.EquipmentId, ctx.PositionId);
         return await ResolveDownloadFrameFallbackAsync(ctx, ct);
     }
 
-    /// <summary>末道/回退：下料架(role1) cell；无绑定回退 UNLOAD_AREA。</summary>
+    /// <summary>真末道/繁忙回退：下料架(role1) cell；无绑定回退 UNLOAD_AREA。
+    /// 注意：有后续工序但全部不可用时不得调用本方法（禁止命名区伪造成功）。</summary>
     private async Task<UnloadDecision?> ResolveDownloadFrameFallbackAsync(PositionContext ctx, CancellationToken ct)
     {
         var binds = await ResolveBindingsAsync(ctx.EquipmentId, ct);
@@ -1179,8 +1545,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         try
         {
             var r = await _plcOps.ReadRegisterAsync(hp.PlcId, hp.RegAddr, 1, ct);
-            // OnValue=有料；OffValue=无料。按 OnValue 判定。
-            return r.RawValue == hp.OnValue;
+            if (r.Error is not null)
+            {
+                _logger.LogWarning("EQ{Eq} POS{Pos} 复核读 HasMat 失败：{Error}",
+                    ctx.EquipmentId, ctx.PositionId, r.Error);
+            }
+            // Error 存在时 RawValue 不可信；无错误时 OnValue=有料，其余明确值按无料处理。
+            return HasMatReading.From(r.RawValue, hp.OnValue, r.Error);
         }
         catch (Exception ex)
         {
@@ -1193,6 +1564,11 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     {
         var prev = ctx.State;
         ctx.State = state;
+        if (state != PositionState.Transporting)
+        {
+            ctx.HasMatRecheck.Reset();
+            ctx.StatusDetail = null;
+        }
         // Layer 1：进入 WAIT_LOAD 记空闲起点（供竞争排序）；离开 WAIT_LOAD 清"请求上料"标记与空闲计时。
         if (state == PositionState.WaitLoad)
         {
@@ -1206,12 +1582,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         _store.UpdatePosition(new PositionStatus
         {
             EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId, State = state,
-            MaterialId = ctx.MaterialId
+            MaterialId = ctx.MaterialId, StatusDetail = ctx.StatusDetail
         });
     }
 
     private static string ReasonForAlarm(PositionContext ctx, bool? hasMat, string? rcsState)
     {
+        if (!string.IsNullOrWhiteSpace(ctx.AlarmReason)) return ctx.AlarmReason;
         if (rcsState == RcsTaskState.Canceled) return "RCS 任务被取消";
         if (rcsState == RcsTaskState.Failed) return "RCS 任务失败";
         if (ctx.Phase == PositionPhase.Upload && hasMat != true) return "RCS 报完成但 PLC 无料（复核不过）";
@@ -1227,8 +1604,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         {
             try
             {
-                // 暂停时不 dequeue / 不上料分配，避免把已入队请求发出去；队列保留至恢复。
-                if (IsAutoDispatchPaused)
+                // 对账未完成或暂停：不 dequeue / 不上料分配，避免积压请求被发出。
+                if (!IsReconciled || IsAutoDispatchPaused)
                 {
                     await Task.Delay(200, ct);
                     continue;
@@ -1246,6 +1623,22 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { _logger.LogWarning(ex, "派工循环异常"); await Task.Delay(500, ct); }
         }
+    }
+
+    /// <summary>测试接缝：执行一轮派工循环体（含 IsReconciled 防御门禁）。</summary>
+    internal Task ProbeDispatchOnceAsync(CancellationToken ct = default)
+        => RunDispatchOnceAsync(ct);
+
+    private async Task RunDispatchOnceAsync(CancellationToken ct)
+    {
+        if (!IsReconciled || IsAutoDispatchPaused) return;
+        var item = _queue.Dequeue();
+        if (item is not null)
+        {
+            await DispatchOneAsync(item, ct);
+            return;
+        }
+        await AllocateUploadsAsync(ct);
     }
 
     /// <summary>Layer 1 上料分配：收集"请求上料"的工位，按"空闲最久 → 工位编号升序"确定性排序，逐个尝试下发。
@@ -1278,7 +1671,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// 返回 Queued（已下发）/ WaitMaterial（无料或有在途直送，保持等待）/ Failed（路由缺失或下发失败，已置 Alarm）。</summary>
     private async Task<UploadDecision> TryDispatchUploadAsync(PositionContext ctx, CancellationToken ct)
     {
-        if (IsAutoDispatchPaused) return UploadDecision.WaitMaterial;
+        if (!IsReconciled || IsAutoDispatchPaused) return UploadDecision.WaitMaterial;
 
         // 下发前再断言：直送在途则禁止自取，勿清交接登记
         if (_expectedInbound.ContainsKey((ctx.EquipmentId, ctx.PositionId)))
@@ -1295,15 +1688,132 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return UploadDecision.Failed;
         }
 
-        // 料源已确认有料（占用槽存在）→ 下发 RCS（网络调用在锁外）。
-        var line = await ResolveLineAsync(ctx.EquipmentId, ct);
-        var result = await _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+        // 第一道门禁：预记前权威校验（不以 _lineCache / 仅 LineCode 为活动权威）
+        var routeCtx = new DispatchRouteContext
         {
-            WorkLineId = line.WorkLineId, LineCode = line.LineCode, TaskType = "0",
-            Priority = 5, FromCode = plan.From!, ToCode = plan.To!,
-            EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId,
-            Kind = RcsTaskKind.Transit, Author = "scheduler"
-        }, ct);
+            SourceEquipmentId = ctx.EquipmentId,
+            SourcePositionId = ctx.PositionId,
+            SourceFrameId = plan.SourceFrameId is long sf
+                ? RouteDependency.Required(sf)
+                : RouteDependency.NotApplicable,
+            FromCode = plan.From,
+            ToCode = plan.To,
+            RequiresResolvedCells = true
+        };
+        var pre = await _routingValidator.ValidateAsync(routeCtx, ct);
+        if (!pre.IsAvailable || pre.SourceWorkLine is null)
+        {
+            InvalidateLineCache(ctx.EquipmentId);
+            LogRouteUnavailableThrottled(ctx.EquipmentId,
+                $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料预记前路由不可用：{pre.SafeMessage}");
+            return UploadDecision.WaitMaterial;
+        }
+        var line = pre.SourceWorkLine;
+        _lineCache[ctx.EquipmentId] = line;
+
+        var taskId = RcsTaskId.Next(line.LineCode, RcsTaskKind.Transit);
+        ReservedSlot? reservedTake = null;
+        RcsResult result;
+        if (plan.SourceFrameId is long sourceFrameId)
+        {
+            var prepared = await _reservationFirstDispatcher.ExecuteAsync(
+                taskId,
+                (id, token) => _slots.ReserveTakeAsync(sourceFrameId, id, token),
+                (id, token) => _routingValidator.ValidateAsync(routeCtx, token),
+                (id, token) => _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+                {
+                    TaskId = id,
+                    WorkLineId = line.WorkLineId, LineCode = line.LineCode, TaskType = "0",
+                    Priority = 5, FromCode = plan.From!, ToCode = plan.To!,
+                    EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId,
+                    Kind = RcsTaskKind.Transit, Author = "scheduler"
+                }, token),
+                (id, token) => _slots.RollbackTakeAsync(id, token),
+                ct);
+
+            if (prepared.Status == ReservationFirstDispatchStatus.ReservationFailed)
+            {
+                if (prepared.Exception is not null)
+                {
+                    var reserveGate = GateFor((ctx.EquipmentId, ctx.PositionId));
+                    await reserveGate.WaitAsync(ct);
+                    try
+                    {
+                        ctx.AlarmRaised = true;
+                        SetState(ctx, PositionState.Alarm);
+                        await _alarms.RaiseRcsTaskNotFoundAsync(taskId,
+                            $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料预记异常，未调用 RCS：{prepared.Exception.Message}", ct);
+                        _logger.LogWarning(prepared.Exception,
+                            "EQ{Eq} POS{Pos} 上料预记异常，未调用 RCS → ALARM", ctx.EquipmentId, ctx.PositionId);
+                    }
+                    finally { reserveGate.Release(); }
+                    return UploadDecision.Failed;
+                }
+
+                _logger.LogDebug("EQ{Eq} POS{Pos} 上料预记未抢到料架 {Frame} 的可取槽，保持 WAIT_LOAD",
+                    ctx.EquipmentId, ctx.PositionId, sourceFrameId);
+                return UploadDecision.WaitMaterial;
+            }
+
+            if (prepared.Status == ReservationFirstDispatchStatus.RouteUnavailable)
+            {
+                InvalidateLineCache(ctx.EquipmentId);
+                LogRouteUnavailableThrottled(ctx.EquipmentId,
+                    $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料最终路由门禁失败（非 RCS 失败），已回滚预记：{prepared.RouteResult?.SafeMessage ?? prepared.Exception?.Message ?? "—"}");
+                if (!prepared.RollbackSucceeded)
+                {
+                    var g = GateFor((ctx.EquipmentId, ctx.PositionId));
+                    await g.WaitAsync(ct);
+                    try
+                    {
+                        ctx.AlarmRaised = true;
+                        SetState(ctx, PositionState.Alarm);
+                        await _alarms.RaiseRcsTaskNotFoundAsync(taskId,
+                            $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 路由拒发后预记回滚失败，需人工核账", ct);
+                    }
+                    finally { g.Release(); }
+                    return UploadDecision.Failed;
+                }
+                return UploadDecision.WaitMaterial;
+            }
+
+            reservedTake = prepared.Reservation;
+            result = prepared.Status == ReservationFirstDispatchStatus.Dispatched
+                ? prepared.DispatchResult!
+                : RcsResult.Fail("", BuildDispatchFailureMessage(prepared.Exception,
+                    prepared.DispatchResult, prepared.RollbackSucceeded)) with { TaskId = taskId };
+        }
+        else
+        {
+            // 命名区没有槽位账：合成预记占位，仍走最终门禁后再 RCS。
+            var prepared = await _reservationFirstDispatcher.ExecuteAsync(
+                taskId,
+                (_, _) => Task.FromResult<object?>(new object()),
+                (_, token) => _routingValidator.ValidateAsync(routeCtx, token),
+                (id, token) => _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+                {
+                    TaskId = id,
+                    WorkLineId = line.WorkLineId, LineCode = line.LineCode, TaskType = "0",
+                    Priority = 5, FromCode = plan.From!, ToCode = plan.To!,
+                    EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId,
+                    Kind = RcsTaskKind.Transit, Author = "scheduler"
+                }, token),
+                (_, _) => Task.FromResult(true),
+                ct);
+
+            if (prepared.Status == ReservationFirstDispatchStatus.RouteUnavailable)
+            {
+                InvalidateLineCache(ctx.EquipmentId);
+                LogRouteUnavailableThrottled(ctx.EquipmentId,
+                    $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料（命名区）最终路由门禁失败：{prepared.RouteResult?.SafeMessage ?? "—"}");
+                return UploadDecision.WaitMaterial;
+            }
+
+            result = prepared.Status == ReservationFirstDispatchStatus.Dispatched
+                ? prepared.DispatchResult!
+                : RcsResult.Fail("", BuildDispatchFailureMessage(prepared.Exception,
+                    prepared.DispatchResult, prepared.RollbackSucceeded)) with { TaskId = taskId };
+        }
 
         var gate = GateFor((ctx.EquipmentId, ctx.PositionId));
         await gate.WaitAsync(ct);
@@ -1315,7 +1825,11 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 _logger.LogWarning("EQ{Eq} POS{Pos} 上料下发窗口内出现直送登记，放弃绑定自取任务 {Task}",
                     ctx.EquipmentId, ctx.PositionId, result.TaskId ?? "—");
                 if (!string.IsNullOrEmpty(result.TaskId))
+                {
                     await CloseOrphanTaskAsync(result.TaskId, "UPLOAD_SUPERSEDED_BY_HANDOFF", ct);
+                    if (plan.SourceFrameId is not null)
+                        await _slots.RollbackTakeAsync(result.TaskId, ct);
+                }
                 return UploadDecision.WaitMaterial;
             }
 
@@ -1335,25 +1849,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             ctx.Phase = PositionPhase.Upload;
             ctx.UploadRequested = false;
 
-            // 原子取料预记（Layer 2）：源料架取一件、捕获物料码随件流转。
-            if (plan.SourceFrameId is long src)
-            {
-                var taken = await _slots.ReserveTakeAsync(src, result.TaskId!, ct);
-                if (taken is not null) ctx.MaterialId = taken.MaterialId;
-                else
-                {
-                    // 已下发但源料架无可取料 → 收口 RCS 任务 + ALARM，禁止 orphan 挂起。
-                    await CloseOrphanTaskAsync(result.TaskId!, $"UPLOAD_NOSTOCK_FRAME{src}", ct);
-                    ctx.CurrentTaskId = null;
-                    ctx.Phase = null;
-                    ctx.AlarmRaised = true;
-                    SetState(ctx, PositionState.Alarm);
-                    await _alarms.RaiseRcsTaskNotFoundAsync(result.TaskId!,
-                        $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料已下发但源料架 {src} 无可取料（并发/账实异常），任务已收口", ct);
-                    _logger.LogWarning("EQ{Eq} POS{Pos} 上料已下发但源料架 {Frame} 无可取料（并发/账实异常）→ 收口任务并 ALARM", ctx.EquipmentId, ctx.PositionId, src);
-                    return UploadDecision.Failed;
-                }
-            }
+            // 预记已在下发前完成；这里只把被锁定槽位的物料码绑定到工位上下文。
+            if (reservedTake is not null) ctx.MaterialId = reservedTake.MaterialId;
             SetState(ctx, PositionState.Dispatching);
             _logger.LogInformation("EQ{Eq} POS{Pos} 下发上料任务 {TaskId} {From}→{To}", ctx.EquipmentId, ctx.PositionId, result.TaskId, plan.From, plan.To);
             return UploadDecision.Queued;
@@ -1365,9 +1862,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// 选位与登记同在此串行完成，前一件登记落地后后一件才选位，两件下料不会抢到同一下游空工位。</summary>
     private async Task DispatchOneAsync(DispatchItem item, CancellationToken ct)
     {
-        if (IsAutoDispatchPaused)
+        if (!IsReconciled || IsAutoDispatchPaused)
         {
-            // 防御：暂停期间不应出队；若竞态已出队则重新入队，避免丢掉下料请求。
+            // 防御：未对账/暂停期间不应出队；若竞态已出队则重新入队，避免丢掉下料请求。
             _queue.Enqueue(item);
             return;
         }
@@ -1378,6 +1875,15 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         var decision = await ResolveUnloadTargetAsync(ctx, item.IsOk, ct);
         if (decision is null)
         {
+            // 路由/活动配置不可用：D8 Warning、不 Alarm；缺受管终点配置仍 Alarm
+            if (item.IsOk && await _equipment.HasSubsequentProcessAsync(item.EquipmentId, ct))
+            {
+                InvalidateLineCache(item.EquipmentId);
+                LogRouteUnavailableThrottled(item.EquipmentId,
+                    $"EQ{item.EquipmentId} POS{item.PositionId} 下料路由不可用（后续工序无活动目标），本 tick 跳过");
+                return;
+            }
+
             var g0 = GateFor((item.EquipmentId, item.PositionId));
             await g0.WaitAsync(ct);
             try
@@ -1393,14 +1899,122 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
         var d = decision.Value;
 
-        // 网络下发在锁外
-        var result = await _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+        var routeCtx = BuildUnloadRouteContext(item, d);
+        var pre = await _routingValidator.ValidateAsync(routeCtx, ct);
+        if (!pre.IsAvailable)
         {
-            WorkLineId = item.WorkLineId, LineCode = item.LineCode, TaskType = "1",
-            Priority = item.Priority, FromCode = item.FromCode, ToCode = d.ToCell,
-            EquipmentId = item.EquipmentId, PositionId = item.PositionId,
-            Kind = RcsTaskKind.Transit, Author = item.Author
-        }, ct);
+            InvalidateLineCache(item.EquipmentId);
+            if (d.DestEquipmentId is long destEq) InvalidateLineCache(destEq);
+            LogRouteUnavailableThrottled(item.EquipmentId,
+                $"EQ{item.EquipmentId} POS{item.PositionId} 下料预记前路由不可用：{pre.SafeMessage}");
+            return;
+        }
+
+        var lineCode = pre.SourceWorkLine?.LineCode ?? item.LineCode;
+        var workLineId = pre.SourceWorkLine?.WorkLineId ?? item.WorkLineId;
+        var taskId = RcsTaskId.Next(lineCode, RcsTaskKind.Transit);
+        RcsResult result;
+        if (RequiresUnloadReservation(d))
+        {
+            var prepared = await _reservationFirstDispatcher.ExecuteAsync(
+                taskId,
+                (id, token) => ReserveUnloadAsync(item, d, id, token),
+                (id, token) => _routingValidator.ValidateAsync(routeCtx, token),
+                (id, token) => _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+                {
+                    TaskId = id,
+                    WorkLineId = workLineId, LineCode = lineCode, TaskType = "1",
+                    Priority = item.Priority, FromCode = item.FromCode, ToCode = d.ToCell,
+                    EquipmentId = item.EquipmentId, PositionId = item.PositionId,
+                    Kind = RcsTaskKind.Transit, Author = item.Author
+                }, token),
+                (id, token) => RollbackUnloadReservationAsync(d, id, token),
+                ct);
+
+            if (prepared.Status == ReservationFirstDispatchStatus.ReservationFailed)
+            {
+                var reserveGate = GateFor((item.EquipmentId, item.PositionId));
+                await reserveGate.WaitAsync(ct);
+                try
+                {
+                    ctx.AlarmRaised = true;
+                    SetState(ctx, PositionState.Alarm);
+                    await _alarms.RaiseRcsTaskNotFoundAsync(taskId,
+                        $"EQ{item.EquipmentId} POS{item.PositionId} 下料预记失败（目标 {d.Target}，物料 {item.MaterialId ?? "—"}），未调用 RCS", ct);
+                    _logger.LogWarning("EQ{Eq} POS{Pos} 下料预记失败，未调用 RCS → ALARM（目标 {Target}，物料 {El}）",
+                        item.EquipmentId, item.PositionId, d.Target, item.MaterialId ?? "—");
+                }
+                finally { reserveGate.Release(); }
+                return;
+            }
+
+            if (prepared.Status == ReservationFirstDispatchStatus.RouteUnavailable)
+            {
+                InvalidateLineCache(item.EquipmentId);
+                if (d.DestEquipmentId is long de) InvalidateLineCache(de);
+                LogRouteUnavailableThrottled(item.EquipmentId,
+                    $"EQ{item.EquipmentId} POS{item.PositionId} 下料最终路由门禁失败（非 RCS 失败），已回滚预记/交接：{prepared.RouteResult?.SafeMessage ?? "—"}");
+                if (!prepared.RollbackSucceeded)
+                {
+                    var g = GateFor((item.EquipmentId, item.PositionId));
+                    await g.WaitAsync(ct);
+                    try
+                    {
+                        ctx.AlarmRaised = true;
+                        SetState(ctx, PositionState.Alarm);
+                        await _alarms.RaiseRcsTaskNotFoundAsync(taskId,
+                            $"EQ{item.EquipmentId} POS{item.PositionId} 路由拒发后预记/交接回滚失败，需人工核账", ct);
+                    }
+                    finally { g.Release(); }
+                }
+                return;
+            }
+
+            if (prepared.Status == ReservationFirstDispatchStatus.Dispatched
+                && d.Target == UnloadTarget.NextMachineCell
+                && !TryMarkInboundDispatched(d, taskId))
+            {
+                await CloseOrphanTaskAsync(taskId, "UNLOAD_HANDOFF_RESERVATION_LOST", ct);
+                result = RcsResult.Fail("", "直接交接预登记在下发窗口内丢失，任务已收口") with { TaskId = taskId };
+            }
+            else
+            {
+                result = prepared.Status == ReservationFirstDispatchStatus.Dispatched
+                    ? prepared.DispatchResult!
+                    : RcsResult.Fail("", BuildDispatchFailureMessage(prepared.Exception,
+                        prepared.DispatchResult, prepared.RollbackSucceeded)) with { TaskId = taskId };
+            }
+        }
+        else
+        {
+            var prepared = await _reservationFirstDispatcher.ExecuteAsync(
+                taskId,
+                (_, _) => Task.FromResult<object?>(new object()),
+                (_, token) => _routingValidator.ValidateAsync(routeCtx, token),
+                (id, token) => _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
+                {
+                    TaskId = id,
+                    WorkLineId = workLineId, LineCode = lineCode, TaskType = "1",
+                    Priority = item.Priority, FromCode = item.FromCode, ToCode = d.ToCell,
+                    EquipmentId = item.EquipmentId, PositionId = item.PositionId,
+                    Kind = RcsTaskKind.Transit, Author = item.Author
+                }, token),
+                (_, _) => Task.FromResult(true),
+                ct);
+
+            if (prepared.Status == ReservationFirstDispatchStatus.RouteUnavailable)
+            {
+                InvalidateLineCache(item.EquipmentId);
+                LogRouteUnavailableThrottled(item.EquipmentId,
+                    $"EQ{item.EquipmentId} POS{item.PositionId} 下料（无槽位账）最终路由门禁失败：{prepared.RouteResult?.SafeMessage ?? "—"}");
+                return;
+            }
+
+            result = prepared.Status == ReservationFirstDispatchStatus.Dispatched
+                ? prepared.DispatchResult!
+                : RcsResult.Fail("", BuildDispatchFailureMessage(prepared.Exception,
+                    prepared.DispatchResult, prepared.RollbackSucceeded)) with { TaskId = taskId };
+        }
 
         // bug#7：回填 ctx 与主循环驱动串行化（仅结果写入在锁内）
         var gate = GateFor((item.EquipmentId, item.PositionId));
@@ -1411,22 +2025,6 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             {
                 ctx.CurrentTaskId = result.TaskId;
                 ctx.Phase = PositionPhase.Unload;
-                var reserved = await ApplyUnloadReservationAsync(item, d, result.TaskId!, ct);
-                if (!reserved)
-                {
-                    // 入架预记失败（满架等）：收口 RCS，源工位 ALARM，禁止「任务在跑、账上无槽」
-                    await CloseOrphanTaskAsync(result.TaskId!, $"UNLOAD_RESERVE_FAIL:{d.Target}", ct);
-                    ctx.CurrentTaskId = null;
-                    ctx.Phase = null;
-                    // 物料仍在本工位，保留 MaterialId 供人工处理
-                    ctx.AlarmRaised = true;
-                    SetState(ctx, PositionState.Alarm);
-                    await _alarms.RaiseRcsTaskNotFoundAsync(result.TaskId!,
-                        $"EQ{item.EquipmentId} POS{item.PositionId} 下料已下发但入库预记失败（目标 {d.Target}，物料 {item.MaterialId ?? "—"}，多为满架），任务已收口", ct);
-                    _logger.LogWarning("EQ{Eq} POS{Pos} 下料已下发但预记失败 → 收口任务并 ALARM（物料 {El}）",
-                        item.EquipmentId, item.PositionId, item.MaterialId ?? "—");
-                    return;
-                }
                 _logger.LogInformation("EQ{Eq} POS{Pos} 下发下料任务 {TaskId} {From}→{To}（{Target}）", item.EquipmentId, item.PositionId, result.TaskId, item.FromCode, d.ToCell, d.Target);
             }
             else
@@ -1451,9 +2049,12 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             var r = await _taskSvc.CancelAsync(taskId, ct);
             if (!r.Success)
             {
-                await _taskStore.UpdateStateAsync(taskId, RcsTaskState.Failed, null, reason, ct);
-                _logger.LogWarning("orphan 任务 {Task} 取消失败，已落库 FAILED（{Reason}）：{Msg}",
-                    taskId, reason, r.Message ?? r.Error ?? "—");
+                if (!await _taskStore.UpdateStateAsync(taskId, RcsTaskState.Failed, null, reason, ct))
+                    _logger.LogWarning("orphan 任务 {Task} 取消失败且落库 FAILED 未生效（任务不存在）：{Reason}",
+                        taskId, reason);
+                else
+                    _logger.LogWarning("orphan 任务 {Task} 取消失败，已落库 FAILED（{Reason}）：{Msg}",
+                        taskId, reason, r.Message ?? r.Error ?? "—");
             }
             else
                 _logger.LogInformation("orphan 任务 {Task} 已取消（{Reason}）", taskId, reason);
@@ -1461,44 +2062,122 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "收口 orphan 任务 {Task} 异常，尝试落库 FAILED", taskId);
-            try { await _taskStore.UpdateStateAsync(taskId, RcsTaskState.Failed, null, reason, ct); }
+            try
+            {
+                if (!await _taskStore.UpdateStateAsync(taskId, RcsTaskState.Failed, null, reason, ct))
+                    _logger.LogWarning("orphan 任务 {Task} 落库 FAILED 未生效（任务不存在）", taskId);
+            }
             catch (Exception ex2) { _logger.LogWarning(ex2, "orphan 任务 {Task} 落库 FAILED 仍失败", taskId); }
         }
     }
 
-    /// <summary>下发成功后按下料终点做登记（直接交接）/ 入库预记（料架）+ 物料码流转。
-    /// 返回 false 表示入架预记失败（满架/异常），调用方须收口任务。</summary>
-    private async Task<bool> ApplyUnloadReservationAsync(DispatchItem item, UnloadDecision d, string taskId, CancellationToken ct)
+    private static bool RequiresUnloadReservation(UnloadDecision decision) =>
+        decision.Target == UnloadTarget.NextMachineCell || decision.DestFrameId is not null;
+
+    private static DispatchRouteContext BuildUnloadRouteContext(DispatchItem item, UnloadDecision d)
     {
-        try
+        var destEq = d.DestEquipmentId is long de
+            ? RouteDependency.Required(de)
+            : RouteDependency.NotApplicable;
+        var destPos = d.DestPositionId is long dp
+            ? RouteDependency.Required(dp)
+            : RouteDependency.NotApplicable;
+        var destFrame = d.DestFrameId is long df
+            ? RouteDependency.Required(df)
+            : RouteDependency.NotApplicable;
+
+        return new DispatchRouteContext
         {
-            if (d.Target == UnloadTarget.NextMachineCell && d.DestEquipmentId is long dstEq && d.DestPositionId is long dstPos)
-            {
-                // 直接交接：登记目标工位待入库（不记料架账，件进机台），物料码随交接传给下游
-                _expectedInbound[(dstEq, dstPos)] = new InboundHandoff(taskId, item.MaterialId, DateTime.UtcNow);
-                return true;
-            }
-            if (d.DestFrameId is long destFrame)
-            {
-                // 入下料/中转/NG 架：入库预记；满架 → 告警，由调用方收口任务（不静默丢件）
-                var put = await _slots.ReserveAsync(destFrame, taskId, item.MaterialId, ct);
-                if (put is null)
-                {
-                    _logger.LogWarning("EQ{Eq} POS{Pos} 料架 {Frame} 已满，件 {Task}（物料 {El}）无法入库预记，需人工换架/清架",
-                        item.EquipmentId, item.PositionId, destFrame, taskId, item.MaterialId ?? "—");
-                    await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                        $"料架 {destFrame} 已满，件 {taskId}（物料 {item.MaterialId ?? "—"}）无法入库，请人工换架/清架", taskId, ct);
-                    return false;
-                }
-                return true;
-            }
-            return true;
+            SourceEquipmentId = item.EquipmentId,
+            SourcePositionId = item.PositionId,
+            DestEquipmentId = destEq,
+            DestPositionId = destPos,
+            DestFrameId = destFrame,
+            FromCode = item.FromCode,
+            ToCode = d.ToCell,
+            RequiresResolvedCells = true
+        };
+    }
+
+    /// <summary>下料在调用 RCS 前先登记直接交接或原子预记目标料架。</summary>
+    private async Task<UnloadReservation?> ReserveUnloadAsync(
+        DispatchItem item,
+        UnloadDecision decision,
+        string taskId,
+        CancellationToken ct)
+    {
+        if (decision.Target == UnloadTarget.NextMachineCell
+            && decision.DestEquipmentId is long dstEq
+            && decision.DestPositionId is long dstPos)
+        {
+            var handoff = new InboundHandoff(taskId, item.MaterialId, DateTime.UtcNow, IsDispatched: false);
+            return _expectedInbound.TryAdd((dstEq, dstPos), handoff)
+                ? new UnloadReservation()
+                : null;
         }
-        catch (Exception ex)
+
+        if (decision.DestFrameId is long destFrame)
         {
-            _logger.LogWarning(ex, "下料槽位账预记异常 task={Task}", taskId);
+            var put = await _slots.ReserveAsync(destFrame, taskId, item.MaterialId, ct);
+            if (put is null)
+            {
+                _logger.LogWarning("EQ{Eq} POS{Pos} 料架 {Frame} 已满，件 {Task}（物料 {El}）无法入库预记，未调用 RCS",
+                    item.EquipmentId, item.PositionId, destFrame, taskId, item.MaterialId ?? "—");
+                await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    $"料架 {destFrame} 已满，件 {taskId}（物料 {item.MaterialId ?? "—"}）无法入库，请人工换架/清架", taskId, ct);
+                return null;
+            }
+            return new UnloadReservation();
+        }
+
+        return null;
+    }
+
+    private async Task<bool> RollbackUnloadReservationAsync(
+        UnloadDecision decision,
+        string taskId,
+        CancellationToken ct)
+    {
+        if (decision.DestFrameId is not null)
+            return await _slots.RollbackAsync(taskId, ct);
+
+        if (decision.Target == UnloadTarget.NextMachineCell
+            && decision.DestEquipmentId is long dstEq
+            && decision.DestPositionId is long dstPos
+            && _expectedInbound.TryGetValue((dstEq, dstPos), out var handoff)
+            && string.Equals(handoff.SourceTaskId, taskId, StringComparison.Ordinal))
+        {
+            return _expectedInbound.TryRemove((dstEq, dstPos), out _);
+        }
+
+        return false;
+    }
+
+    private bool TryMarkInboundDispatched(UnloadDecision decision, string taskId)
+    {
+        if (decision.DestEquipmentId is not long dstEq || decision.DestPositionId is not long dstPos)
             return false;
+
+        var key = (dstEq, dstPos);
+        while (_expectedInbound.TryGetValue(key, out var current))
+        {
+            if (!string.Equals(current.SourceTaskId, taskId, StringComparison.Ordinal)) return false;
+            if (current.IsDispatched) return true;
+            if (_expectedInbound.TryUpdate(key, current with { IsDispatched = true }, current)) return true;
         }
+        return false;
+    }
+
+    private static string BuildDispatchFailureMessage(
+        Exception? exception,
+        RcsResult? dispatchResult,
+        bool rollbackSucceeded)
+    {
+        var reason = exception?.Message
+            ?? (dispatchResult?.Success == true
+                ? "RCS 返回 taskId 与预生成 taskId 不一致"
+                : dispatchResult?.Error ?? dispatchResult?.Message ?? "RCS 下发失败");
+        return rollbackSucceeded ? reason : $"{reason}；预记回滚失败，需人工核账";
     }
 
     private sealed class PositionContext
@@ -1510,6 +2189,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         public PositionPhase? Phase { get; set; }
         public long WorkRecordId { get; set; }
         public bool AlarmRaised { get; set; }
+        public HasMatRecheckTracker HasMatRecheck { get; } = new();
+        public string? StatusDetail { get; set; }
+        public string? AlarmReason { get; set; }
         /// <summary>当前件的物料码（上料取料时捕获，随件流转至下料/交接，供落账与加工记录溯源）。</summary>
         public string? MaterialId { get; set; }
         /// <summary>Layer 1：已向单一调度消费者投递"请求上料"（去重，避免每 tick 重复投递）。</summary>
@@ -1524,6 +2206,12 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// <summary>下料终点决策：终点 cell + 终点类型 + 目标料架/机台工位。</summary>
     private readonly record struct UnloadDecision(string ToCell, UnloadTarget Target, long? DestFrameId, long? DestEquipmentId, long? DestPositionId);
 
+    private sealed record UnloadReservation;
+
     /// <summary>工序间直接交接登记：上游把 OK 件送入下游 cell 后，下游见料即接。</summary>
-    private sealed record InboundHandoff(string? SourceTaskId, string? MaterialId, DateTime CreatedUtc);
+    private sealed record InboundHandoff(
+        string? SourceTaskId,
+        string? MaterialId,
+        DateTime CreatedUtc,
+        bool IsDispatched = true);
 }

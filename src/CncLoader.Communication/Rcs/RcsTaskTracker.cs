@@ -155,7 +155,12 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         if (row.TaskState == state) return; // 未变化
 
         // 与回调冲突时以 queryTask 为准：直接覆盖。
-        await _store.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct);
+        if (!await _store.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct))
+        {
+            _logger.LogWarning("跟踪器轮询更新任务态未生效（任务不存在）{TaskId} → {State}", taskId, state);
+            return;
+        }
+
         _notifier.RaiseTaskStatus(new RcsTaskStatusEvent(taskId, ErrorCodeFrom(state), null, state) { Source = "poll" });
         _logger.LogInformation("跟踪器轮询 {TaskId} RCS={Rcs} → {State}", taskId, rcsStatus, state);
 

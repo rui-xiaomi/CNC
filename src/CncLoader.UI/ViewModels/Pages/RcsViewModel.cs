@@ -18,6 +18,38 @@ namespace CncLoader.UI.ViewModels.Pages;
 /// </summary>
 public sealed partial class RcsViewModel : PageViewModelBase
 {
+    /// <summary>
+    /// 测试接缝：非 null 时替代 HandyControl Growl（生产恒 null，行为不变）。
+    /// headless 单测无视觉树时 Growl.Show 会 NRE，造成假红。
+    /// </summary>
+    public static IUserNotificationService? TestNotifications { get; set; }
+
+    private static void NotifySuccess(string message)
+    {
+        if (TestNotifications is { } n) n.Success(message);
+        else HandyControl.Controls.Growl.Success(message);
+    }
+
+    private static void NotifyWarning(string message)
+    {
+        if (TestNotifications is { } n) n.Warning(message);
+        else HandyControl.Controls.Growl.Warning(message);
+    }
+
+    private static void NotifyError(string message)
+    {
+        if (TestNotifications is { } n) n.Error(message);
+        else HandyControl.Controls.Growl.Error(message);
+    }
+
+    private static void NotifyInfo(string message)
+    {
+        if (TestNotifications is { } n) n.Info(message);
+        else HandyControl.Controls.Growl.Info(message);
+    }
+
+    private const string RouteUnavailableUiMessage = "路由配置已禁用或不可用";
+
     private readonly IRcsTaskService _rcs;
     private readonly ILocationMapService _locationMap;
     private readonly IWorkLineService _workLineService;
@@ -30,6 +62,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private readonly IRcsCallbackListener _callbackListener;
     private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
+    private readonly IManagedDispatchRouteResolver _routeResolver;
+    private readonly IRoutingAvailabilityValidator _routingValidator;
     private readonly RcsOptions _options;
 
     private long _workLineId;
@@ -48,6 +82,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
         IRcsCallbackNotifier callbacks, IChangeFrameOrchestrator changeFrame,
         IRcsConnectionConfigService connConfig, IRcsRuntimeConfig runtime,
         IRcsCallbackListener callbackListener, IPositionScheduler scheduler, ICurrentUser user,
+        IManagedDispatchRouteResolver routeResolver, IRoutingAvailabilityValidator routingValidator,
         IOptions<AppOptions> options)
     {
         _rcs = rcs;
@@ -62,6 +97,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
         _callbackListener = callbackListener;
         _scheduler = scheduler;
         _user = user;
+        _routeResolver = routeResolver;
+        _routingValidator = routingValidator;
         _options = options.Value.Rcs;
 
         KindOptions = new[] { "搬运", "抓取", "识别" };
@@ -638,7 +675,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         if (!TryValidateManualDispatch(out var from, out var to, out var error))
         {
-            HandyControl.Controls.Growl.Warning(error);
+            NotifyWarning(error);
             StatusMessage = error;
             return;
         }
@@ -650,7 +687,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 || !string.Equals(_verifiedConnectionKey, key, StringComparison.Ordinal))
             {
                 const string gate = "请先测试真实 RCS 连接";
-                HandyControl.Controls.Growl.Warning(gate);
+                NotifyWarning(gate);
                 StatusMessage = gate;
                 RefreshDispatchGateHint();
                 return;
@@ -705,6 +742,9 @@ public sealed partial class RcsViewModel : PageViewModelBase
             }
             else
             {
+                // 手动搬运：Resolve → ValidatePre（早期反馈）；Final 在 Service 发送边界
+                if (!await TryValidateManagedTransitRouteAsync(from, to))
+                    return;
                 Append($"> 搬运 {from} → {to}");
                 r = await _rcs.DispatchTransitAsync(new TransitDispatchArgs
                 {
@@ -720,7 +760,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
         }
         catch (Exception ex)
         {
-            HandyControl.Controls.Growl.Error($"下发异常：{ex.Message}");
+            NotifyError($"下发异常：{ex.Message}");
             StatusMessage = ex.Message;
         }
         finally
@@ -737,7 +777,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
         }
     }
 
-    /// <summary>手工下发校验：优先级 1～10；搬运点到点起终点非空且不同。不生成假点位、不查 LOCATION_MAP。</summary>
+    /// <summary>手工下发校验：优先级 1～10；搬运点到点起终点非空且不同。不生成假点位。</summary>
     private bool TryValidateManualDispatch(out string from, out string to, out string error)
     {
         from = (FromCode ?? "").Trim();
@@ -775,6 +815,47 @@ public sealed partial class RcsViewModel : PageViewModelBase
         return true;
     }
 
+    /// <summary>
+    /// 手动搬运早期门禁：每次重新 Resolve + ValidatePre；不缓存上次结论。
+    /// 失败仅 Warning，不调用 Service。Final 在 <see cref="IRcsTaskService"/> 发送边界。
+    /// </summary>
+    private async Task<bool> TryValidateManagedTransitRouteAsync(string from, string to)
+    {
+        try
+        {
+            var resolved = await _routeResolver.ResolveAsync(from, to);
+            var ctx = resolved.IsResolved
+                ? resolved.Context!
+                : new DispatchRouteContext
+                {
+                    SourceEquipmentId = 0,
+                    DestEquipmentId = RouteDependency.RequiredMissing,
+                    FromCode = from,
+                    ToCode = to,
+                    RequiresResolvedCells = true
+                };
+
+            var pre = await _routingValidator.ValidateAsync(ctx);
+            if (resolved.IsResolved && pre.IsAvailable)
+                return true;
+
+            NotifyWarning(RouteUnavailableUiMessage);
+            StatusMessage = RouteUnavailableUiMessage;
+            Append($"> 拒绝下发：{RouteUnavailableUiMessage}");
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            NotifyWarning(RouteUnavailableUiMessage);
+            StatusMessage = RouteUnavailableUiMessage;
+            return false;
+        }
+    }
+
     [RelayCommand]
     private async Task CancelAsync()
     {
@@ -791,7 +872,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [RelayCommand]
     private async Task RedoAsync()
     {
-        if (string.IsNullOrWhiteSpace(OperateTaskId)) { HandyControl.Controls.Growl.Warning("请填任务号。"); return; }
+        if (string.IsNullOrWhiteSpace(OperateTaskId)) { NotifyWarning("请填任务号。"); return; }
         IsBusy = true;
         try
         {
@@ -878,7 +959,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
         {
             ConnectionHealthText = "地址无效";
             ConnectionHealthBrushKey = "AlarmBrush";
-            HandyControl.Controls.Growl.Warning("请先填写有效的 RCS 地址。");
+            NotifyWarning("请先填写有效的 RCS 地址。");
             return;
         }
 
@@ -910,7 +991,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 ConnectionHealthBrushKey = "OkBrush";
                 _verifiedConnectionKey = ConnectionKey(BaseUrl, ClientCode);
                 Append($"< 连通 OK {r.ElapsedMs}ms");
-                HandyControl.Controls.Growl.Success($"RCS 连通成功 {r.ElapsedMs}ms");
+                NotifySuccess($"RCS 连通成功 {r.ElapsedMs}ms");
                 RefreshDispatchGateHint();
             }
             else
@@ -920,7 +1001,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 ConnectionHealthBrushKey = "AlarmBrush";
                 _verifiedConnectionKey = null;
                 Append($"< 连通失败 HTTP{r.HttpStatus} {detail}");
-                HandyControl.Controls.Growl.Warning($"RCS 连通失败：{detail}");
+                NotifyWarning($"RCS 连通失败：{detail}");
                 RefreshDispatchGateHint();
             }
         }
@@ -930,7 +1011,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
             ConnectionHealthBrushKey = "AlarmBrush";
             _verifiedConnectionKey = null;
             Append($"< 连通异常 {ex.Message}");
-            HandyControl.Controls.Growl.Error($"测试异常：{ex.Message}");
+            NotifyError($"测试异常：{ex.Message}");
             RefreshDispatchGateHint();
         }
         finally
@@ -1225,14 +1306,21 @@ public sealed partial class RcsViewModel : PageViewModelBase
         {
             Append($"< OK {r.ElapsedMs}ms {r.Message}");
             StatusMessage = $"成功 {r.ElapsedMs}ms";
-            HandyControl.Controls.Growl.Success($"RCS 下发成功 {r.ElapsedMs}ms");
+            NotifySuccess($"RCS 下发成功 {r.ElapsedMs}ms");
+            return;
         }
-        else
+
+        if (r.FailureKind is RcsFailureKind.RouteUnavailable or RcsFailureKind.ConfigurationUnavailable)
         {
-            Append($"< 失败 HTTP{r.HttpStatus} {r.Error ?? r.Message}");
-            StatusMessage = r.Error ?? r.Message ?? "失败";
-            HandyControl.Controls.Growl.Warning($"RCS 未成功：{r.Error ?? r.Message}（报文已入流水）");
+            Append($"< 拒绝：{RouteUnavailableUiMessage}");
+            StatusMessage = RouteUnavailableUiMessage;
+            NotifyWarning(RouteUnavailableUiMessage);
+            return;
         }
+
+        Append($"< 失败 HTTP{r.HttpStatus} {r.Error ?? r.Message}");
+        StatusMessage = r.Error ?? r.Message ?? "失败";
+        NotifyWarning($"RCS 未成功：{r.Error ?? r.Message}（报文已入流水）");
     }
 
     [RelayCommand]

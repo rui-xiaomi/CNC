@@ -45,6 +45,8 @@ public interface IRcsTaskService
 /// <summary>搬运下发入参。</summary>
 public sealed record TransitDispatchArgs
 {
+    /// <summary>调用方预生成的 taskId；为空时仍由服务生成。</summary>
+    public string? TaskId { get; init; }
     public long WorkLineId { get; init; }
     public string LineCode { get; init; } = "LINE";
     /// <summary>0=上料 1=下料 2=转序。</summary>
@@ -61,6 +63,11 @@ public sealed record TransitDispatchArgs
     public string? TxnId { get; init; }
     public RcsTaskKind Kind { get; init; } = RcsTaskKind.Transit;
     public string? Author { get; init; }
+    /// <summary>
+    /// 为 true 时跳过受管路由门禁（仅空托盘回收等 AREA 无机关联路径）。
+    /// 手动搬运 / 自动 cell 派工默认 false，必须经 Resolver+Validator。
+    /// </summary>
+    public bool SkipManagedRouteGate { get; init; }
 }
 
 /// <summary>抓取下发入参。</summary>

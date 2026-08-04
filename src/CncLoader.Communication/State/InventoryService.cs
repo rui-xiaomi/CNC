@@ -69,8 +69,16 @@ public sealed class InventoryService : IInventoryService
             return "";
         }
 
-        // 料架 → 绑定机台 → 线体（与调度器一致）；无绑定则回退 LINE/1
+        // 料架 → 绑定机台 → 线体（与调度器一致）；不可用则拒发，禁止 LINE 回退。
         var line = await ResolveLineForFrameAsync(frameId, ct);
+        if (line is null)
+        {
+            var msg = $"料架 {frameId} 无线体路由（绑定机台缺失或配置已禁用）";
+            _logger.LogWarning("盘点拒发：{Msg}", msg);
+            InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, msg));
+            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}", msg, ct);
+            return "";
+        }
 
         var r = await _taskSvc.DispatchIdentifyAsync(new IdentifyDispatchArgs
         {
@@ -94,8 +102,8 @@ public sealed class InventoryService : IInventoryService
         return r.TaskId;
     }
 
-    /// <summary>按料架绑定机台反查线体；多绑定取首条；无绑定回退 WorkLineId=1 / LINE。</summary>
-    private async Task<WorkLineRef> ResolveLineForFrameAsync(long frameId, CancellationToken ct)
+    /// <summary>按料架绑定机台反查线体；多绑定取首条活动路由；不可用返回 null。</summary>
+    private async Task<WorkLineRef?> ResolveLineForFrameAsync(long frameId, CancellationToken ct)
     {
         var binds = await _equipment.GetBindingByFrameAsync(frameId, ct);
         foreach (var b in binds)
@@ -103,8 +111,8 @@ public sealed class InventoryService : IInventoryService
             var line = await _equipment.GetWorkLineByEquipmentAsync(b.EquipmentId, ct);
             if (line is not null) return line;
         }
-        _logger.LogWarning("盘点料架 {Frame} 无绑定机台或线体，回退 LINE/1", frameId);
-        return new WorkLineRef(1, "LINE");
+        _logger.LogWarning("盘点料架 {Frame} 无绑定机台或线体路由不可用", frameId);
+        return null;
     }
 
     private void OnScanResultReceived(object? sender, RcsScanResultEvent e)
@@ -134,10 +142,28 @@ public sealed class InventoryService : IInventoryService
                 return;
             }
 
-            var corrected = await _slots.CorrectFromInventoryAsync(info.FrameId, info.PosStart, e.Products);
+            var correction = await _slots.CorrectFromInventoryAsync(info.FrameId, info.PosStart, e.Products);
             _active.TryRemove(info.TaskId, out _);
-            _logger.LogInformation("盘点完成 料架 {Frame} 任务 {Task} 校正 {C} 个物料", info.FrameId, info.TaskId, corrected);
-            InventoryCompleted?.Invoke(this, new InventoryResultEvent(info.FrameId, info.TaskId, "COMPLETED", e.Code, e.Products, corrected, null));
+
+            // 汇总 Warning 已在 SlotAccountService 记录，此处只转发事件，避免重复刷屏。
+            if (correction.Status == InventoryCorrectionStatus.Cancelled)
+            {
+                InventoryCompleted?.Invoke(this, new InventoryResultEvent(
+                    info.FrameId, info.TaskId, "CANCELED", e.Code, e.Products, 0, correction.Message, correction));
+                return;
+            }
+
+            if (correction.Status == InventoryCorrectionStatus.DatabaseError)
+            {
+                InventoryCompleted?.Invoke(this, new InventoryResultEvent(
+                    info.FrameId, info.TaskId, "FAILED", e.Code, e.Products, 0, correction.Message, correction));
+                return;
+            }
+
+            _logger.LogInformation("盘点完成 料架 {Frame} 任务 {Task} 更新 {C} 冲突 {R}",
+                info.FrameId, info.TaskId, correction.UpdatedCount, correction.ReservationConflictCount);
+            InventoryCompleted?.Invoke(this, new InventoryResultEvent(
+                info.FrameId, info.TaskId, "COMPLETED", e.Code, e.Products, correction.UpdatedCount, null, correction));
         }
         catch (Exception ex)
         {

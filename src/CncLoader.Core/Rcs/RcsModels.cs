@@ -153,6 +153,16 @@ public sealed class RcsAck
     [JsonPropertyName("Data")] public object? Data { get; set; }
 }
 
+/// <summary>RCS 操作失败分类（供手动/Redo/Redispatch UI 映射；成功为 None）。</summary>
+public enum RcsFailureKind
+{
+    None = 0,
+    RouteUnavailable,
+    ConfigurationUnavailable,
+    Cancelled,
+    SendFailed
+}
+
 /// <summary>一次 RCS 调用的结果（含请求报文原文，供落库与展示）。</summary>
 public sealed record RcsResult(
     bool Ok,
@@ -167,6 +177,24 @@ public sealed record RcsResult(
     /// <summary>本次下发对应的 taskId（由编排服务填充，供调度器绑定加工位上下文）。</summary>
     public string? TaskId { get; init; }
 
+    /// <summary>失败分类；成功时为 <see cref="RcsFailureKind.None"/>。</summary>
+    public RcsFailureKind FailureKind { get; init; }
+
     public static RcsResult Fail(string requestBody, string error, int httpStatus = 0, int elapsedMs = 0)
-        => new(false, httpStatus, false, null, requestBody, null, error, elapsedMs);
+        => new(false, httpStatus, false, null, requestBody, null, error, elapsedMs)
+        {
+            FailureKind = RcsFailureKind.SendFailed
+        };
+
+    public static RcsResult RouteUnavailable(string safeMessage)
+        => new(false, 0, false, null, "", null, safeMessage, 0)
+        {
+            FailureKind = RcsFailureKind.RouteUnavailable
+        };
+
+    public static RcsResult ConfigurationUnavailable(string safeMessage)
+        => new(false, 0, false, null, "", null, safeMessage, 0)
+        {
+            FailureKind = RcsFailureKind.ConfigurationUnavailable
+        };
 }

@@ -23,21 +23,24 @@ public sealed partial class FrameViewModel : PageViewModelBase
     private readonly IInventoryService _inventory;
     private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
     private readonly DispatcherTimer _refreshTimer;
 
     public FrameViewModel(IFrameService service, ISlotAccountService slots, IInventoryService inventory,
-        IPositionScheduler scheduler, ICurrentUser user)
+        IPositionScheduler scheduler, ICurrentUser user, IUserNotificationService notify)
     {
         _service = service;
         _slots = slots;
         _inventory = inventory;
         _scheduler = scheduler;
         _user = user;
+        _notify = notify;
         Frames = new ObservableCollection<FrameRowVm>();
         Bindings = new ObservableCollection<FrameBindRow>();
         Layers = new ObservableCollection<SlotLayerVm>();
         EquipmentOptions = new ObservableCollection<NamedOption>();
-        SlotStateOptions = new[] { "空(0)", "占用(1)", "锁定(2)", "预记(3)" };
+        // 人工校正仅允许空/占用/锁定；预记只能由派工 Reserve 创建（展示仍见 SlotVm）。
+        SlotStateOptions = new[] { "空(0)", "占用(1)", "锁定(2)" };
         BindRoleOptions = new[]
         {
             new RoleOption("0", "上料架"), new RoleOption("1", "下料架"),
@@ -339,11 +342,11 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         if (value is null) return;
         CorrectMaterial = value.MaterialId ?? "";
+        // 预记槽仍正确展示；编辑框默认落到允许的选项（不提供「预记」人工目标）。
         CorrectSlotState = value.SlotState switch
         {
             "1" => "占用(1)",
             "2" => "锁定(2)",
-            "3" => "预记(3)",
             _ => "空(0)"
         };
     }
@@ -353,7 +356,7 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         if (SelectedFrame is null || SelectedSlot is null)
         {
-            HandyControl.Controls.Growl.Warning("请先选中料架与槽位。");
+            _notify.Warning("请先选中料架与槽位。");
             return;
         }
         try
@@ -362,16 +365,16 @@ public sealed partial class FrameViewModel : PageViewModelBase
             {
                 "占用(1)" => "1",
                 "锁定(2)" => "2",
-                "预记(3)" => "3",
                 _ => "0"
             };
             var material = string.IsNullOrWhiteSpace(CorrectMaterial) ? null : CorrectMaterial.Trim();
             if (stateCode == "0") material = null;
-            await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, material, stateCode, _user.Name);
-            HandyControl.Controls.Growl.Success($"槽位 {SelectedSlot.Label} 已校正。");
+            var label = SelectedSlot.Label;
+            var result = await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, material, stateCode, _user.Name);
+            NotifySlotMutationResult(result, SlotMutationOp.Correct, label);
             await LoadDetailAsync(SelectedFrame.Id);
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"校正失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"校正失败：{ex.Message}"); }
     }
 
     /// <summary>NG 闭环：选中槽一键置空释放（不向后流转）。</summary>
@@ -380,46 +383,142 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         if (SelectedFrame is null || SelectedSlot is null)
         {
-            HandyControl.Controls.Growl.Warning("请先选中料架与槽位。");
+            _notify.Warning("请先选中料架与槽位。");
             return;
         }
         try
         {
-            await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, null, SlotStates.Empty, _user.Name);
-            HandyControl.Controls.Growl.Success($"槽位 {SelectedSlot.Label} 已置空释放。");
+            var label = SelectedSlot.Label;
+            var result = await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, null, SlotStates.Empty, _user.Name);
+            NotifySlotMutationResult(result, SlotMutationOp.Clear, label);
             CorrectMaterial = "";
             CorrectSlotState = "空(0)";
             await LoadDetailAsync(SelectedFrame.Id);
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"置空失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"置空失败：{ex.Message}"); }
+    }
+
+    private enum SlotMutationOp { Correct, Clear }
+
+    /// <summary>将 <see cref="SlotMutationResult"/> 映射为单次用户通知（不落 Core、不暴露内部 Message）。</summary>
+    private void NotifySlotMutationResult(SlotMutationResult result, SlotMutationOp op, string slotLabel)
+    {
+        switch (result.Status)
+        {
+            case SlotMutationStatus.Updated:
+                _notify.Success(op == SlotMutationOp.Clear
+                    ? $"槽位 {slotLabel} 已置空释放。"
+                    : $"槽位 {slotLabel} 已校正。");
+                break;
+            case SlotMutationStatus.Unchanged:
+                _notify.Info("槽位状态无需修改");
+                break;
+            case SlotMutationStatus.ReservationConflict:
+                _notify.Warning(op == SlotMutationOp.Clear
+                    ? "槽位已被任务预记，不能清空"
+                    : "槽位已被任务预记，不能人工校正");
+                break;
+            case SlotMutationStatus.InvalidTargetState:
+                _notify.Warning("预记状态只能由派工流程创建，不能人工设置");
+                break;
+            case SlotMutationStatus.NotFound:
+                _notify.Error("槽位不存在或已被删除");
+                break;
+            case SlotMutationStatus.ConcurrencyConflict:
+                _notify.Warning("槽位状态已变化，请刷新后重试");
+                break;
+            case SlotMutationStatus.DatabaseError:
+                _notify.Error("槽位操作失败，请查看日志");
+                break;
+            case SlotMutationStatus.Cancelled:
+                // 静默：不记用户可见失败；命令 IsRunning 由 RelayCommand 自然收尾
+                break;
+            default:
+                _notify.Error("槽位操作未完成，请刷新后重试");
+                break;
+        }
     }
 
     [RelayCommand]
     private async Task StartInventoryAsync()
     {
-        if (SelectedFrame is null) { HandyControl.Controls.Growl.Warning("请先选中料架。"); return; }
+        if (SelectedFrame is null) { _notify.Warning("请先选中料架。"); return; }
         try
         {
             var taskId = await _inventory.StartInventoryAsync(SelectedFrame.Id, InventoryPosStart, InventoryCount, _user.Name);
             if (!string.IsNullOrEmpty(taskId))
-                HandyControl.Controls.Growl.Info($"盘点已发起 {taskId}（约 3~4 分钟，完成自动刷新）");
-            // 拒发（互斥/缺 LOCATION）走 InventoryCompleted FAILED → OnInventoryCompleted Growl
+                _notify.Info($"盘点已发起 {taskId}（约 3~4 分钟，完成自动刷新）");
+            // 拒发（互斥/缺 LOCATION）走 InventoryCompleted FAILED → OnInventoryCompleted
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"盘点发起失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"盘点发起失败：{ex.Message}"); }
     }
 
     private void OnInventoryCompleted(object? sender, InventoryResultEvent e)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        // headless 无 Dispatcher 时同步执行，便于单测观察通知。
+        void Apply()
+        {
+            NotifyInventoryFinalResult(e);
+            if (e.State == "COMPLETED"
+                && SelectedFrame is not null
+                && SelectedFrame.Id == e.FrameId)
+                _ = LoadDetailAsync(e.FrameId);
+        }
+
+        if (Application.Current?.Dispatcher is { } dispatcher)
+            dispatcher.Invoke(Apply);
+        else
+            Apply();
+    }
+
+    /// <summary>最终盘点回写通知：只发一次；发起 Info 不算完成。</summary>
+    private void NotifyInventoryFinalResult(InventoryResultEvent e)
+    {
+        var c = e.Correction;
+        if (c is null)
         {
             if (e.State == "COMPLETED")
-            {
-                HandyControl.Controls.Growl.Success($"盘点完成 {e.TaskId}：校正 {e.CorrectedCount} 个物料");
-                if (SelectedFrame is not null && SelectedFrame.Id == e.FrameId) _ = LoadDetailAsync(e.FrameId);
-            }
+                _notify.Success($"盘点完成：校正 {e.CorrectedCount} 个物料");
+            else if (e.State is "CANCELED" or "CANCELLED")
+                return;
             else
-                HandyControl.Controls.Growl.Warning($"盘点 {e.State} {e.TaskId}：{e.Error ?? ""}");
-        });
+                _notify.Warning($"盘点 {e.State}：{e.Error ?? ""}");
+            return;
+        }
+
+        if (c.Status == InventoryCorrectionStatus.Cancelled)
+            return;
+
+        if (c.Status == InventoryCorrectionStatus.DatabaseError)
+        {
+            _notify.Error("盘点回写失败，请查看日志");
+            return;
+        }
+
+        if (c.HasWarnings || c.Status == InventoryCorrectionStatus.CompletedWithWarnings)
+        {
+            if (c.ReservationConflictCount > 0 && c.UpdatedCount == 0
+                && c.UnchangedCount == 0 && c.NotFoundCount == 0 && c.ConcurrencyConflictCount == 0)
+            {
+                _notify.Warning($"盘点完成：未更新，全部为预记槽（共 {c.ReservationConflictCount} 个）");
+                return;
+            }
+
+            var parts = new List<string> { $"已更新 {c.UpdatedCount} 个" };
+            if (c.ReservationConflictCount > 0)
+                parts.Add($"跳过预记槽 {c.ReservationConflictCount} 个");
+            if (c.NotFoundCount > 0)
+                parts.Add($"未找到 {c.NotFoundCount} 个");
+            if (c.ConcurrencyConflictCount > 0)
+                parts.Add($"并发冲突 {c.ConcurrencyConflictCount} 个");
+            if (c.UnchangedCount > 0)
+                parts.Add($"无需修改 {c.UnchangedCount} 个");
+            _notify.Warning("盘点完成：" + string.Join("，", parts));
+            return;
+        }
+
+        _notify.Success($"盘点完成：已更新 {c.UpdatedCount} 个"
+            + (c.UnchangedCount > 0 ? $"，无需修改 {c.UnchangedCount} 个" : ""));
     }
 }
 

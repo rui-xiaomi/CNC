@@ -1,3 +1,4 @@
+using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -8,8 +9,13 @@ namespace CncLoader.Data.Repositories;
 public sealed class LocationMapService : ILocationMapService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
+    private readonly ILocationMapRoutingStore _routing;
 
-    public LocationMapService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
+    public LocationMapService(IDbContextFactory<CncDbContext> factory, ILocationMapRoutingStore routing)
+    {
+        _factory = factory;
+        _routing = routing;
+    }
 
     public async Task<IReadOnlyList<LocationMapItem>> GetAllAsync(CancellationToken ct = default)
     {
@@ -86,30 +92,23 @@ public sealed class LocationMapService : ILocationMapService
 
     public async Task<LocationMapItem?> ResolvePositionAsync(long equipmentId, long? positionId, string rcsType, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var e = await db.LocationMaps.AsNoTracking()
-            .Where(x => x.State == "0" && x.RcsType == rcsType && x.EquipmentId == equipmentId
-                        && (positionId == null ? x.PositionId == null : x.PositionId == positionId))
-            .FirstOrDefaultAsync(ct);
-        return e is null ? null : Map(e);
+        var e = (await _routing.FindByPositionAsync(equipmentId, positionId, rcsType, ct))
+            .FirstOrDefault(x => x.State == "0");
+        return e is null ? null : MapRow(e);
     }
 
     public async Task<LocationMapItem?> ResolveFrameAsync(long frameId, string rcsType, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var e = await db.LocationMaps.AsNoTracking()
-            .Where(x => x.State == "0" && x.RcsType == rcsType && x.FrameId == frameId)
-            .FirstOrDefaultAsync(ct);
-        return e is null ? null : Map(e);
+        var e = (await _routing.FindByFrameAsync(frameId, rcsType, ct))
+            .FirstOrDefault(x => x.State == "0");
+        return e is null ? null : MapRow(e);
     }
 
     public async Task<LocationMapItem?> ResolveAreaAsync(string locName, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var e = await db.LocationMaps.AsNoTracking()
-            .Where(x => x.State == "0" && x.LocType == "AREA" && x.LocName == locName)
-            .FirstOrDefaultAsync(ct);
-        return e is null ? null : Map(e);
+        var e = (await _routing.FindByAreaAsync(locName, ct))
+            .FirstOrDefault(x => x.State == "0");
+        return e is null ? null : MapRow(e);
     }
 
     public async Task<LocationMapItem?> ResolveByRcsCodeAsync(string rcsCode, CancellationToken ct = default)
@@ -136,5 +135,17 @@ public sealed class LocationMapService : ILocationMapService
         EquipmentName = equipmentName,
         PositionName = positionName,
         FrameName = frameName
+    };
+
+    private static LocationMapItem MapRow(LocationMapRoutingRow e) => new()
+    {
+        Id = e.Id,
+        LocType = e.LocType,
+        EquipmentId = e.EquipmentId,
+        PositionId = e.PositionId,
+        FrameId = e.FrameId,
+        LocName = e.LocName,
+        RcsCode = e.RcsCode,
+        RcsType = e.RcsType
     };
 }

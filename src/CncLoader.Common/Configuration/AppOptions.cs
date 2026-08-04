@@ -53,6 +53,14 @@ public sealed class RcsOptions
     /// <summary>加工位状态机调度器循环间隔（毫秒，默认 500ms）。每加工位并行驱动。</summary>
     public int SchedulerIntervalMs { get; set; } = 500;
 
+    /// <summary>
+    /// 启动对账失败后的自动重试间隔（毫秒）。默认 5000；必须 &gt;0（Options 启动校验，禁止静默降级）。
+    /// </summary>
+    public int ReconcileRetryIntervalMs { get; set; } = 5000;
+
+    /// <summary>RCS 完成后 HasMat fresh 连续读取未知的告警阈值。</summary>
+    public int HasMatRecheckFailThreshold { get; set; } = 6;
+
     /// <summary>是否启用加工位状态机调度器（第四阶段⑤）。关闭时工位态由轮询合成回退。</summary>
     public bool SchedulerEnabled { get; set; } = true;
 
