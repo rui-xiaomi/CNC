@@ -19,11 +19,20 @@ public interface IRcsTaskService
     /// <summary>取消任务（按已落库 taskId）。</summary>
     Task<RcsResult> CancelAsync(string rcsTaskId, CancellationToken ct = default);
 
-    /// <summary>redo：同 taskId 幂等重发（REDO_COUNT+1）。手动触发用。</summary>
+    /// <summary>redo：同 taskId 幂等重发（门禁后 <c>IncrementRedo</c>）。手动触发用。</summary>
     Task<RcsResult> RedoAsync(string rcsTaskId, CancellationToken ct = default);
 
-    /// <summary>自动重做专用：不再递增 REDO_COUNT（调用前已由 store 原子递增），只按原参数重发。</summary>
+    /// <summary>
+    /// 按落库参数重发（门禁后发送，<b>不</b>增加 REDO_COUNT）。
+    /// 与自动重派 <see cref="AutoRedispatchAsync"/>、手动 <see cref="RedoAsync"/> 责任分离。
+    /// </summary>
     Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Tracker 自动重派统一入口：Resolve→ValidatePre→ResolveFinal→ValidateFinal→
+    /// 原子 Claim（消费一次 RedoCount）→ RCS Send。门禁失败不 Claim、不发送、不改任务态。
+    /// </summary>
+    Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default);
 
     /// <summary>空托盘回收（人工触发）：点位→托盘回收区，transitTask + Kind=PalletReturn。不建托盘账。</summary>
     Task<RcsResult> DispatchPalletReturnAsync(long equipmentId, long? positionId, string fromCode, string toCode,
@@ -40,6 +49,19 @@ public interface IRcsTaskService
 
     /// <summary>标记已取消任务的人工处理已确认（CANCEL_MANUAL_FLAG=1）。仅 CANCELED 允许；否则抛异常。</summary>
     Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);
+}
+
+/// <summary>
+/// 受管搬运操作语义（Service 边界识别；不可仅靠目标字符串或 UI 推断）。
+/// </summary>
+public enum DispatchOperationKind
+{
+    /// <summary>通用 cell 搬运（自动/手动 Transit）。</summary>
+    Transit = 0,
+    /// <summary>空托盘回收：From∈{POSITION,FRAME} → To=AREA(PALLET_RETURN)。</summary>
+    PalletReturn = 1,
+    /// <summary>换架：FRAME↔AREA(EMPTY_BUFFER|FULL_BUFFER)，须带机台上下文并 Final 校验 FrameBind。</summary>
+    ChangeFrame = 2
 }
 
 /// <summary>搬运下发入参。</summary>
@@ -62,12 +84,13 @@ public sealed record TransitDispatchArgs
     public string? MaterialId { get; init; }
     public string? TxnId { get; init; }
     public RcsTaskKind Kind { get; init; } = RcsTaskKind.Transit;
-    public string? Author { get; init; }
     /// <summary>
-    /// 为 true 时跳过受管路由门禁（仅空托盘回收等 AREA 无机关联路径）。
-    /// 手动搬运 / 自动 cell 派工默认 false，必须经 Resolver+Validator。
+    /// 操作语义；默认 Transit。
+    /// 空托盘回收须为 <see cref="DispatchOperationKind.PalletReturn"/>；
+    /// 换架须为 <see cref="DispatchOperationKind.ChangeFrame"/> 且 <see cref="EquipmentId"/> &gt; 0。
     /// </summary>
-    public bool SkipManagedRouteGate { get; init; }
+    public DispatchOperationKind Operation { get; init; } = DispatchOperationKind.Transit;
+    public string? Author { get; init; }
 }
 
 /// <summary>抓取下发入参。</summary>

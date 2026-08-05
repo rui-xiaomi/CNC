@@ -89,8 +89,8 @@ internal static class RcsCallbackTestFakes
         public Task<long> CreateAsync(RcsTaskRecord record, CancellationToken ct = default) => Task.FromResult(1L);
         public Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
         public Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
-            => Task.FromResult(false);
+        public Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
+            => Task.FromResult(AutoRedoClaimResult.NotClaimable);
         public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
         public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
             => Task.FromResult<RcsTaskRow?>(null);

@@ -220,7 +220,8 @@ public sealed class DirectHandoffRoutingGateTests
         if (finalDisablesDest)
         {
             var inner = new Data.Repositories.RoutingAvailabilityValidator(
-                store, equipment, Microsoft.Extensions.Logging.Abstractions.NullLogger<Data.Repositories.RoutingAvailabilityValidator>.Instance);
+                store, equipment, new FakeFrameRoutingStore(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<Data.Repositories.RoutingAvailabilityValidator>.Instance);
             validator = new DisableDestOnSecondValidate(store, inner);
         }
 

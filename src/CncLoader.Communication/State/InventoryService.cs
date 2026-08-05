@@ -58,14 +58,14 @@ public sealed class InventoryService : IInventoryService
         }
 
         // station → shelf（种子多为 shelf）；禁止 FRAME-{id} 假码。
+        // 路由配置不可用：D8 后台 Warning、不置工位 Alarm（Service Final 仍为权威）。
         var station = await _locationMap.ResolveFrameAsync(frameId, "station", ct)
                       ?? await _locationMap.ResolveFrameAsync(frameId, "shelf", ct);
         if (station is null || string.IsNullOrWhiteSpace(station.RcsCode))
         {
             var msg = $"料架 {frameId} 未录入 LOCATION_MAP（station/shelf），请先配置位置映射";
-            _logger.LogWarning("盘点拒发：{Msg}", msg);
+            _logger.LogWarning("盘点拒发（路由配置不可用）：{Msg}", msg);
             InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, msg));
-            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}", msg, ct);
             return "";
         }
 
@@ -74,9 +74,8 @@ public sealed class InventoryService : IInventoryService
         if (line is null)
         {
             var msg = $"料架 {frameId} 无线体路由（绑定机台缺失或配置已禁用）";
-            _logger.LogWarning("盘点拒发：{Msg}", msg);
+            _logger.LogWarning("盘点拒发（路由配置不可用）：{Msg}", msg);
             InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, msg));
-            await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}", msg, ct);
             return "";
         }
 
@@ -91,6 +90,13 @@ public sealed class InventoryService : IInventoryService
         {
             var err = r.Error ?? r.Message ?? "未知错误";
             InventoryCompleted?.Invoke(this, new InventoryResultEvent(frameId, "", "FAILED", null, Array.Empty<string>(), 0, err));
+            // 路由/配置门禁拒发：不置 Alarm；其他 RCS 业务失败保持既有告警
+            if (r.FailureKind is RcsFailureKind.RouteUnavailable or RcsFailureKind.ConfigurationUnavailable)
+            {
+                _logger.LogWarning("盘点拒发（路由配置不可用）料架 {Frame}：{Msg}", frameId, err);
+                return "";
+            }
+
             await _alarms.RaiseRcsTaskNotFoundAsync($"INVENTORY-FRAME-{frameId}",
                 $"盘点下发失败（料架 {frameId}）：{err}", ct);
             return "";

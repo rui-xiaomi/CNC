@@ -47,12 +47,25 @@ public sealed class RcsTaskService : IRcsTaskService
 
     public async Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
     {
-        // 发送边界 Final（权威重读）；手动路径 ViewModel 已做 Pre，此处不可省略
-        if (!args.SkipManagedRouteGate)
+        // Pre + Final 双权威读取：ResolvePre→ValidatePre→ResolveFinal→ValidateFinal→Create→RCS
+        // 无 Skip 逃生；PalletReturn / ChangeFrame 另在 Service 边界执行角色策略
+        if (args.Operation == DispatchOperationKind.ChangeFrame
+            && (args.EquipmentId is null or <= 0))
         {
-            var final = await ValidateFinalAsync(args.FromCode, args.ToCode, ct);
-            if (!final.Ok) return final.Failure!;
+            _logger.LogWarning("ChangeFrame 缺少机台上下文，拒绝派工 From={From} To={To}",
+                args.FromCode, args.ToCode);
+            return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
         }
+
+        var pre = await ResolveAndValidateForNewExecutionAsync(args, ct);
+        if (!pre.Ok) return pre.Failure!;
+        if (!MatchesOperationRole(args.Operation, pre.Context!))
+            return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
+
+        var final = await ValidateFinalAsync(args, ct);
+        if (!final.Ok) return final.Failure!;
+        if (!MatchesOperationRole(args.Operation, final.Context!))
+            return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
 
         var taskId = string.IsNullOrWhiteSpace(args.TaskId)
             ? RcsTaskId.Next(args.LineCode, args.Kind)
@@ -100,6 +113,12 @@ public sealed class RcsTaskService : IRcsTaskService
 
     public async Task<RcsResult> DispatchGrabAsync(GrabDispatchArgs args, CancellationToken ct = default)
     {
+        // Final-only：ResolveCurrent→ValidateFinal→Grab 角色→Create→Excute（方法本身固定操作语义）
+        var final = await ValidateFinalAsync(args.SrcStation, args.DstStation, ct);
+        if (!final.Ok) return final.Failure!;
+        if (!MatchesGrabRole(final.Context!))
+            return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
+
         var taskId = RcsTaskId.Next(args.LineCode, RcsTaskKind.Grab);
         var param = JsonSerializer.Serialize(args.Items, JsonOpt);
 
@@ -139,6 +158,12 @@ public sealed class RcsTaskService : IRcsTaskService
 
     public async Task<RcsResult> DispatchIdentifyAsync(IdentifyDispatchArgs args, CancellationToken ct = default)
     {
+        // Final-only：单端点以 Station 作 From/To 解析；Identify 角色固定（不可由调用方 bool 绕过）
+        var final = await ValidateFinalAsync(args.Station, args.Station, ct);
+        if (!final.Ok) return final.Failure!;
+        if (!MatchesIdentifyRole(final.Context!))
+            return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
+
         var taskId = RcsTaskId.Next(args.LineCode, RcsTaskKind.Identify);
         var param = $"{args.PosStart},{args.Count}";
 
@@ -202,8 +227,8 @@ public sealed class RcsTaskService : IRcsTaskService
     }
 
     /// <summary>
-    /// 自动重做专用：调用前应已通过 <see cref="IRcsTaskStore.TryIncrementRedoIfUnderAsync"/> 原子递增 REDO_COUNT，
-    /// 此处只按落库参数重建请求并重发（同 taskId 幂等），不再递增计数。
+    /// 按落库参数重发（门禁后发送），不增加 REDO_COUNT。
+    /// 与 <see cref="AutoRedispatchAsync"/>（门禁后原子 Claim）及手动 <see cref="RedoAsync"/> 分离。
     /// </summary>
     public async Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default)
     {
@@ -215,6 +240,55 @@ public sealed class RcsTaskService : IRcsTaskService
 
         var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!final.Ok) return final.Failure!;
+
+        var result = await BuildAndSendAsync(row, "redo", ct);
+        await FinishAsync(rcsTaskId, result, ct);
+        if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
+        return result;
+    }
+
+    /// <summary>
+    /// Tracker 自动重派：Load→ResolvePre→ValidatePre→ResolveFinal→ValidateFinal→
+    /// TryClaimAutoRedo→RcsSend。门禁失败不 Claim；Claim 失败不 Send；不回滚已消费次数。
+    /// </summary>
+    public async Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default)
+    {
+        var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
+        if (row is null) return RcsResult.Fail("", $"任务不存在：{rcsTaskId}");
+
+        var gate = await ResolveAndValidateForNewExecutionAsync(row.FromCode, row.ToCode, ct);
+        if (!gate.Ok) return gate.Failure!;
+
+        var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
+        if (!final.Ok) return final.Failure!;
+
+        var claim = await _store.TryClaimAutoRedoAsync(rcsTaskId, maxRedoCount, ct);
+        if (claim != AutoRedoClaimResult.Claimed)
+        {
+            _logger.LogWarning(
+                "自动重派 Claim 未成功 {TaskId} 结果={Claim}（非路由配置失败）",
+                rcsTaskId, claim);
+            return claim switch
+            {
+                AutoRedoClaimResult.LimitReached =>
+                    RcsResult.RedoLimitReached($"自动重做已达上限 {maxRedoCount}"),
+                AutoRedoClaimResult.NotFound =>
+                    RcsResult.Fail("", $"任务不存在：{rcsTaskId}"),
+                _ => RcsResult.AutoRedoNotClaimable($"自动重派 Claim 未抢占：{claim}")
+            };
+        }
+
+        // Claim 已消费次数；取消则不发送、不回滚（D14 边界）。
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning(
+                "自动重派 Claim 成功后取消，已消耗 RedoCount，不发送 {TaskId}", rcsTaskId);
+            throw;
+        }
 
         var result = await BuildAndSendAsync(row, "redo", ct);
         await FinishAsync(rcsTaskId, result, ct);
@@ -244,16 +318,36 @@ public sealed class RcsTaskService : IRcsTaskService
             WorkLineId = workLineId, LineCode = lineCode, TaskType = "2",
             Priority = 8, FromCode = fromCode, ToCode = toCode,
             EquipmentId = equipmentId, PositionId = positionId,
-            Kind = RcsTaskKind.PalletReturn, Author = author,
-            SkipManagedRouteGate = true
+            Kind = RcsTaskKind.PalletReturn,
+            Operation = DispatchOperationKind.PalletReturn,
+            Author = author
         }, ct);
 
     /// <summary>
     /// 新执行统一门禁：Resolve + ValidatePre。
     /// 不修改任务、不 Increment、不调用 RCS。
     /// </summary>
-    private async Task<GateOutcome> ResolveAndValidateForNewExecutionAsync(
+    private Task<GateOutcome> ResolveAndValidateForNewExecutionAsync(
+        TransitDispatchArgs args, CancellationToken ct)
+        => ResolveAndValidateCoreAsync(args.FromCode, args.ToCode, args, isFinal: false, ct);
+
+    /// <summary>Redo/Redispatch：按落库 From/To 门禁（无换架 Operation 上下文；本期不扩 Tracker）。</summary>
+    private Task<GateOutcome> ResolveAndValidateForNewExecutionAsync(
         string? fromCode, string? toCode, CancellationToken ct)
+        => ResolveAndValidateCoreAsync(fromCode, toCode, operationArgs: null, isFinal: false, ct);
+
+    /// <summary>Grab/Identify/Redo Final（无换架 Operation 上下文）。</summary>
+    private Task<GateOutcome> ValidateFinalAsync(
+        string? fromCode, string? toCode, CancellationToken ct)
+        => ResolveAndValidateCoreAsync(fromCode, toCode, operationArgs: null, isFinal: true, ct);
+
+    private Task<GateOutcome> ValidateFinalAsync(
+        TransitDispatchArgs args, CancellationToken ct)
+        => ResolveAndValidateCoreAsync(args.FromCode, args.ToCode, args, isFinal: true, ct);
+
+    private async Task<GateOutcome> ResolveAndValidateCoreAsync(
+        string? fromCode, string? toCode, TransitDispatchArgs? operationArgs,
+        bool isFinal, CancellationToken ct)
     {
         try
         {
@@ -270,18 +364,21 @@ public sealed class RcsTaskService : IRcsTaskService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "受管路由解析异常，fail-closed");
+                _logger.LogWarning(ex, "受管路由{Phase}解析异常，fail-closed", isFinal ? " Final" : "");
                 return GateOutcome.Reject(RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage));
             }
 
-            var ctx = resolved.IsResolved
-                ? resolved.Context!
-                : BuildFailClosedContext(fromCode, toCode);
+            if (isFinal && !resolved.IsResolved)
+                return GateOutcome.Reject(RcsResult.RouteUnavailable(RouteUnavailableUiMessage));
 
-            RoutingAvailabilityResult pre;
+            var ctx = resolved.IsResolved
+                ? ApplyOperationContext(resolved.Context!, operationArgs)
+                : ApplyOperationContext(BuildFailClosedContext(fromCode, toCode), operationArgs);
+
+            RoutingAvailabilityResult gate;
             try
             {
-                pre = await _routingValidator.ValidateAsync(ctx, ct);
+                gate = await _routingValidator.ValidateAsync(ctx, ct);
             }
             catch (OperationCanceledException)
             {
@@ -289,13 +386,17 @@ public sealed class RcsTaskService : IRcsTaskService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "路由 Pre 校验异常，fail-closed");
+                _logger.LogWarning(ex, "路由{Phase}校验异常，fail-closed", isFinal ? " Final" : " Pre");
                 return GateOutcome.Reject(RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage));
             }
 
-            if (!resolved.IsResolved || !pre.IsAvailable)
+            if (!resolved.IsResolved || !gate.IsAvailable)
             {
-                var kind = MapFailureKind(resolved, pre);
+                var kind = isFinal
+                    ? (gate.Reason == RoutingUnavailableReason.ConfigurationUnavailable
+                        ? RcsFailureKind.ConfigurationUnavailable
+                        : RcsFailureKind.RouteUnavailable)
+                    : MapFailureKind(resolved, gate);
                 return GateOutcome.Reject(kind == RcsFailureKind.ConfigurationUnavailable
                     ? RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage)
                     : RcsResult.RouteUnavailable(RouteUnavailableUiMessage));
@@ -309,62 +410,17 @@ public sealed class RcsTaskService : IRcsTaskService
         }
     }
 
-    private async Task<GateOutcome> ValidateFinalAsync(
-        string? fromCode, string? toCode, CancellationToken ct)
+    private static DispatchRouteContext ApplyOperationContext(
+        DispatchRouteContext ctx, TransitDispatchArgs? args)
     {
-        try
+        if (args is null) return ctx;
+        return ctx with
         {
-            ct.ThrowIfCancellationRequested();
-
-            ManagedDispatchRouteResult resolved;
-            try
-            {
-                resolved = await _routeResolver.ResolveAsync(fromCode, toCode, ct);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "受管路由 Final 解析异常，fail-closed");
-                return GateOutcome.Reject(RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage));
-            }
-
-            if (!resolved.IsResolved)
-                return GateOutcome.Reject(RcsResult.RouteUnavailable(RouteUnavailableUiMessage));
-
-            RoutingAvailabilityResult final;
-            try
-            {
-                final = await _routingValidator.ValidateAsync(resolved.Context!, ct);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "路由 Final 校验异常，fail-closed");
-                return GateOutcome.Reject(RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage));
-            }
-
-            if (!final.IsAvailable)
-            {
-                var kind = final.Reason == RoutingUnavailableReason.ConfigurationUnavailable
-                    ? RcsFailureKind.ConfigurationUnavailable
-                    : RcsFailureKind.RouteUnavailable;
-                return GateOutcome.Reject(kind == RcsFailureKind.ConfigurationUnavailable
-                    ? RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage)
-                    : RcsResult.RouteUnavailable(RouteUnavailableUiMessage));
-            }
-
-            return GateOutcome.Pass(resolved.Context!);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
+            Operation = args.Operation,
+            OperationEquipmentId = args.Operation == DispatchOperationKind.ChangeFrame
+                ? args.EquipmentId
+                : null
+        };
     }
 
     private static DispatchRouteContext BuildFailClosedContext(string? fromCode, string? toCode) => new()
@@ -375,6 +431,84 @@ public sealed class RcsTaskService : IRcsTaskService
         ToCode = toCode,
         RequiresResolvedCells = true
     };
+
+    /// <summary>
+    /// 操作角色策略：Transit 无额外限制；
+    /// PalletReturn：From∈{Position,Frame} → AREA(PALLET_RETURN)；
+    /// ChangeFrame：FRAME↔AREA(EMPTY_BUFFER|FULL_BUFFER)。
+    /// </summary>
+    private static bool MatchesOperationRole(DispatchOperationKind operation, DispatchRouteContext ctx)
+        => operation switch
+        {
+            DispatchOperationKind.Transit => true,
+            DispatchOperationKind.PalletReturn => MatchesPalletReturnRole(ctx),
+            DispatchOperationKind.ChangeFrame => MatchesChangeFrameRole(ctx),
+            _ => false
+        };
+
+    private static bool MatchesPalletReturnRole(DispatchRouteContext ctx)
+    {
+        var from = ctx.FromEndpoint;
+        var to = ctx.ToEndpoint;
+        if (from is null || to is null)
+            return false;
+
+        if (from.Kind is not (ManagedEndpointKind.Position or ManagedEndpointKind.Frame))
+            return false;
+
+        return to.Kind == ManagedEndpointKind.Area
+               && string.Equals(to.LocName, "PALLET_RETURN", StringComparison.Ordinal);
+    }
+
+    private static bool MatchesChangeFrameRole(DispatchRouteContext ctx)
+    {
+        var from = ctx.FromEndpoint;
+        var to = ctx.ToEndpoint;
+        if (from is null || to is null)
+            return false;
+
+        // pull：FRAME → 缓冲 AREA；push：缓冲 AREA → FRAME
+        if (from.Kind == ManagedEndpointKind.Frame && IsChangeFrameBufferArea(to))
+            return true;
+        if (IsChangeFrameBufferArea(from) && to.Kind == ManagedEndpointKind.Frame)
+            return true;
+        return false;
+    }
+
+    private static bool IsChangeFrameBufferArea(ManagedDispatchEndpoint ep)
+        => ep.Kind == ManagedEndpointKind.Area
+           && ep.LocName is "EMPTY_BUFFER" or "FULL_BUFFER";
+
+    /// <summary>
+    /// Grab：双端均为配置角色 AREA（LOAD/UNLOAD/缓冲/回收）；拒绝 POSITION/FRAME/未知角色。
+    /// </summary>
+    private static bool MatchesGrabRole(DispatchRouteContext ctx)
+    {
+        var from = ctx.FromEndpoint;
+        var to = ctx.ToEndpoint;
+        if (from is null || to is null)
+            return false;
+
+        return IsGrabAreaEndpoint(from) && IsGrabAreaEndpoint(to);
+    }
+
+    private static bool IsGrabAreaEndpoint(ManagedDispatchEndpoint ep)
+        => ep.Kind == ManagedEndpointKind.Area
+           && ManagedDispatchEndpoint.IsConfiguredAreaRole(ep.LocName);
+
+    /// <summary>
+    /// Identify / 盘点：单端必须为活动 FRAME（shelf/station 由 LOCATION_MAP.RcsType 表达）；拒绝 AREA/POSITION。
+    /// </summary>
+    private static bool MatchesIdentifyRole(DispatchRouteContext ctx)
+    {
+        var from = ctx.FromEndpoint;
+        var to = ctx.ToEndpoint;
+        if (from is null || to is null)
+            return false;
+
+        return from.Kind == ManagedEndpointKind.Frame
+               && to.Kind == ManagedEndpointKind.Frame;
+    }
 
     private static RcsFailureKind MapFailureKind(
         ManagedDispatchRouteResult resolved, RoutingAvailabilityResult pre)

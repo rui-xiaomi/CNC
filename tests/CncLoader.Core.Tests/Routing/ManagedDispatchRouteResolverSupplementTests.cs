@@ -56,7 +56,8 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
             RcsCode = "CELL-Y", RcsType = "cell"
         }, state: "0");
 
-        var resolver = new ManagedDispatchRouteResolver(loc, NullLogger<ManagedDispatchRouteResolver>.Instance);
+        var resolver = new ManagedDispatchRouteResolver(
+            loc, new FakeFrameRoutingStore(), NullLogger<ManagedDispatchRouteResolver>.Instance);
 
         var disabled = await resolver.ResolveAsync("CELL-X", "CELL-Y");
         var missing = await resolver.ResolveAsync("NO-SUCH", "CELL-Y");
@@ -73,12 +74,15 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
     public async Task Supplement_ResolverException_ConfigurationUnavailable_RcsZero()
     {
         var boom = new ThrowingLocationMapStore();
-        var resolver = new ManagedDispatchRouteResolver(boom, NullLogger<ManagedDispatchRouteResolver>.Instance);
+        var resolver = new ManagedDispatchRouteResolver(
+            boom, new FakeFrameRoutingStore(), NullLogger<ManagedDispatchRouteResolver>.Instance);
         var store = new MutableEquipmentRoutingStore();
         store.SeedActiveChain(10, "L", 20, 1, 30);
         var equipment = new TracingEquipmentConfigService(store, new CallTrace());
         var validator = new CountingRoutingValidator(
-            new RoutingAvailabilityValidator(store, equipment, NullLogger<RoutingAvailabilityValidator>.Instance));
+            new RoutingAvailabilityValidator(
+                store, equipment, new FakeFrameRoutingStore(),
+                NullLogger<RoutingAvailabilityValidator>.Instance));
         var client = new FakeRcsHttpClient();
         var taskStore = new MutableRcsTaskStore();
         var svc = new global::CncLoader.Communication.Rcs.RcsTaskService(
@@ -123,10 +127,12 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
             PositionId = 1, RcsCode = ManualReplayRoutingCodes.ToCell, RcsType = "cell"
         });
         var equipment = new TracingEquipmentConfigService(store, new CallTrace());
+        var frames = new FakeFrameRoutingStore();
         var inner = new RoutingAvailabilityValidator(
-            store, equipment, NullLogger<RoutingAvailabilityValidator>.Instance);
+            store, equipment, frames, NullLogger<RoutingAvailabilityValidator>.Instance);
         var flip = new FinalFailValidator(inner);
-        var resolver = new ManagedDispatchRouteResolver(loc, NullLogger<ManagedDispatchRouteResolver>.Instance);
+        var resolver = new ManagedDispatchRouteResolver(
+            loc, frames, NullLogger<ManagedDispatchRouteResolver>.Instance);
         var client = new FakeRcsHttpClient();
         var taskStore = new MutableRcsTaskStore();
         var callbacks = new TrackingCallbackProcessor();
@@ -189,9 +195,9 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
         Assert.Multiple(() =>
         {
             Assert.That(h.Client.SendCount, Is.EqualTo(1));
-            Assert.That(h.Validator.CallCount, Is.EqualTo(2),
-                "ViewModel Pre + Service Final 各一次");
-            Assert.That(h.Validator.Results.Count(r => r.IsAvailable), Is.EqualTo(2));
+            Assert.That(h.Validator.CallCount, Is.EqualTo(3),
+                "ViewModel Pre + Service Pre + Service Final 各一次");
+            Assert.That(h.Validator.Results.Count(r => r.IsAvailable), Is.EqualTo(3));
         });
     }
 

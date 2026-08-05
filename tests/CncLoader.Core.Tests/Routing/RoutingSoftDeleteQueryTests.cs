@@ -701,6 +701,8 @@ public sealed class RoutingSoftDeleteQueryTests
             => Task.FromResult(RcsResult.Fail("", "noop"));
         public Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default)
             => Task.FromResult(RcsResult.Fail("", "noop"));
+        public Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default)
+            => Task.FromResult(RcsResult.Fail("", "noop"));
         public Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default)
             => Task.FromResult(RcsResult.Fail("", "noop"));
         public Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default)
@@ -787,6 +789,8 @@ public sealed class RoutingSoftDeleteQueryTests
             => Task.FromResult(RcsResult.Fail("", "noop"));
         public Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default)
             => Task.FromResult(RcsResult.Fail("", "noop"));
+        public Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default)
+            => Task.FromResult(RcsResult.Fail("", "noop"));
         public Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default)
             => Task.FromResult(RcsResult.Fail("", "noop"));
         public Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default)
@@ -808,8 +812,8 @@ public sealed class RoutingSoftDeleteQueryTests
         public Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null, string? error = null, CancellationToken ct = default)
             => Task.FromResult(false);
         public Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
-            => Task.FromResult(false);
+        public Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
+            => Task.FromResult(AutoRedoClaimResult.NotClaimable);
         public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
         public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
             => Task.FromResult<RcsTaskRow?>(null);

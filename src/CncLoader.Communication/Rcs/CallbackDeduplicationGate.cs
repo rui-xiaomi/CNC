@@ -24,15 +24,40 @@ internal readonly record struct CallbackDedupResult(
 /// <summary>
 /// RCS 回调 single-flight：in-flight 与 final seen 两态分离。
 /// 仅在持久化明确成功后提交 final seen；失败/取消释放 in-flight。
+/// final seen 使用 Dictionary+LinkedList 保持集合与 FIFO 顺序一致（P1-2）。
 /// </summary>
 internal sealed class CallbackDeduplicationGate
 {
-    private const int FinalSeenCapacity = 4000;
-
+    private readonly int _finalSeenCapacity;
     private readonly Dictionary<string, TaskCompletionSource<CallbackDedupOutcome>> _inFlight = new();
-    private readonly HashSet<string> _finalSeen = new();
-    private readonly Queue<string> _finalSeenOrder = new();
+    /// <summary>当前 live final seen：key → LinkedList 唯一节点。</summary>
+    private readonly Dictionary<string, LinkedListNode<string>> _finalSeen = new();
+    /// <summary>当前 live final seen 的 FIFO 顺序（无僵尸项）。</summary>
+    private readonly LinkedList<string> _finalSeenOrder = new();
     private readonly object _gateLock = new();
+
+    /// <summary>生产默认容量 4000。</summary>
+    public CallbackDeduplicationGate() : this(4000) { }
+
+    /// <summary>测试接缝：缩小 final seen 容量以复现淘汰时序；不得改变默认生产行为。</summary>
+    internal CallbackDeduplicationGate(int finalSeenCapacity)
+    {
+        if (finalSeenCapacity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(finalSeenCapacity), finalSeenCapacity, "必须 > 0");
+        _finalSeenCapacity = finalSeenCapacity;
+    }
+
+    /// <summary>测试探针：live final seen 数量（Dictionary，持锁）。</summary>
+    internal int ProbeFinalSeenCount
+    {
+        get { lock (_gateLock) return _finalSeen.Count; }
+    }
+
+    /// <summary>测试探针：live 顺序结构数量（LinkedList，持锁；须与 ProbeFinalSeenCount 一致）。</summary>
+    internal int ProbeFinalSeenOrderCount
+    {
+        get { lock (_gateLock) return _finalSeenOrder.Count; }
+    }
 
     /// <summary>
     /// 对 <paramref name="key"/> 执行占用 → 持久化 → 提交/释放。
@@ -49,7 +74,7 @@ internal sealed class CallbackDeduplicationGate
 
         lock (_gateLock)
         {
-            if (_finalSeen.Contains(key))
+            if (_finalSeen.ContainsKey(key))
                 return new CallbackDedupResult(CallbackDedupOutcome.Duplicate);
 
             if (_inFlight.TryGetValue(key, out var existing))
@@ -72,7 +97,7 @@ internal sealed class CallbackDeduplicationGate
 
     /// <summary>
     /// 清除指定 taskId 的 push/scan final seen（redo/redispatch 后允许再收终态）。
-    /// 不碰 warn；不碰 in-flight；_finalSeenOrder 僵尸项沿用既有技术债。
+    /// 同时从 Dictionary 与 LinkedList 删除节点；不碰 warn；不碰 in-flight。
     /// </summary>
     public void ForgetTask(string taskId)
     {
@@ -81,12 +106,12 @@ internal sealed class CallbackDeduplicationGate
         var scanPrefix = $"scan:{taskId}:";
         lock (_gateLock)
         {
-            var remove = _finalSeen
+            var remove = _finalSeen.Keys
                 .Where(k => k.StartsWith(pushPrefix, StringComparison.Ordinal)
                             || k.StartsWith(scanPrefix, StringComparison.Ordinal))
                 .ToList();
             foreach (var k in remove)
-                _finalSeen.Remove(k);
+                RemoveFinalSeen_NoLock(k);
         }
     }
 
@@ -159,13 +184,31 @@ internal sealed class CallbackDeduplicationGate
         }
     }
 
+    /// <summary>
+    /// 提交 live final seen：已存在则保持原节点与 FIFO 位置；新 key 尾插；超容量淘汰最老 live。
+    /// </summary>
     private void CommitFinalSeen_NoLock(string key)
     {
-        if (!_finalSeen.Add(key))
+        if (_finalSeen.ContainsKey(key))
             return;
-        _finalSeenOrder.Enqueue(key);
-        while (_finalSeenOrder.Count > FinalSeenCapacity)
-            _finalSeen.Remove(_finalSeenOrder.Dequeue());
+
+        var node = _finalSeenOrder.AddLast(key);
+        _finalSeen[key] = node;
+
+        while (_finalSeenOrder.Count > _finalSeenCapacity)
+        {
+            var oldest = _finalSeenOrder.First;
+            if (oldest is null) break;
+            RemoveFinalSeen_NoLock(oldest.Value);
+        }
+    }
+
+    /// <summary>同时从 Dictionary 与 LinkedList 删除指定 live key（幂等）。</summary>
+    private void RemoveFinalSeen_NoLock(string key)
+    {
+        if (!_finalSeen.Remove(key, out var node))
+            return;
+        _finalSeenOrder.Remove(node);
     }
 
     private static CallbackDedupResult MapFollower(CallbackDedupOutcome leaderOutcome) => leaderOutcome switch

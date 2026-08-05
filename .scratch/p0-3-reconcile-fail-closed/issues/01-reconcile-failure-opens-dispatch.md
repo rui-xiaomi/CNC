@@ -140,16 +140,18 @@ IHost.StartAsync
 
 ## 验收标准
 
-- [ ] RED 1–10 全部绿
-- [ ] 任一阶段失败：本轮后续阶段不执行；`IsReconciled=false`；无「对账完成」日志；双循环未启动
-- [ ] `Query.Success=false` 记全局失败并短路
-- [ ] 自动重试：单一循环、间隔配置、无限次直至成功或取消；连续失败不重复启循环、不重复 `Reconciled`、不弹循环 Growl
-- [ ] 取消停止重试且不记业务失败
-- [ ] 成功：`IsReconciled=true`；双循环各启一次；`Reconciled` 一次；输出「启动对账完成，开始自动派工」
-- [ ] `DispatchLoopAsync` 含 `IsReconciled` 防御检查；失败期间不积压新 UploadRequested / 下料队列请求
-- [ ] UI：既有展示位可见失败文案与原因；成功后恢复；无新 Surface
-- [ ] `ReconcileRetryIntervalMs` 默认 5000；`<=0` 启动校验失败
-- [ ] `dotnet test` 测试工程通过；`dotnet build CncLoader.sln` 0 警告 0 错误
+- [x] RED 1–10 全部绿
+- [x] 任一阶段失败：本轮后续阶段不执行；`IsReconciled=false`；无「对账完成」日志；双循环未启动
+- [x] `Query.Success=false` 记全局失败并短路
+- [x] 自动重试：单一循环、间隔配置、无限次直至成功或取消；连续失败不重复启循环、不重复 `Reconciled`、不弹循环 Growl
+- [x] 取消停止重试且不记业务失败
+- [x] 成功：`IsReconciled=true`；双循环各启一次；`Reconciled` 一次；输出「启动对账完成，开始自动派工」
+- [x] `DispatchLoopAsync` 含 `IsReconciled` 防御检查；失败期间不积压新 UploadRequested / 下料队列请求
+- [x] UI：既有展示位可见失败文案与原因；成功后恢复；无新 Surface
+- [x] `ReconcileRetryIntervalMs` 默认 5000；`<=0` 启动校验失败
+- [x] `dotnet test` 测试工程通过；`dotnet build CncLoader.sln` 0 警告 0 错误
+
+> **证据边界（不阻塞代码级验收）：** 失败锁闸 / 自动重试 / 取消 / 幂等开闸以自动化（Reconciliation/Startup）为准；双模拟器仅验成功路径人工项（见「成功路径人工验收」）。真 DB/RCS/PLC 故障注入、DPI/多显示器、长时间无限重试观感 **不在本轮验收范围**，保留为未验证，不假勾选为已人工验证。
 
 ## 验证
 
@@ -558,6 +560,30 @@ git diff --check
 - P2：生命周期 CTS 模式可进一步整理
 
 **结论：** 本 Issue 验收标准已满足，关闭。人工失败注入不阻塞关闭。
+
+### B1 清单收口（2026-08-05）
+
+> 此内容由 AI 在最终验收阻塞收口期间生成。**仅勾选正文验收标准 checkbox + 本纪要**；未改业务代码/配置/测试；未 commit/push。
+
+**Status：** 保持 `closed`
+**Labels：** 保持 `bug, P0, closed`（不重新加入 `ready-for-agent` / `needs-triage`）
+
+**核对依据（已有证据，非新跑人工）：**
+
+| 证据 | 结果 |
+|------|------|
+| 双模拟器启动成功路径 | 通过 |
+| UI 人工检查（Issue 记载 1–5；关闭纪要 1–14 总核对） | 通过 |
+| 「启动对账完成，开始自动派工」日志 | 恰好 1 次 |
+| 失败锁闸日志 | 0 次 |
+| 重复开闸 | 0 次 |
+| 未处理异常 | 0 次 |
+| 正常关窗退出码 | 0 |
+| Reconciliation/Startup 自动化 | 通过（最终回归基线沿用；见 final-acceptance 归档） |
+| `dotnet build CncLoader.sln` | 0 警告 / 0 错误 |
+
+**未验证（明确不阻塞代码级验收，未假勾选为人工已验）：** 真 DB/RCS/PLC、DPI/多显示器、长时间无限重试观感。
+**注：** 「首次对账长期挂起阻塞 HostedService」已由后续 P1-1 立项并 `closed`，不再作为本 Issue 打开理由。
 
 ## 分拣笔记（2026-08-04）
 

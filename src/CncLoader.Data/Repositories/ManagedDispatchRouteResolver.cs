@@ -6,19 +6,22 @@ using Microsoft.Extensions.Logging;
 namespace CncLoader.Data.Repositories;
 
 /// <summary>
-/// 受管 From/To 解析：仅 LOCATION_MAP.RcsCode 精确匹配（本期无其他受管自由文本来源）。
+/// 受管 From/To 解析：LOCATION_MAP.RcsCode 精确匹配 + LocType 类型化验证。
 /// 多条活动匹配 → Ambiguous；仅禁用/未知 → Disabled；零匹配 → NotFound。
 /// </summary>
 public sealed class ManagedDispatchRouteResolver : IManagedDispatchRouteResolver
 {
     private readonly ILocationMapRoutingStore _locationMaps;
+    private readonly IFrameRoutingStore _frames;
     private readonly ILogger<ManagedDispatchRouteResolver> _logger;
 
     public ManagedDispatchRouteResolver(
         ILocationMapRoutingStore locationMaps,
+        IFrameRoutingStore frames,
         ILogger<ManagedDispatchRouteResolver> logger)
     {
         _locationMaps = locationMaps;
+        _frames = frames;
         _logger = logger;
     }
 
@@ -35,47 +38,15 @@ public sealed class ManagedDispatchRouteResolver : IManagedDispatchRouteResolver
                     "LocationMap");
             }
 
-            var from = await ResolveEndpointAsync(fromCode, "From", ct);
+            var from = await ResolveTypedEndpointAsync(fromCode, "From", ct);
             if (from.Status != ManagedDispatchRouteStatus.Resolved)
                 return from.ToFail();
 
-            var to = await ResolveEndpointAsync(toCode, "To", ct);
+            var to = await ResolveTypedEndpointAsync(toCode, "To", ct);
             if (to.Status != ManagedDispatchRouteStatus.Resolved)
                 return to.ToFail();
 
-            var fromRow = from.Row!;
-            var toRow = to.Row!;
-
-            if (fromRow.EquipmentId is null || fromRow.EquipmentId <= 0)
-            {
-                return ManagedDispatchRouteResult.Fail(
-                    ManagedDispatchRouteStatus.InvalidRelationship,
-                    "起点映射缺少机台关联",
-                    "LocationMap", fromRow.Id);
-            }
-
-            if (toRow.EquipmentId is null || toRow.EquipmentId <= 0)
-            {
-                return ManagedDispatchRouteResult.Fail(
-                    ManagedDispatchRouteStatus.InvalidRelationship,
-                    "终点映射缺少机台关联",
-                    "LocationMap", toRow.Id);
-            }
-
-            var ctx = new DispatchRouteContext
-            {
-                SourceEquipmentId = fromRow.EquipmentId.Value,
-                SourcePositionId = fromRow.PositionId,
-                DestEquipmentId = RouteDependency.Required(toRow.EquipmentId.Value),
-                DestPositionId = toRow.PositionId is long dp
-                    ? RouteDependency.Required(dp)
-                    : RouteDependency.NotApplicable,
-                SourceFrameId = RouteDependency.NotApplicable,
-                DestFrameId = RouteDependency.NotApplicable,
-                FromCode = fromCode,
-                ToCode = toCode,
-                RequiresResolvedCells = true
-            };
+            var ctx = DispatchRouteContextFactory.FromEndpoints(from.Endpoint!, to.Endpoint!);
             return ManagedDispatchRouteResult.Resolved(ctx);
         }
         catch (OperationCanceledException)
@@ -92,7 +63,7 @@ public sealed class ManagedDispatchRouteResolver : IManagedDispatchRouteResolver
         }
     }
 
-    private async Task<EndpointHit> ResolveEndpointAsync(
+    private async Task<EndpointHit> ResolveTypedEndpointAsync(
         string code, string side, CancellationToken ct)
     {
         var rows = await _locationMaps.FindByRcsCodeAsync(code, ct);
@@ -104,7 +75,6 @@ public sealed class ManagedDispatchRouteResolver : IManagedDispatchRouteResolver
                 "LocationMap");
         }
 
-        // 活动与禁用分开：禁用不得回落为 NotFound 后当自由文本发送
         var active = rows.Where(r => ConfigActivity.IsActive(r.State)).ToList();
         if (active.Count == 0)
         {
@@ -124,21 +94,133 @@ public sealed class ManagedDispatchRouteResolver : IManagedDispatchRouteResolver
                 "LocationMap");
         }
 
-        return EndpointHit.Ok(active[0]);
+        var row = active[0];
+        if (!ManagedDispatchEndpoint.TryCreate(row, out var endpoint) || endpoint is null)
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 位置映射 LocType 不受管或不支持",
+                "LocationMap",
+                row.Id);
+        }
+
+        return endpoint.Kind switch
+        {
+            ManagedEndpointKind.Position => ValidatePosition(endpoint, side),
+            ManagedEndpointKind.Area => ValidateArea(endpoint, side),
+            ManagedEndpointKind.Frame => await ValidateFrameAsync(endpoint, side, ct),
+            _ => EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 端点类型未知",
+                "LocationMap",
+                row.Id)
+        };
+    }
+
+    private static EndpointHit ValidatePosition(ManagedDispatchEndpoint ep, string side)
+    {
+        if (ep.EquipmentId is null or <= 0)
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 加工位映射缺少机台关联",
+                "LocationMap",
+                ep.LocationMapId);
+        }
+
+        if (ep.PositionId is null or <= 0)
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 加工位映射缺少工位关联",
+                "LocationMap",
+                ep.LocationMapId);
+        }
+
+        return EndpointHit.Ok(ep);
+    }
+
+    private static EndpointHit ValidateArea(ManagedDispatchEndpoint ep, string side)
+    {
+        if (string.IsNullOrWhiteSpace(ep.RcsCode))
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 区域映射缺少 RCS 编码",
+                "LocationMap",
+                ep.LocationMapId);
+        }
+
+        if (string.IsNullOrWhiteSpace(ep.LocName)
+            || !ManagedDispatchEndpoint.IsConfiguredAreaRole(ep.LocName))
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 区域角色未配置或不可用",
+                "LocationMap",
+                ep.LocationMapId);
+        }
+
+        // AREA 合法允许 EquipmentId/PositionId/FrameId 为 null；不查 Equipment 链
+        return EndpointHit.Ok(ep);
+    }
+
+    private async Task<EndpointHit> ValidateFrameAsync(
+        ManagedDispatchEndpoint ep, string side, CancellationToken ct)
+    {
+        if (ep.FrameId is null or <= 0)
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 料架映射缺少 FrameId",
+                "LocationMap",
+                ep.LocationMapId);
+        }
+
+        FrameRoutingSnapshot? frame;
+        try
+        {
+            frame = await _frames.FindAsync(ep.FrameId.Value, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+
+        if (frame is null)
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.NotFound,
+                $"{side} 料架不存在",
+                "Frame",
+                ep.FrameId);
+        }
+
+        if (!ConfigActivity.IsActive(frame.State))
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.Disabled,
+                $"{side} 料架已禁用或状态不可用",
+                "Frame",
+                frame.Id);
+        }
+
+        // FRAME 合法允许 EquipmentId/PositionId 为 null；FrameBind 由操作 Context 另标
+        return EndpointHit.Ok(ep);
     }
 
     private sealed class EndpointHit
     {
         public ManagedDispatchRouteStatus Status { get; init; }
-        public LocationMapRoutingRow? Row { get; init; }
+        public ManagedDispatchEndpoint? Endpoint { get; init; }
         public string SafeMessage { get; init; } = "";
         public string? EntityKind { get; init; }
         public long? EntityId { get; init; }
 
-        public static EndpointHit Ok(LocationMapRoutingRow row) => new()
+        public static EndpointHit Ok(ManagedDispatchEndpoint endpoint) => new()
         {
             Status = ManagedDispatchRouteStatus.Resolved,
-            Row = row
+            Endpoint = endpoint
         };
 
         public static EndpointHit Fail(

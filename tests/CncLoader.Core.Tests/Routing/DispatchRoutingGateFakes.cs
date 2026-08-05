@@ -71,10 +71,42 @@ internal sealed class MutableEquipmentRoutingStore : IEquipmentRoutingStore
     public List<CraftworkRoutingRow> Crafts { get; } = new();
     public List<WorkLineRoutingRow> WorkLines { get; } = new();
     public List<FrameBindRoutingRow> FrameBinds { get; } = new();
+    public int FindFrameBindsCallCount { get; private set; }
+    /// <summary>第 N 次 FindFrameBindsByEquipmentAsync 返回后，将匹配行 STATE 置 1（TOCTOU）。</summary>
+    private readonly Dictionary<(long Eq, long Frame), int> _disableBindAfterFind = new();
+    private readonly Dictionary<(long Eq, long Frame), int> _bindFindCounts = new();
 
     public IReadOnlyList<AuthorityQueryRecord> Queries
     {
         get { lock (_gate) return _queries.ToList(); }
+    }
+
+    public void ResetBindQueryCount() => FindFrameBindsCallCount = 0;
+
+    public void SetFrameBindState(long equipmentId, long frameId, string state)
+    {
+        lock (_gate)
+        {
+            for (var i = 0; i < FrameBinds.Count; i++)
+            {
+                if (FrameBinds[i].EquipmentId != equipmentId || FrameBinds[i].FrameId != frameId)
+                    continue;
+                var b = FrameBinds[i];
+                FrameBinds[i] = b with { State = state };
+            }
+        }
+    }
+
+    public void ClearFrameBinds()
+    {
+        lock (_gate) FrameBinds.Clear();
+    }
+
+    /// <summary>第 N 次（1-based）按机台查 Bind 返回后，禁用指定 (Eq,Frame) Bind。</summary>
+    public void DisableFrameBindAfterFindCount(long equipmentId, long frameId, int findCount)
+    {
+        lock (_gate)
+            _disableBindAfterFind[(equipmentId, frameId)] = findCount;
     }
 
     public void SeedActiveChain(
@@ -196,12 +228,43 @@ internal sealed class MutableEquipmentRoutingStore : IEquipmentRoutingStore
                 Equipments.Where(e => craftworkIds.Contains(e.CraftworkId)).ToList());
     }
 
+    /// <summary>测试注入：下次 FindFrameBinds 抛异常（fail-closed）。</summary>
+    public Exception? ThrowOnNextFindFrameBinds { get; set; }
+
     public Task<IReadOnlyList<FrameBindRoutingRow>> FindFrameBindsByEquipmentAsync(
         long equipmentId, CancellationToken ct = default)
     {
+        var toThrow = ThrowOnNextFindFrameBinds;
+        if (toThrow is not null)
+        {
+            ThrowOnNextFindFrameBinds = null;
+            FindFrameBindsCallCount++;
+            throw toThrow;
+        }
+
         lock (_gate)
-            return Task.FromResult<IReadOnlyList<FrameBindRoutingRow>>(
-                FrameBinds.Where(b => b.EquipmentId == equipmentId).ToList());
+        {
+            FindFrameBindsCallCount++;
+            var snapshot = FrameBinds.Where(b => b.EquipmentId == equipmentId).ToList();
+
+            foreach (var key in _disableBindAfterFind.Keys.Where(k => k.Eq == equipmentId).ToList())
+            {
+                _bindFindCounts.TryGetValue(key, out var n);
+                n++;
+                _bindFindCounts[key] = n;
+                if (n >= _disableBindAfterFind[key])
+                {
+                    for (var i = 0; i < FrameBinds.Count; i++)
+                    {
+                        if (FrameBinds[i].EquipmentId != key.Eq || FrameBinds[i].FrameId != key.Frame)
+                            continue;
+                        FrameBinds[i] = FrameBinds[i] with { State = "1" };
+                    }
+                }
+            }
+
+            return Task.FromResult<IReadOnlyList<FrameBindRoutingRow>>(snapshot);
+        }
     }
 }
 
@@ -421,6 +484,8 @@ internal sealed class TracingTaskService : IRcsTaskService
         => Task.FromResult(RcsResult.Fail("", "noop"));
     public Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default)
         => Task.FromResult(RcsResult.Fail("", "noop"));
+    public Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default)
+        => Task.FromResult(RcsResult.Fail("", "noop"));
     public Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default)
         => Task.FromResult(RcsResult.Fail("", "noop"));
     public Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default)
@@ -544,8 +609,8 @@ internal sealed class NoopTaskStore : IRcsTaskStore
     public Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null, string? error = null, CancellationToken ct = default)
         => Task.FromResult(false);
     public Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
-    public Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
-        => Task.FromResult(false);
+    public Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
+        => Task.FromResult(AutoRedoClaimResult.NotClaimable);
     public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
     public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
         => Task.FromResult<RcsTaskRow?>(null);
@@ -618,6 +683,7 @@ internal static class DispatchGateHarness
             routingStore ?? throw new ArgumentNullException(nameof(routingStore),
                 "须提供 routingStore 或 validator"),
             equipment,
+            new FakeFrameRoutingStore(),
             NullLogger<RoutingAvailabilityValidator>.Instance);
         return new PositionScheduler(
             store ?? new SignalStateStore(),

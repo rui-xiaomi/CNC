@@ -39,15 +39,54 @@ internal sealed class CountingRoutingValidator : IRoutingAvailabilityValidator
     public int CallCount => Volatile.Read(ref _calls);
     public List<DispatchRouteContext> Contexts { get; } = new();
     public List<RoutingAvailabilityResult> Results { get; } = new();
+    /// <summary>可选顺序探针；null 时无副作用。</summary>
+    public List<string>? OrderSink { get; set; }
+
+    public void Reset()
+    {
+        Volatile.Write(ref _calls, 0);
+        Contexts.Clear();
+        Results.Clear();
+    }
 
     public async Task<RoutingAvailabilityResult> ValidateAsync(
         DispatchRouteContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _calls);
         Contexts.Add(context);
+        OrderSink?.Add("Validate");
         var r = await _inner.ValidateAsync(context, ct);
         Results.Add(r);
         return r;
+    }
+}
+
+/// <summary>计数包装真实 Resolver（PalletReturn / 类型化门禁断言 Pre+Final）。</summary>
+internal sealed class CountingManagedRouteResolver : IManagedDispatchRouteResolver
+{
+    private readonly IManagedDispatchRouteResolver _inner;
+    private int _calls;
+
+    public CountingManagedRouteResolver(IManagedDispatchRouteResolver inner) => _inner = inner;
+
+    public int CallCount => Volatile.Read(ref _calls);
+    public List<(string? From, string? To)> Args { get; } = new();
+    /// <summary>可选顺序探针；null 时无副作用。</summary>
+    public List<string>? OrderSink { get; set; }
+
+    public void Reset()
+    {
+        Volatile.Write(ref _calls, 0);
+        Args.Clear();
+    }
+
+    public async Task<ManagedDispatchRouteResult> ResolveAsync(
+        string? fromCode, string? toCode, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _calls);
+        Args.Add((fromCode, toCode));
+        OrderSink?.Add("Resolve");
+        return await _inner.ResolveAsync(fromCode, toCode, ct);
     }
 }
 
@@ -59,11 +98,21 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public int QueryCount { get; private set; }
     public int SendCount => TransitCount + ExcuteCount;
     public List<string> TransitTaskIds { get; } = new();
+    /// <summary>可选顺序探针（Grab/Identify/Inventory RED）；null 时无副作用。</summary>
+    public List<string>? OrderSink { get; set; }
+    /// <summary>下一次 Transit 返回失败（非路由；FailureKind=SendFailed）。</summary>
+    public bool FailNextTransit { get; set; }
 
     public Task<RcsResult> TransitTaskAsync(TransitTaskRequest req, CancellationToken ct = default)
     {
         TransitCount++;
         TransitTaskIds.Add(req.TaskId ?? "");
+        OrderSink?.Add("RcsTransit");
+        if (FailNextTransit)
+        {
+            FailNextTransit = false;
+            return Task.FromResult(RcsResult.Fail(req.TaskId ?? "", "rcs-send-failed"));
+        }
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "{}", null, 1)
         {
             TaskId = req.TaskId
@@ -73,6 +122,7 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public Task<RcsResult> ExcuteTaskAsync(ExcuteTaskRequest req, CancellationToken ct = default)
     {
         ExcuteCount++;
+        OrderSink?.Add("RcsExcute");
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "{}", null, 1)
         {
             TaskId = req.TaskId
@@ -100,9 +150,35 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
 
     public int CreateCount { get; private set; }
     public int IncrementRedoCount { get; private set; }
+    public int TryClaimCallCount { get; private set; }
+    public int TryClaimSuccessCount { get; private set; }
+    /// <summary>兼容旧断言名：等同 <see cref="TryClaimCallCount"/>。</summary>
+    public int TryIncrementCallCount => TryClaimCallCount;
+    /// <summary>兼容旧断言名：等同 <see cref="TryClaimSuccessCount"/>。</summary>
+    public int TryIncrementSuccessCount => TryClaimSuccessCount;
     public int SetDispatchedCount { get; private set; }
     public int UpdateStateCount { get; private set; }
     public List<RcsTaskRecord> Created { get; } = new();
+    /// <summary>可选顺序探针（Grab/Identify/Inventory RED）；null 时无副作用。</summary>
+    public List<string>? OrderSink { get; set; }
+    /// <summary>下次 TryClaimAutoRedo 抛异常（fail-closed）。</summary>
+    public Exception? ThrowOnNextTryClaim { get; set; }
+    /// <summary>兼容旧名。</summary>
+    public Exception? ThrowOnNextTryIncrement
+    {
+        get => ThrowOnNextTryClaim;
+        set => ThrowOnNextTryClaim = value;
+    }
+    /// <summary>
+    /// 可选异步门闩：在真正 Claim 前 await（供并发/TOCTOU 确定性交错）；返回后继续原逻辑。
+    /// </summary>
+    public Func<string, int, Task>? BeforeTryClaimAsync { get; set; }
+    /// <summary>兼容旧名。</summary>
+    public Func<string, int, Task>? BeforeTryIncrementAsync
+    {
+        get => BeforeTryClaimAsync;
+        set => BeforeTryClaimAsync = value;
+    }
 
     public void Seed(RcsTaskRow row)
     {
@@ -119,6 +195,7 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
         lock (_gate)
         {
             CreateCount++;
+            OrderSink?.Add("CreateTask");
             Created.Add(record);
             var id = _nextId++;
             _rows[record.RcsTaskId] = new RcsTaskRow(
@@ -176,20 +253,44 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
         }
     }
 
-    public Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
+    public async Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
     {
+        TryClaimCallCount++;
+        OrderSink?.Add("TryClaim");
+
+        if (ThrowOnNextTryClaim is { } ex)
+        {
+            ThrowOnNextTryClaim = null;
+            throw ex;
+        }
+
+        if (BeforeTryClaimAsync is not null)
+            await BeforeTryClaimAsync(rcsTaskId, maxRedo);
+
         lock (_gate)
         {
-            if (!_rows.TryGetValue(rcsTaskId, out var r) || r.RedoCount >= maxRedo)
-                return Task.FromResult(false);
+            if (!_rows.TryGetValue(rcsTaskId, out var r))
+                return AutoRedoClaimResult.NotFound;
+            if (r.RedoCount >= maxRedo)
+                return AutoRedoClaimResult.LimitReached;
+            if (!AutoRedoClaimRules.IsClaimableState(r.TaskState))
+                return AutoRedoClaimResult.NotClaimable;
+
             _rows[rcsTaskId] = r with
             {
                 RedoCount = r.RedoCount + 1,
                 TaskState = RcsTaskState.Dispatched,
                 ErrorMsg = null
             };
-            return Task.FromResult(true);
+            TryClaimSuccessCount++;
+            return AutoRedoClaimResult.Claimed;
         }
+    }
+
+    public void ResetTryIncrementCounters()
+    {
+        TryClaimCallCount = 0;
+        TryClaimSuccessCount = 0;
     }
 
     public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
@@ -257,11 +358,31 @@ internal sealed class TrackingCallbackProcessor : IRcsCallbackProcessor
 internal sealed class FakeLocationMapForRouting : ILocationMapService, ILocationMapRoutingStore
 {
     private readonly List<LocationMapRoutingRow> _rows = new();
+    private readonly Dictionary<string, int> _findCounts = new(StringComparer.Ordinal);
+    /// <summary>某 RcsCode 被 FindByRcsCodeAsync 命中达到该次数后（含本次），将该码 STATE 置为 1。</summary>
+    private readonly Dictionary<string, int> _disableAfterFindCount = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _disableBeforeReturnFindCount = new(StringComparer.Ordinal);
+
     public int ResolveByCodeCount { get; private set; }
+    public int ResolveAreaCallCount { get; private set; }
+    public int ResolveFrameCallCount { get; private set; }
+    public int FindByRcsCodeCallCount { get; private set; }
     public List<string> ResolvedCodes { get; } = new();
+    public List<string> FindByRcsCodeArgs { get; } = new();
+    public List<string> ResolveAreaArgs { get; } = new();
+    public List<(long FrameId, string RcsType)> ResolveFrameArgs { get; } = new();
+    /// <summary>某 LocName 被 ResolveAreaAsync 命中达到该次数后（含本次返回后），将该角色全部行 STATE 置 1。</summary>
+    private readonly Dictionary<string, int> _disableAreaAfterResolveCount = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _resolveAreaCounts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (int Count, string NewName)> _mutateLocNameAfterResolveArea =
+        new(StringComparer.Ordinal);
+    /// <summary>某 FrameId 被 ResolveFrameAsync 命中达到该次数后（含本次返回后），将该 Frame 全部 Map 行 STATE 置 1。</summary>
+    private readonly Dictionary<long, int> _disableFrameAfterResolveCount = new();
+    private readonly Dictionary<long, int> _resolveFrameCounts = new();
 
     public void Seed(LocationMapItem item, string state = "0")
     {
+        // 禁止给 AREA/FRAME「顺便」补 EquipmentId：按调用方传入原样入账
         _rows.Add(new LocationMapRoutingRow(
             item.Id, item.LocType, item.EquipmentId, item.PositionId, item.FrameId,
             item.LocName, item.RcsCode, item.RcsType, state));
@@ -283,6 +404,58 @@ internal sealed class FakeLocationMapForRouting : ILocationMapService, ILocation
         }
     }
 
+    /// <summary>第 N 次（1-based）FindByRcsCode 命中该码时，在返回后将该码全部行 STATE 置 1（供 Pre+Final TOCTOU）。</summary>
+    public void DisableAfterFindCount(string rcsCode, int findCount)
+        => _disableAfterFindCount[rcsCode] = findCount;
+
+    /// <summary>第 N 次 Find 在快照前将该码 STATE 置 1（供 Grab/Identify Final-only 单次 Resolve 即拒）。</summary>
+    public void DisableBeforeReturnOnFindCount(string rcsCode, int findCount)
+        => _disableBeforeReturnFindCount[rcsCode] = findCount;
+
+    /// <summary>
+    /// 第 N 次 ResolveAreaAsync(locName) 仍返回活动快照，返回后将该 LocName 全部行 STATE=1
+    ///（供 UI Pre 解析 To 后、Service Final 前禁用）。
+    /// </summary>
+    public void DisableAreaAfterResolveCount(string locName, int resolveCount)
+        => _disableAreaAfterResolveCount[locName] = resolveCount;
+
+    /// <summary>
+    /// 第 N 次 ResolveFrameAsync(frameId,*) 仍返回活动快照，返回后将该 FrameId 全部 Map 行 STATE=1
+    ///（供 Inventory 业务 Pre 后、Identify Service Final 前禁用）。
+    /// </summary>
+    public void DisableFrameMapAfterResolveCount(long frameId, int resolveCount)
+        => _disableFrameAfterResolveCount[frameId] = resolveCount;
+
+    /// <summary>按 RcsCode 改写 LocName（供换架 AREA 角色/类型 TOCTOU）。</summary>
+    public void SetLocNameByCode(string rcsCode, string locName)
+    {
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            if (_rows[i].RcsCode != rcsCode) continue;
+            _rows[i] = _rows[i] with { LocName = locName };
+        }
+    }
+
+    /// <summary>按 RcsCode 改写 LocType（供错误端点类型拒发）。</summary>
+    public void SetLocTypeByCode(string rcsCode, string locType)
+    {
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            if (_rows[i].RcsCode != rcsCode) continue;
+            _rows[i] = _rows[i] with { LocType = locType };
+        }
+    }
+
+    /// <summary>
+    /// 第 N 次 ResolveAreaAsync 仍返回活动快照，返回后将该 LocName 行的 LocName 改为 newLocName
+    ///（STATE 保持活动，供 Final 角色校验）。
+    /// </summary>
+    public void MutateLocNameAfterResolveAreaCount(string locName, int resolveCount, string newLocName)
+        => _mutateLocNameAfterResolveArea[locName] = (resolveCount, newLocName);
+
+    public IReadOnlyList<LocationMapRoutingRow> SnapshotByCode(string rcsCode)
+        => _rows.Where(x => x.RcsCode == rcsCode).ToList();
+
     public Task<IReadOnlyList<LocationMapItem>> GetAllAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<LocationMapItem>>(_rows.Select(ToItem).ToList());
 
@@ -298,14 +471,61 @@ internal sealed class FakeLocationMapForRouting : ILocationMapService, ILocation
             .Select(ToItem).FirstOrDefault());
 
     public Task<LocationMapItem?> ResolveFrameAsync(long frameId, string rcsType, CancellationToken ct = default)
-        => Task.FromResult(_rows
+    {
+        ResolveFrameCallCount++;
+        ResolveFrameArgs.Add((frameId, rcsType));
+        _resolveFrameCounts.TryGetValue(frameId, out var n);
+        n++;
+        _resolveFrameCounts[frameId] = n;
+
+        var hit = _rows
             .Where(i => i.State == "0" && i.FrameId == frameId && i.RcsType == rcsType)
-            .Select(ToItem).FirstOrDefault());
+            .Select(ToItem).FirstOrDefault();
+
+        if (_disableFrameAfterResolveCount.TryGetValue(frameId, out var after) && n >= after)
+        {
+            for (var i = 0; i < _rows.Count; i++)
+            {
+                if (_rows[i].FrameId != frameId) continue;
+                _rows[i] = _rows[i] with { State = "1" };
+            }
+        }
+
+        return Task.FromResult(hit);
+    }
 
     public Task<LocationMapItem?> ResolveAreaAsync(string locName, CancellationToken ct = default)
-        => Task.FromResult(_rows
+    {
+        ResolveAreaCallCount++;
+        ResolveAreaArgs.Add(locName);
+        _resolveAreaCounts.TryGetValue(locName, out var n);
+        n++;
+        _resolveAreaCounts[locName] = n;
+
+        var hit = _rows
             .Where(i => i.State == "0" && i.LocName == locName)
-            .Select(ToItem).FirstOrDefault());
+            .Select(ToItem).FirstOrDefault();
+
+        if (_disableAreaAfterResolveCount.TryGetValue(locName, out var after) && n >= after)
+        {
+            for (var i = 0; i < _rows.Count; i++)
+            {
+                if (_rows[i].LocName != locName) continue;
+                _rows[i] = _rows[i] with { State = "1" };
+            }
+        }
+
+        if (_mutateLocNameAfterResolveArea.TryGetValue(locName, out var mut) && n >= mut.Count)
+        {
+            for (var i = 0; i < _rows.Count; i++)
+            {
+                if (_rows[i].LocName != locName) continue;
+                _rows[i] = _rows[i] with { LocName = mut.NewName };
+            }
+        }
+
+        return Task.FromResult(hit);
+    }
 
     public Task<LocationMapItem?> ResolveByRcsCodeAsync(string rcsCode, CancellationToken ct = default)
     {
@@ -335,8 +555,36 @@ internal sealed class FakeLocationMapForRouting : ILocationMapService, ILocation
 
     public Task<IReadOnlyList<LocationMapRoutingRow>> FindByRcsCodeAsync(
         string rcsCode, CancellationToken ct = default)
-        => Task.FromResult<IReadOnlyList<LocationMapRoutingRow>>(_rows
-            .Where(x => x.RcsCode == rcsCode).ToList());
+    {
+        FindByRcsCodeCallCount++;
+        FindByRcsCodeArgs.Add(rcsCode);
+        _findCounts.TryGetValue(rcsCode, out var n);
+        n++;
+        _findCounts[rcsCode] = n;
+
+        // Final-only：第 N 次在快照前禁用，使单次 Resolve 即读到 STATE=1
+        if (_disableBeforeReturnFindCount.TryGetValue(rcsCode, out var before) && n >= before)
+        {
+            for (var i = 0; i < _rows.Count; i++)
+            {
+                if (_rows[i].RcsCode != rcsCode) continue;
+                _rows[i] = _rows[i] with { State = "1" };
+            }
+        }
+
+        // Pre+Final：先快照再禁用，第 after 次仍返回禁用前状态
+        var hits = _rows.Where(x => x.RcsCode == rcsCode).ToList();
+        if (_disableAfterFindCount.TryGetValue(rcsCode, out var after) && n >= after)
+        {
+            for (var i = 0; i < _rows.Count; i++)
+            {
+                if (_rows[i].RcsCode != rcsCode) continue;
+                _rows[i] = _rows[i] with { State = "1" };
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<LocationMapRoutingRow>>(hits);
+    }
 
     private static LocationMapItem ToItem(LocationMapRoutingRow r) => new()
     {
@@ -447,11 +695,12 @@ internal sealed class ManualReplayHarness
 {
     public required MutableEquipmentRoutingStore Store { get; init; }
     public required FakeLocationMapForRouting LocationMap { get; init; }
+    public required FakeFrameRoutingStore Frames { get; init; }
     public required FakeRcsHttpClient Client { get; init; }
     public required MutableRcsTaskStore TaskStore { get; init; }
     public required TrackingCallbackProcessor Callbacks { get; init; }
     public required CountingRoutingValidator Validator { get; init; }
-    public required IManagedDispatchRouteResolver RouteResolver { get; init; }
+    public required CountingManagedRouteResolver RouteResolver { get; init; }
     public required RcsTaskService TaskService { get; init; }
     public required RcsViewModel ViewModel { get; init; }
     public required TrackingSlotsForClosure Slots { get; init; }
@@ -460,9 +709,22 @@ internal sealed class ManualReplayHarness
     public required CallTrace Trace { get; init; }
 
     public static ManualReplayHarness Create(bool seedActiveRoute = true)
+        => CreateCore(seedActiveRoute, seedTypedPalletReturn: false, palletReturnArea: "托盘回收区");
+
+    /// <summary>空托盘回收 RED 夹具：类型化 AREA/FRAME/POSITION 种子 + 英文 PALLET_RETURN。</summary>
+    public static ManualReplayHarness CreateForPalletReturn()
+        => CreateCore(seedActiveRoute: false, seedTypedPalletReturn: true,
+            palletReturnArea: TypedEndpointSeedShapes.LocPalletReturn);
+
+    private static ManualReplayHarness CreateCore(
+        bool seedActiveRoute, bool seedTypedPalletReturn, string palletReturnArea)
     {
         var store = new MutableEquipmentRoutingStore();
         var loc = new FakeLocationMapForRouting();
+        var frames = new FakeFrameRoutingStore();
+        frames.Seed(50);
+        frames.Seed(60);
+
         if (seedActiveRoute)
         {
             store.SeedActiveChain(
@@ -486,15 +748,27 @@ internal sealed class ManualReplayHarness
             });
         }
 
+        if (seedTypedPalletReturn)
+        {
+            TypedEndpointSeedShapes.SeedStandardAreas(loc);
+            loc.Seed(TypedEndpointSeedShapes.PositionCellMap());
+            loc.Seed(TypedEndpointSeedShapes.FrameShelf());
+            loc.Seed(TypedEndpointSeedShapes.FrameCell());
+            TypedEndpointSeedShapes.SeedActiveEquipmentChain(store);
+            frames.Seed(TypedEndpointSeedShapes.FrameIdTransit);
+            frames.Seed(TypedEndpointSeedShapes.FrameIdDownload);
+        }
+
         var trace = new CallTrace();
         var routingEquipment = new TracingEquipmentConfigService(store, trace);
         // UI 列表方法不得走 UnusedDbContextFactory，避免 InitializeAsync 竞态改写 StatusMessage
         var equipment = new UiSafeEquipmentConfigService(routingEquipment);
         var validator = new CountingRoutingValidator(
             new RoutingAvailabilityValidator(
-                store, routingEquipment, NullLogger<RoutingAvailabilityValidator>.Instance));
-        var resolver = new ManagedDispatchRouteResolver(
-            loc, NullLogger<ManagedDispatchRouteResolver>.Instance);
+                store, routingEquipment, frames, NullLogger<RoutingAvailabilityValidator>.Instance));
+        var resolver = new CountingManagedRouteResolver(
+            new ManagedDispatchRouteResolver(
+                loc, frames, NullLogger<ManagedDispatchRouteResolver>.Instance));
 
         var client = new FakeRcsHttpClient();
         var taskStore = new MutableRcsTaskStore();
@@ -513,7 +787,7 @@ internal sealed class ManualReplayHarness
             {
                 UseSimulator = true,
                 SchedulerEnabled = false,
-                PalletReturnArea = "托盘回收区"
+                PalletReturnArea = palletReturnArea
             }
         });
 
@@ -541,6 +815,7 @@ internal sealed class ManualReplayHarness
         {
             Store = store,
             LocationMap = loc,
+            Frames = frames,
             Client = client,
             TaskStore = taskStore,
             Callbacks = callbacks,
@@ -695,6 +970,114 @@ internal sealed class ManualReplayHarness
     {
         public string Name => "tester";
     }
+}
+
+/// <summary>
+/// Inventory RED 用：GetWorkLine 走真实路由 Store；GetBindingByFrame 读内存 FrameBinds，
+/// 避免 EquipmentConfigService 直查 DB（UnusedDbContextFactory）。
+/// </summary>
+internal sealed class StoreBackedFrameBindEquipment : IEquipmentConfigService
+{
+    private readonly TracingEquipmentConfigService _routing;
+    private readonly MutableEquipmentRoutingStore _store;
+
+    public StoreBackedFrameBindEquipment(MutableEquipmentRoutingStore store, CallTrace? trace = null)
+    {
+        _store = store;
+        _routing = new TracingEquipmentConfigService(store, trace ?? new CallTrace());
+    }
+
+    public Task<WorkLineRef?> GetWorkLineByEquipmentAsync(long equipmentId, CancellationToken ct = default)
+        => _routing.GetWorkLineByEquipmentAsync(equipmentId, ct);
+    public Task<IReadOnlyList<long>> GetNextProcessEquipmentsAsync(long equipmentId, CancellationToken ct = default)
+        => _routing.GetNextProcessEquipmentsAsync(equipmentId, ct);
+    public Task<bool> HasSubsequentProcessAsync(long equipmentId, CancellationToken ct = default)
+        => _routing.HasSubsequentProcessAsync(equipmentId, ct);
+    public Task<EquipmentFrameBindingIds> GetFrameBindingIdsAsync(long equipmentId, CancellationToken ct = default)
+        => _routing.GetFrameBindingIdsAsync(equipmentId, ct);
+    public Task<long?> GetFrameBindingByRoleAsync(long equipmentId, FrameRole role, CancellationToken ct = default)
+        => _routing.GetFrameBindingByRoleAsync(equipmentId, role, ct);
+
+    public Task<IReadOnlyList<FrameBindingInfo>> GetBindingByFrameAsync(long frameId, CancellationToken ct = default)
+    {
+        var binds = _store.FrameBinds
+            .Where(b => b.FrameId == frameId && b.State == "0")
+            .Select(b =>
+            {
+                var role = int.TryParse(b.FrameRole, out var n) && Enum.IsDefined(typeof(FrameRole), n)
+                    ? (FrameRole)n
+                    : FrameRole.Transit;
+                return new FrameBindingInfo(b.EquipmentId, role);
+            })
+            .ToList();
+        return Task.FromResult<IReadOnlyList<FrameBindingInfo>>(binds);
+    }
+
+    public Task<IReadOnlyList<NamedOption>> GetCraftworkOptionsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<NamedOption>>(Array.Empty<NamedOption>());
+    public Task<IReadOnlyList<EquipmentListItem>> GetByCraftAsync(long? craftworkId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<EquipmentListItem>>(Array.Empty<EquipmentListItem>());
+    public Task<IReadOnlyList<PositionItem>> GetPositionsAsync(long equipmentId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PositionItem>>(Array.Empty<PositionItem>());
+    public Task<IReadOnlyList<EquipmentFrameBinding>> GetFrameBindingsAsync(long equipmentId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<EquipmentFrameBinding>>(Array.Empty<EquipmentFrameBinding>());
+    public Task<IReadOnlyList<NamedOption>> GetPlcOptionsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<NamedOption>>(Array.Empty<NamedOption>());
+    public Task<IReadOnlyList<NamedOption>> GetFrameOptionsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<NamedOption>>(Array.Empty<NamedOption>());
+    public Task<string> SuggestNextNoAsync(CancellationToken ct = default) => Task.FromResult("EQ01");
+    public Task<long> CreateEquipmentAsync(EquipmentCreateModel model, string author, CancellationToken ct = default)
+        => Task.FromResult(1L);
+    public Task<EquipmentEditModel?> GetByIdAsync(long equipmentId, CancellationToken ct = default)
+        => Task.FromResult<EquipmentEditModel?>(null);
+    public Task UpdateAsync(EquipmentEditModel model, string author, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task SetFrameBindingAsync(long equipmentId, long? uploadFrameId, long? downloadFrameId, string author, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task<DeleteCheckResult> CheckDeleteAsync(long equipmentId, CancellationToken ct = default)
+        => Task.FromResult(new DeleteCheckResult(true, 0, ""));
+    public Task DeleteAsync(long equipmentId, string author, CancellationToken ct = default)
+        => Task.CompletedTask;
+}
+
+/// <summary>空派工队列（Inventory 互斥检查）。</summary>
+internal sealed class EmptyDispatchQueue : IDispatchQueue
+{
+    public int Count => 0;
+    public void Enqueue(DispatchItem item) { }
+    public DispatchItem? Dequeue() => null;
+    public void Clear() { }
+}
+
+/// <summary>无在途换架（Inventory 互斥检查）。</summary>
+internal sealed class IdleChangeFrameOrchestrator : IChangeFrameOrchestrator
+{
+#pragma warning disable CS0067
+    public event EventHandler<ChangeFrameProgressEvent>? ProgressChanged;
+#pragma warning restore CS0067
+    public Task<string> ChangeFrameAsync(long equipmentId, FrameRole role, string author, CancellationToken ct = default)
+        => Task.FromResult("txn");
+    public IReadOnlyList<ChangeFrameProgressEvent> GetActiveTransactions()
+        => Array.Empty<ChangeFrameProgressEvent>();
+}
+
+/// <summary>换架/盘点夹具用空调度器（仅 InvalidateFrameBindingCache）。</summary>
+internal sealed class IdlePositionScheduler : IPositionScheduler
+{
+    public bool IsReconciled => true;
+    public ReconciliationState ReconciliationState => ReconciliationState.Succeeded;
+    public string? ReconciliationFailureReason => null;
+    public bool IsAutoDispatchPaused { get; private set; }
+#pragma warning disable CS0067
+    public event EventHandler? Reconciled;
+    public event EventHandler<ReconciliationSnapshot>? ReconciliationStateChanged;
+#pragma warning restore CS0067
+    public void SetAutoDispatchPaused(bool paused) => IsAutoDispatchPaused = paused;
+    public Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public void InvalidateFrameBindingCache(long? equipmentId = null) { }
 }
 
 /// <summary>路由委托真实 TracingEquipment；CRUD/下拉返回空，避免测试撞 DB factory。</summary>

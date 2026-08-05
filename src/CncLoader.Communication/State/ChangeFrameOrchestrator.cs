@@ -76,9 +76,10 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             var msg = frameLoc is null
                 ? $"料架 {frameId.Value} 未录入 LOCATION_MAP（cell/shelf）"
                 : $"缓存区 {bufferArea} 未录入 LOCATION_MAP";
-            _logger.LogWarning("换架失败：{Msg}", msg);
+            // D8：路由配置不可用 → Warning，不 Raise 业务 Alarm
+            _logger.LogWarning("换架路由不可用：机台 {Eq} 角色 {Role} Frame={Frame}：{Msg}",
+                equipmentId, role, frameId.Value, msg);
             Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", msg);
-            await _alarms.RaiseRcsTaskNotFoundAsync($"CHANGE-FRAME-{txnId}", $"换架失败：{msg}", ct);
             return txnId;
         }
 
@@ -86,9 +87,8 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
         if (line is null)
         {
             const string msg = "机台线体路由不可用（缺失或已禁用）";
-            _logger.LogWarning("换架失败：机台 {Eq} {Msg}", equipmentId, msg);
+            _logger.LogWarning("换架路由不可用：机台 {Eq} 角色 {Role}：{Msg}", equipmentId, role, msg);
             Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", msg);
-            await _alarms.RaiseRcsTaskNotFoundAsync($"CHANGE-FRAME-{txnId}", $"换架失败：{msg}", ct);
             return txnId;
         }
 
@@ -100,12 +100,13 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
         };
         _active[txnId] = ctx;
 
-        // 3. 下发第一发：拉走旧架（站点→缓存区）
+        // 3. 下发第一发：拉走旧架（站点→缓存区）；Operation=ChangeFrame 注入机台上下文供 Final Bind
         var pull = await _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
         {
             WorkLineId = line.WorkLineId, LineCode = line.LineCode, TaskType = "1", Priority = 9,
             FromCode = ctx.FrameCell, ToCode = ctx.BufferCell,
             EquipmentId = equipmentId, Kind = RcsTaskKind.ChangeFrame,
+            Operation = DispatchOperationKind.ChangeFrame,
             TxnId = txnId, Author = author
         }, ct);
 
@@ -113,7 +114,16 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
         {
             var pullErr = pull.Error ?? pull.Message ?? "未知错误";
             Raise(txnId, equipmentId, role, ChangeFrameStep.Alarm, null, null, "FAILED", $"第一发下发失败：{pullErr}");
-            await _alarms.RaiseRcsTaskCanceledAsync(txnId, $"换架第一发（拉旧架）下发失败：{pullErr}", ct);
+            if (IsRoutingFailure(pull))
+            {
+                _logger.LogWarning(
+                    "换架第一发路由拒发：机台 {Eq} 角色 {Role} Frame={Frame} Kind={Kind}：{Msg}",
+                    equipmentId, role, ctx.FrameId, pull.FailureKind, pullErr);
+            }
+            else
+            {
+                await _alarms.RaiseRcsTaskCanceledAsync(txnId, $"换架第一发（拉旧架）下发失败：{pullErr}", ct);
+            }
             _active.TryRemove(txnId, out _);
             return txnId;
         }
@@ -151,6 +161,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                         WorkLineId = ctx.WorkLineId, LineCode = ctx.LineCode, TaskType = "0", Priority = 9,
                         FromCode = ctx.BufferCell, ToCode = ctx.FrameCell,
                         EquipmentId = ctx.EquipmentId, Kind = RcsTaskKind.ChangeFrame,
+                        Operation = DispatchOperationKind.ChangeFrame,
                         TxnId = ctx.TxnId, Author = ctx.Author
                     });
                     if (push.Success && !string.IsNullOrEmpty(push.TaskId))
@@ -162,7 +173,16 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                     {
                         var pushErr = push.Error ?? push.Message ?? "未知错误";
                         Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, "FAILED", $"第二发下发失败：{pushErr}");
-                        await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId, $"换架第二发（送新架）下发失败：{pushErr}");
+                        if (IsRoutingFailure(push))
+                        {
+                            _logger.LogWarning(
+                                "换架第二发路由拒发：机台 {Eq} 角色 {Role} Frame={Frame} Kind={Kind}：{Msg}",
+                                ctx.EquipmentId, ctx.Role, ctx.FrameId, push.FailureKind, pushErr);
+                        }
+                        else
+                        {
+                            await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId, $"换架第二发（送新架）下发失败：{pushErr}");
+                        }
                         _active.TryRemove(ctx.TxnId, out _);
                     }
                 }
@@ -201,6 +221,11 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
         var row = await _taskStore.GetByTaskIdAsync(taskId);
         return row is { TaskState: RcsTaskState.Failed } && row.RedoCount >= _options.MaxAutoRedo;
     }
+
+    /// <summary>D8：路由/配置不可用只 Warning，不 Raise 业务 Alarm。</summary>
+    private static bool IsRoutingFailure(RcsResult result)
+        => result.FailureKind is RcsFailureKind.RouteUnavailable
+            or RcsFailureKind.ConfigurationUnavailable;
 
     private void Raise(string txnId, long eq, FrameRole role, ChangeFrameStep step, string? pull, string? push, string state, string msg)
     {

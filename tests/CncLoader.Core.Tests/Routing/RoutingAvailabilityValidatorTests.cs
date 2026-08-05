@@ -38,7 +38,8 @@ public sealed class RoutingAvailabilityValidatorTests
     {
         var boom = new BoomEquipmentRoutingStore();
         var eq = new TracingEquipmentConfigService(new MutableEquipmentRoutingStore(), new CallTrace());
-        var v = new RoutingAvailabilityValidator(boom, eq, NullLogger<RoutingAvailabilityValidator>.Instance);
+        var v = new RoutingAvailabilityValidator(
+            boom, eq, new FakeFrameRoutingStore(), NullLogger<RoutingAvailabilityValidator>.Instance);
         var r = await v.ValidateAsync(new DispatchRouteContext
         {
             SourceEquipmentId = 1,
@@ -55,7 +56,8 @@ public sealed class RoutingAvailabilityValidatorTests
         store.SeedActiveChain(10, "L", 20, 1, 30);
         mutate(store);
         var eq = new TracingEquipmentConfigService(store, new CallTrace());
-        var v = new RoutingAvailabilityValidator(store, eq, NullLogger<RoutingAvailabilityValidator>.Instance);
+        var v = new RoutingAvailabilityValidator(
+            store, eq, new FakeFrameRoutingStore(), NullLogger<RoutingAvailabilityValidator>.Instance);
         var r = await v.ValidateAsync(new DispatchRouteContext
         {
             SourceEquipmentId = 30,

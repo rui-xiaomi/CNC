@@ -160,7 +160,11 @@ public enum RcsFailureKind
     RouteUnavailable,
     ConfigurationUnavailable,
     Cancelled,
-    SendFailed
+    SendFailed,
+    /// <summary>自动重派已达 MaxAutoRedo（Claim 未抢到预算）。</summary>
+    RedoLimitReached,
+    /// <summary>自动重派 Claim 竞争失败或任务非候选态（非路由失败、不告警上限）。</summary>
+    AutoRedoNotClaimable
 }
 
 /// <summary>一次 RCS 调用的结果（含请求报文原文，供落库与展示）。</summary>
@@ -196,5 +200,17 @@ public sealed record RcsResult(
         => new(false, 0, false, null, "", null, safeMessage, 0)
         {
             FailureKind = RcsFailureKind.ConfigurationUnavailable
+        };
+
+    public static RcsResult RedoLimitReached(string message)
+        => new(false, 0, false, null, "", null, message, 0)
+        {
+            FailureKind = RcsFailureKind.RedoLimitReached
+        };
+
+    public static RcsResult AutoRedoNotClaimable(string message)
+        => new(false, 0, false, null, "", null, message, 0)
+        {
+            FailureKind = RcsFailureKind.AutoRedoNotClaimable
         };
 }

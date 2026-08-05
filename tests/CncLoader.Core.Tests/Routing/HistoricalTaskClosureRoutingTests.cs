@@ -176,7 +176,8 @@ public sealed class HistoricalTaskClosureRoutingTests
             store.BindFrame(30, 50, FrameRole.Upload);
             mutate(store);
             var eq = new TracingEquipmentConfigService(store, new CallTrace());
-            var v = new RoutingAvailabilityValidator(store, eq, NullLogger<RoutingAvailabilityValidator>.Instance);
+            var v = new RoutingAvailabilityValidator(
+                store, eq, new FakeFrameRoutingStore(), NullLogger<RoutingAvailabilityValidator>.Instance);
             var r = await v.ValidateAsync(ctx ?? new DispatchRouteContext
             {
                 SourceEquipmentId = 30,
@@ -216,7 +217,8 @@ public sealed class HistoricalTaskClosureRoutingTests
 
         var boomStore = new BoomStore();
         var boomEq = new TracingEquipmentConfigService(new MutableEquipmentRoutingStore(), new CallTrace());
-        var boomV = new RoutingAvailabilityValidator(boomStore, boomEq, NullLogger<RoutingAvailabilityValidator>.Instance);
+        var boomV = new RoutingAvailabilityValidator(
+            boomStore, boomEq, new FakeFrameRoutingStore(), NullLogger<RoutingAvailabilityValidator>.Instance);
         var boom = await boomV.ValidateAsync(new DispatchRouteContext
         {
             SourceEquipmentId = 1, FromCode = "A", ToCode = "B"

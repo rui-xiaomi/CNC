@@ -16,8 +16,8 @@ namespace CncLoader.Communication.Rcs;
 /// 三职责：
 /// 1) 兜底轮询——按 <see cref="RcsOptions.PollIntervalMs"/> 取未完结 taskId 批量 queryTask（IN），
 ///    按 §4.5 11→5 映射推进态；RCS 查无此任务 → 告警人工。
-/// 2) 自动 redo——订阅 <see cref="IRcsCallbackNotifier.TaskStatusReceived"/>，FAILED 态经
-///    <see cref="IRcsTaskStore.TryIncrementRedoIfUnderAsync"/> 原子递增后 <see cref="IRcsTaskService.RedispatchAsync"/>，
+/// 2) 自动 redo——订阅 <see cref="IRcsCallbackNotifier.TaskStatusReceived"/>，FAILED 态调用
+///    <see cref="IRcsTaskService.AutoRedispatchAsync"/>（门禁后原子 Claim 再发送），
 ///    超过 <see cref="RcsOptions.MaxAutoRedo"/> → 告警人工。
 /// 3) 取消工单——CANCELED 态 → <see cref="IAlarmEventService.RaiseRcsTaskCanceledAsync"/>（步骤⑤状态机在确认前锁点位）。
 /// 与回调冲突时以 queryTask 为准（轮询覆盖回调已写的态）。
@@ -190,18 +190,42 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
     private async Task AutoRedoAsync(string taskId, string source)
     {
         var max = Math.Max(1, _options.MaxAutoRedo);
-        if (await _store.TryIncrementRedoIfUnderAsync(taskId, max))
+        var result = await _taskSvc.AutoRedispatchAsync(taskId, max);
+        if (result.Success)
         {
-            _logger.LogInformation("跟踪器自动 redo {TaskId}（来源 {Source}，REDO_COUNT+1）", taskId, source);
-            await _taskSvc.RedispatchAsync(taskId);
+            _logger.LogInformation("跟踪器自动 redo {TaskId}（来源 {Source}）", taskId, source);
+            return;
         }
-        else if (_redoLimitAlarmed.TryAdd(taskId, true))
+
+        if (result.FailureKind == RcsFailureKind.RedoLimitReached
+            && _redoLimitAlarmed.TryAdd(taskId, true))
         {
             _logger.LogWarning("任务 {TaskId} 自动重做已达上限 {Max}，告警人工并收口工位", taskId, max);
             await _alarms.RaiseRcsRedoLimitAsync(taskId, max, $"来源 {source}，工位已收口可点恢复");
             await NotifySchedulerAbandonedAsync(taskId, "REDO_LIMIT", CancellationToken.None);
+            return;
+        }
+
+        if (result.FailureKind is RcsFailureKind.RouteUnavailable
+            or RcsFailureKind.ConfigurationUnavailable)
+        {
+            _logger.LogWarning("跟踪器自动 redo 路由拒发 {TaskId}（来源 {Source}）：{Msg}",
+                taskId, source, result.Message ?? result.Error);
+            return;
+        }
+
+        if (result.FailureKind == RcsFailureKind.AutoRedoNotClaimable)
+        {
+            _logger.LogWarning("跟踪器自动 redo Claim 未抢占 {TaskId}（来源 {Source}）：{Msg}",
+                taskId, source, result.Message ?? result.Error);
         }
     }
+
+    /// <summary>
+    /// 测试探测：单次触发真实 <see cref="AutoRedoAsync"/>，不启动轮询循环、不改生产逻辑。
+    /// </summary>
+    internal Task ProbeAutoRedoOnceAsync(string taskId, string source = "probe")
+        => AutoRedoAsync(taskId, source);
 
     private async Task NotifySchedulerAbandonedAsync(string taskId, string reason, CancellationToken ct)
     {

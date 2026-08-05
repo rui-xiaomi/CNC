@@ -37,6 +37,7 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<ICraftworkService, CraftworkService>();
         services.AddSingleton<IEquipmentRoutingStore, EquipmentRoutingStore>();
         services.AddSingleton<IEquipmentConfigService, EquipmentConfigService>();
+        services.AddSingleton<IFrameRoutingStore, FrameRoutingStore>();
         services.AddSingleton<IRoutingAvailabilityValidator, RoutingAvailabilityValidator>();
         services.AddSingleton<IManagedDispatchRouteResolver, ManagedDispatchRouteResolver>();
         services.AddSingleton<IFrameStructureStore, FrameStructureStore>();

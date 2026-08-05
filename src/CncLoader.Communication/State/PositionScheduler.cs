@@ -69,7 +69,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
     private Task? _dispatchTask;
-    private Task? _reconcileRetryTask;
+    /// <summary>统一启动对账后台工作流（single-flight；由 StopAsync 观察）。</summary>
+    private Task? _reconcileWorkflowTask;
     private readonly RcsCallbackNotifier? _notifier;
     /// <summary>0=自动派工开，1=暂停新自动上下料派工（进程内，volatile 供 UI/调度循环可见）。</summary>
     private volatile int _autoDispatchPaused;
@@ -79,6 +80,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// <summary>开闸门闩：0=未开，1=已开（防重复启循环/事件）。</summary>
     private int _gateOpened;
     private int _reconcileAttemptCount;
+    /// <summary>统一 reconciliation workflow 启动次数（0/1）；兼容旧名 ReconcileRetryLoopStartCount。</summary>
     private int _reconcileRetryLoopStartCount;
     /// <summary>生命周期锁：Stop 与开闸的线性化点（先取得锁者决定能否开闸）。</summary>
     private readonly object _lifecycleLock = new();
@@ -274,7 +276,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     internal int DispatchLoopStartCount { get; private set; }
     /// <summary>测试接缝：<see cref="Reconciled"/> 已触发次数。</summary>
     internal int ReconciledRaiseCount { get; private set; }
-    /// <summary>测试接缝：对账重试循环启动次数（应为 0 或 1，禁止并行重试器）。</summary>
+    /// <summary>
+    /// 测试接缝：统一 reconciliation workflow 启动次数（应为 0 或 1）。
+    /// 兼容旧名；不再表示「失败后另开的 retry loop」。
+    /// </summary>
     internal int ReconcileRetryLoopStartCount => Volatile.Read(ref _reconcileRetryLoopStartCount);
     /// <summary>测试接缝：对账尝试次数（含首次）。</summary>
     internal int ReconcileAttemptCount => Volatile.Read(ref _reconcileAttemptCount);
@@ -303,6 +308,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // 入口已取消：不启动 workflow、不进入对账、不开闸（D5）。
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (!_options.SchedulerEnabled)
         {
             _logger.LogInformation("加工位状态机调度器未启用（SchedulerEnabled=false）。");
@@ -314,14 +322,11 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return;
         }
 
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (_notifier is not null)
-            _notifier.TaskStatusReceived += OnRcsTaskStatusForInbound;
-
-        // 1. 装载加工位与 POS_TEST_START 点位缓存
+        // 1. 装载加工位与 POS_TEST_START 点位缓存（仅受启动 token 控制）
         try
         {
-            var allPoints = await _points.GetAllAsync(cancellationToken);
+            var allPoints = await _points.GetAllAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var posKeys = new HashSet<(long, long)>();
             foreach (var p in allPoints)
             {
@@ -336,19 +341,31 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             _positions = posKeys.Select(k => (k.Item1, k.Item2, _testStartPoints.TryGetValue(k, out var tp) ? tp.PlcId : 0L)).ToList();
             _logger.LogInformation("位置调度器装载 {N} 个加工位", _positions.Count);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) { _logger.LogWarning(ex, "装载加工位点位失败，调度器将以空集启动"); }
 
-        // 2. §6.3 首次对账：fail-closed。失败则保持未开闸，后台单一顺序循环按间隔重试（不阻塞其它 HostedService）。
-        var first = await TryReconcileOnceAsync(_cts.Token);
-        if (first == ReconcileAttemptOutcome.Succeeded)
-        {
-            TryOpenGateAfterSuccess();
-            return;
-        }
-        if (first == ReconcileAttemptOutcome.Cancelled)
-            return;
+        cancellationToken.ThrowIfCancellationRequested();
 
-        EnsureReconcileRetryLoopStarted();
+        // 2. §6.3 对账：原子启动单一后台 workflow 后立即返回，不阻塞后续 HostedService（P1-1 / D1）。
+        // 后台生命周期使用调度器自有 CTS；启动 token 不链接进运行期（D5）。
+        lock (_lifecycleLock)
+        {
+            if (_stopping) return;
+            if (_reconcileWorkflowTask is not null) return;
+
+            _cts = new CancellationTokenSource();
+            if (_notifier is not null)
+                _notifier.TaskStatusReceived += OnRcsTaskStatusForInbound;
+
+            _reconcileRetryLoopStartCount = 1;
+            var lifecycleToken = _cts.Token;
+            _reconcileWorkflowTask = Task.Run(
+                () => ReconcileWorkflowAsync(lifecycleToken),
+                CancellationToken.None);
+        }
     }
 
     /// <summary>
@@ -401,34 +418,38 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
     }
 
-    private void EnsureReconcileRetryLoopStarted()
+    /// <summary>
+    /// 单一启动对账工作流：attempt → 成功开闸结束，或失败 → interval → 下一 attempt。
+    /// 同一时刻至多一个 workflow / 一个 attempt（D3/D7）。
+    /// </summary>
+    private async Task ReconcileWorkflowAsync(CancellationToken lifecycleToken)
     {
-        if (_cts is null) return;
-        if (Volatile.Read(ref _gateOpened) != 0) return; // 已开闸则无需重试
-        if (Interlocked.CompareExchange(ref _reconcileRetryLoopStartCount, 1, 0) != 0)
-            return;
-
-        var token = _cts.Token;
-        _reconcileRetryTask = Task.Run(() => ReconcileRetryLoopAsync(token), CancellationToken.None);
-    }
-
-    private async Task ReconcileRetryLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
+        while (!lifecycleToken.IsCancellationRequested)
         {
+            if (_isReconciled || Volatile.Read(ref _gateOpened) != 0)
+                return;
+
+            ReconcileAttemptOutcome outcome;
             try
             {
-                await DelayMsAsync(_options.ReconcileRetryIntervalMs, ct).ConfigureAwait(false);
+                outcome = await TryReconcileOnceAsync(lifecycleToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            catch (OperationCanceledException) when (lifecycleToken.IsCancellationRequested)
             {
                 return;
             }
+            catch (Exception ex)
+            {
+                // 协调器已吞阶段异常；此处兜底防止 workflow 静默死亡，按失败重试（不开闸）。
+                _logger.LogWarning(ex, "启动对账工作流未预期异常，将按失败间隔重试");
+                _isReconciled = false;
+                _reconciliationFailureReason = FormatFailureReason(
+                    ReconcileRoundResult.Fail(ReconcilePhase.One, ex.Message ?? ex.GetType().Name, ex));
+                _reconciliationState = (int)ReconciliationState.WaitingForRetry;
+                PublishReconcileState();
+                outcome = ReconcileAttemptOutcome.Failed;
+            }
 
-            if (_isReconciled || Interlocked.CompareExchange(ref _gateOpened, 0, 0) != 0)
-                return;
-
-            var outcome = await TryReconcileOnceAsync(ct).ConfigureAwait(false);
             if (outcome == ReconcileAttemptOutcome.Succeeded)
             {
                 TryOpenGateAfterSuccess();
@@ -436,6 +457,15 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             }
             if (outcome == ReconcileAttemptOutcome.Cancelled)
                 return;
+
+            try
+            {
+                await DelayMsAsync(_options.ReconcileRetryIntervalMs, lifecycleToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (lifecycleToken.IsCancellationRequested)
+            {
+                return;
+            }
         }
     }
 
@@ -502,7 +532,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // 先取得 stopping 生命周期控制权，再取消 CTS（禁止随后开闸）。
+        // 先取得 stopping 生命周期控制权，再取消自有 CTS（禁止随后开闸；D6）。
         EnterStopping();
         if (_notifier is not null)
             _notifier.TaskStatusReceived -= OnRcsTaskStatusForInbound;
@@ -510,7 +540,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         var pending = Task.WhenAll(
             ObserveAsync(_loopTask),
             ObserveAsync(_dispatchTask),
-            ObserveAsync(_reconcileRetryTask));
+            ObserveAsync(_reconcileWorkflowTask));
+        // 下游忽略 CT 时 workflow 可能继续挂起：有界等待，不硬杀、不并发替代 attempt（D4）。
         await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
     }
 

@@ -88,18 +88,25 @@ public sealed class RcsTaskStore : IRcsTaskStore
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
+    public async Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        // 条件更新：回调与轮询并发时最多一人成功，严格遵守 MaxAutoRedo。
+        // 单条条件更新：taskId + 候选态 FAILED + RedoCount&lt;max；并发最多一人 Claim 成功。
         var affected = await db.AgvTasks
-            .Where(x => x.RcsTaskId == rcsTaskId && x.RedoCount < maxRedo)
+            .Where(x => x.RcsTaskId == rcsTaskId
+                        && x.TaskState == RcsTaskState.Failed
+                        && x.RedoCount < maxRedo)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.RedoCount, t => t.RedoCount + 1)
                 .SetProperty(t => t.TaskState, RcsTaskState.Dispatched)
                 .SetProperty(t => t.TaskStatus, "1")
                 .SetProperty(t => t.ErrorMsg, (string?)null), ct);
-        return affected > 0;
+        if (affected > 0) return AutoRedoClaimResult.Claimed;
+
+        var row = await db.AgvTasks.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+        return AutoRedoClaimRules.ClassifyMiss(
+            row is not null, row?.TaskState, row?.RedoCount ?? 0, maxRedo);
     }
 
     public async Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)

@@ -18,14 +18,15 @@ public interface IRcsTaskStore
     Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
         string? error = null, CancellationToken ct = default);
 
-    /// <summary>redo：REDO_COUNT+1，态回到 DISPATCHED（同 taskId 幂等重发）。</summary>
+    /// <summary>redo：REDO_COUNT+1，态回到 DISPATCHED（同 taskId 幂等重发）。手动 <c>RedoAsync</c> 用。</summary>
     Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default);
 
     /// <summary>
-    /// 自动重做原子守卫：仅当当前 REDO_COUNT &lt; maxRedo 时，REDO_COUNT+1、态回 DISPATCHED、清错误，返回 true；
-    /// 否则返回 false（已达上限，调用方应告警人工）。避免回调与轮询并发触发双重 redo。
+    /// 自动重派原子 Claim：仅当 taskId 匹配、仍为候选态（FAILED）、REDO_COUNT &lt; maxRedo 时，
+    /// 单条条件更新 REDO_COUNT+1、态→DISPATCHED、清 Error，返回 <see cref="AutoRedoClaimResult.Claimed"/>。
+    /// 并发下最多一个成功；失败不修改行，并区分上限 / 状态已被占 / 不存在。
     /// </summary>
-    Task<bool> TryIncrementRedoIfUnderAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default);
+    Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default);
 
     /// <summary>标记取消后人工处理已确认。仅 TASK_STATE=CANCELED 允许；任务不存在或状态不符抛 InvalidOperationException。</summary>
     Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);

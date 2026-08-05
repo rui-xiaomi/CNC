@@ -410,7 +410,8 @@ public sealed class DispatchRoutingGateTests
         public CountingValidator(MutableEquipmentRoutingStore store, IEquipmentConfigService equipment)
         {
             _inner = new RoutingAvailabilityValidator(
-                store, equipment, NullLogger<RoutingAvailabilityValidator>.Instance);
+                store, equipment, new FakeFrameRoutingStore(),
+                NullLogger<RoutingAvailabilityValidator>.Instance);
         }
 
         public async Task<RoutingAvailabilityResult> ValidateAsync(
@@ -436,7 +437,8 @@ public sealed class DispatchRoutingGateTests
             store.BindFrame(DispatchGateHarness.Eq, DispatchGateHarness.UploadFrame, FrameRole.Upload);
             var eq = new TracingEquipmentConfigService(store, new CallTrace());
             _inner = new RoutingAvailabilityValidator(
-                store, eq, NullLogger<RoutingAvailabilityValidator>.Instance);
+                store, eq, new FakeFrameRoutingStore(),
+                NullLogger<RoutingAvailabilityValidator>.Instance);
         }
 
         public async Task<RoutingAvailabilityResult> ValidateAsync(
