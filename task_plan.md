@@ -162,8 +162,24 @@ AGV / 扫码枪连通性测试（仅测试，不纳入调度/来料校验）。
 - [ ] ⑦ 按开发文档 §11 验收签字
 
 **代码侧已就绪、勿在现场误跑**
-- 审查高危修复已合入（队列/PLC 串行/Dispose 占闸/水位/_redo/删架校验/设备流水收敛）；`ForgetTask`/`_seenOrder` 僵尸项见 `findings.md`，暂不处理
+- 审查高危修复已合入（队列/PLC 串行/Dispose 占闸/水位/_redo/删架校验/设备流水收敛）
+- P0/P1 安全门禁已合入并完成代码级验收（见下方「安全门禁」）；单测工程 `tests/CncLoader.Core.Tests`
 - 禁止现场执行 `refill_upload_frame_electrodes.sql` / `FrameSeedReset`
+
+### 安全门禁 P0/P1（2026-08-05）　Status: 代码级验收通过（非生产验收）
+归档：`.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md`  
+ADR：`docs/adr/0002-槽位预记先于RCS下发.md`
+
+- [x] P0-1 HasMat 读失败/未知 fail-closed（不得当无料）
+- [x] P0-2 槽位预记先于 RCS 下发（ADR-0002）
+- [x] P0-3 启动对账 fail-closed + `ReconcileRetryIntervalMs` 重试 + 看板状态
+- [x] P0-4 回调持久化成功后 final seen / single-flight
+- [x] P0-5 软删配置不得参与新外部执行路由；AutoRedo Gate→Claim→Send
+- [x] P0-6 盘点/人工校正不得覆盖 Reserved
+- [x] P1-1 首次启动对账不阻塞后续 HostedService
+- [x] P1-2 ForgetTask 同步移除顺序结构（无僵尸淘汰）
+- [x] 验证：Core 418/418；`dotnet build` 0 警告 0 错误
+- [ ] 真 MySQL / RCS / PLC / 换架盘点 — **归 Phase 6 待真机验证**
 
 ### Phase 7 — 监控看板悬浮卡片视觉升级　Status: 已完成（待目视确认）
 Spec：`docs/superpowers/specs/2026-07-10-dashboard-neon-float-design.md`  
@@ -207,3 +223,4 @@ Plan：`docs/superpowers/plans/2026-07-10-dashboard-neon-float-plan.md`
 - Phase 5 外设测试页（待用户确认验收）
 - Phase 7 监控看板悬浮卡片（构建通过，待目视）
 - 2026-07-13：审查高危 H1–H7/M4/M8/M11 + 设备流水收敛 + PLC Dispose 占 `_ioGate` + `AGENTS.md`/`reviewer` agent
+- 2026-08-05：P0/P1 安全门禁代码级验收通过（真机联调仍归 Phase 6）

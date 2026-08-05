@@ -4,10 +4,10 @@
 |------|-----|
 | 日期 | 2026-08-05 |
 | 项目路径 | `C:\Users\75626\Desktop\CNC` |
-| 分支 | `main` @ `dd4383e`（`origin/main` ahead 1，未 push） |
-| 工作区 | 另有大量未提交改动（P0-5 收尾 / P1-1 / P1-2 等） |
-| 本轮操作 | 2026-08-05 最终回归后：收口 B1/B2（勾选 P0-3 清单、用户授权删除 `.trx`、更新本归档）；**未改业务代码 / 配置 / 测试**；未 commit / push |
-| 证据来源 | 当前源码、`git status`/`git diff`、紧邻本次文档/卫生修正前的最终回归（`dotnet test`/`dotnet build`/`git diff --check`）、`.scratch/**/issues/*.md` |
+| 分支 | `main` @ `2244d57`（含本归档与 P0-5/P1 收口；相对 `origin/main` ahead，未 push） |
+| 工作区 | 文档同步轮次可能另有未提交 docs 改动；业务代码以 `2244d57` 为准 |
+| 本轮操作 | 代码级验收 + B1/B2 收口后已 commit `2244d57`；后续「文档同步」更新 AGENTS/CONTEXT/开发文档/联调清单等权威文档 |
+| 证据来源 | 源码、`dotnet test`/`dotnet build`、`.scratch/**/issues/*.md`、本归档 |
 
 ---
 
@@ -63,9 +63,9 @@
 
 | 层 | 说明 |
 |----|------|
-| 已本地 commit | `dd4383e` — `fix: 落地 P0 安全门禁（软删路由/预记/对账/回调去重/预记槽位保护）`（含 P0-1～P0-6 主体与测试工程；**未 push**） |
-| 工作区未提交 | P0-5 typed endpoint / AutoRedo Claim 收尾、P1-1 非阻塞启动、P1-2 Forget 顺序修复、对应测试与 Issue；`appsettings` 增加 `ReconcileRetryIntervalMs` |
-| 本归档 | `.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md`（新增） |
+| 已本地 commit | `dd4383e` — P0-1～P0-6 主体；`2244d57` — P0-5 typed/Claim、P1-1、P1-2、本归档与 Issue 收口（**均未 push**） |
+| 文档同步 | AGENTS / CONTEXT / 开发文档 §6.3·§6.5·§5.7·§12 / 联调清单 / ADR-0002 附录 / `task_plan` / `findings`（与本轮结论对齐） |
+| 本归档 | `.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md` |
 
 ### 2.3 本轮禁止事项（已遵守）
 

@@ -55,7 +55,7 @@ UI 模式三选一：`headless` | `spec-driven` | `mockup-driven`。判定顺序
 | 业务控件 | HandyControl **3.5.1**（已接入） |
 | 外壳/导航库 | WPF-UI **4.3.0**（目前仅 PackageReference；FluentWindow / NavigationView 外壳未接入） |
 | 根 Surface | **`app-shell`** |
-| 测试 | 当前无正式单元测试工程；联调以模拟器 + `docs/演示实操手册.md` 为准 |
+| 测试 | `tests/CncLoader.Core.Tests`（xUnit）；`dotnet test CncLoader.sln`；联调以模拟器 + `docs/演示实操手册.md` 为准 |
 | UI Automation | 待确认 |
 | 安装 / 发布 | 待确认 |
 
@@ -76,7 +76,8 @@ UI 模式三选一：`headless` | `spec-driven` | `mockup-driven`。判定顺序
 │   ├── design/
 │   │   └── DESIGN.md              ← 兼容索引 → UI设计文档 + ADR
 │   └── repo-wiki/                 ← 人类阅读；见 wiki.md
-└── src/                           ← 当前实现真相
+├── src/                           ← 当前实现真相
+└── tests/CncLoader.Core.Tests/    ← 核心安全门禁与调度单测
 ```
 
 ## 使用词汇表词汇

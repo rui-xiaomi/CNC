@@ -23,17 +23,16 @@
 - 资源合并：`App.xaml` Tokens → Styles → **DashboardStyles（新）** → PageTemplates
 - 状态键：`StateBadge` 字符串 `ok|run|warn|alarm|ng|idle|offline`
 
-## 已知技术债（暂不处理）
+## 已关闭技术债
 
-### RCS 回调去重：`ForgetTask` 与 `_seenOrder` 僵尸项
-- **位置**：`src/CncLoader.Communication/Rcs/RcsCallbackProcessor.cs` — `ForgetTask` / `MarkSeen`
-- **现象**：redo 成功后 `ForgetTask` 只从 `_seen`（HashSet）删除 `push:{taskId}:*` / `scan:{taskId}:*`，`_seenOrder`（Queue）仍保留对应字符串
-- **影响**：不影响正确性。容量顶满（4000）时 FIFO 淘汰会对已不在 `_seen` 的键多做几次无效 `Remove`
-- **决策**：已知技术债，**暂不处理**（对抗评审 [可选] 项，2026-07-13）
+### RCS 回调去重：`ForgetTask` 顺序僵尸（P1-2 · 2026-08-05 已修）
+- **原问题**：`ForgetTask` 只删 Dictionary、顺序结构留僵尸 → 容量淘汰可能误删 live key（旧述「不影响正确性」已证伪）。
+- **现状**：`CallbackDeduplicationGate` 使用 `Dictionary + LinkedList`；Forget 双删；淘汰只删 live First；容量默认 4000。
+- **证据**：`.scratch/p1-2-callback-final-seen-order/`；最终验收 `.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md`。
 
 ## 本轮结论（Session 74 · 2026-07-13 `/continue`）
 - Phase 4 代码步骤已全部勾完，计划状态改为「已完成（待用户确认）」；下一主线为 **Phase 6 现场联调**（清单已写入 `task_plan.md`）。
-- 审查高危修复、PLC Dispose 占闸、设备流水收敛、`AGENTS.md`/`reviewer` 已落地；`ForgetTask`/`_seenOrder` 僵尸项维持技术债。
+- 审查高危修复、PLC Dispose 占闸、设备流水收敛、`AGENTS.md`/`reviewer` 已落地。
 - Phase 6 中凡涉及真 PLC/FINS/现场网络的项一律标 **待真机验证**，不得在无真机证据下声称完成。
 - 本地 `main` 相对 `origin/main` 可能有未 push 提交；push 须用户确认。
 
@@ -48,3 +47,9 @@
 - 暂停自动派工 = 进程内 `volatile` 标志，闸在 UploadRequested / Done 入队 / DispatchLoop / TryDispatchUpload / DispatchOne；**不**停 PLC 轮询、回调、Tracker、已下发任务收口；换架/水位/盘点自动未纳入本开关。
 - 真实 RCS：须本次运行「测试连接」成功且 BaseUrl+ClientCode 未改；下发前二次确认；取消不落库不 HTTP。
 - 手工点到点不查 LOCATION_MAP、不写 POS_TEST_START、不改槽位账（沿用原 `DispatchTransitAsync` 手工路径）。
+
+## Session 77 · P0/P1 安全门禁代码级验收（2026-08-05）
+- 范围：P0-1～P0-6、P1-1、P1-2（HasMat 未知、预记优先、对账 fail-closed、回调持久化后去重、软删路由、预记槽保护、启动对账非阻塞、Forget 双删）。
+- 自动化：`tests/CncLoader.Core.Tests` **418/418**；`dotnet build` 0/0。
+- 结论：**代码级**验收通过，可进提交评审与真机联调；**非**生产验收。归档见 `.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md`。
+- 文档：`AGENTS.md` / `CONTEXT.md` / 开发文档 §6.3·§6.4·§5.7·§12.3 / 联调清单 / `task_plan` 已同步；`ForgetTask` 僵尸项从「勿修复」移除。
