@@ -87,7 +87,7 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
         var taskStore = new MutableRcsTaskStore();
         var svc = new global::CncLoader.Communication.Rcs.RcsTaskService(
             client, taskStore, new NoopMsg(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance);
+            resolver, validator, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         var result = await svc.DispatchTransitAsync(new TransitDispatchArgs
         {
@@ -138,7 +138,7 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
         var callbacks = new TrackingCallbackProcessor();
         var svc = new global::CncLoader.Communication.Rcs.RcsTaskService(
             client, taskStore, new NoopMsg(), callbacks,
-            resolver, flip, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance);
+            resolver, flip, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance, new TrackingSlotsForClosure());
         taskStore.Seed(new RcsTaskRow(
             1, "LINE-A-MV-FINAL-FAIL", "transit", "2", RcsTaskState.Failed, "failed", 5,
             ManualReplayRoutingCodes.FromCell, ManualReplayRoutingCodes.ToCell,

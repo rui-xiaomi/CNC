@@ -773,13 +773,13 @@ internal sealed class ManualReplayHarness
         var client = new FakeRcsHttpClient();
         var taskStore = new MutableRcsTaskStore();
         var callbacks = new TrackingCallbackProcessor();
+        var slots = new TrackingSlotsForClosure();
         var taskService = new RcsTaskService(
             client, taskStore, new NoopMsgLog(), callbacks,
             resolver, validator,
-            NullLogger<RcsTaskService>.Instance);
+            NullLogger<RcsTaskService>.Instance, slots);
 
         var plc = new TracingPlcOps(trace);
-        var slots = new TrackingSlotsForClosure();
         var notify = new FakeNotifyCounter();
         var options = Options.Create(new AppOptions
         {

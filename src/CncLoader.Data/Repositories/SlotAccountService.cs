@@ -53,6 +53,22 @@ public sealed class SlotAccountService : ISlotAccountService
         return reserved;
     }
 
+    public async Task<ReservedSlot?> FindReservedAsync(string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return null;
+        return await _slotStore.FindReservedByTaskIdAsync(taskId, ct);
+    }
+
+    public async Task<ReservedSlot?> ReserveTakeByMaterialAsync(long frameId, string taskId, string materialId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId) || string.IsNullOrWhiteSpace(materialId)) return null;
+        var reserved = await _slotStore.ReserveTakeByMaterialAsync(frameId, taskId, materialId, ct);
+        if (reserved is not null)
+            _logger.LogInformation("按物料取料预记料架 {Frame} 槽 {Slot} taskId={Task} 物料={El}",
+                frameId, reserved.SlotNo, taskId, materialId);
+        return reserved;
+    }
+
     public async Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return false;

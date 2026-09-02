@@ -64,7 +64,7 @@ public sealed class ChangeFrameRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         _alarms = new NoopAlarms();
         _notifier = new RcsCallbackNotifier();
@@ -474,7 +474,7 @@ public sealed class ChangeFrameRoutingGateTests
     {
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         var result = await taskSvc.DispatchTransitAsync(new TransitDispatchArgs
         {
@@ -503,7 +503,7 @@ public sealed class ChangeFrameRoutingGateTests
         _eq.ClearFrameBinds();
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         var result = await taskSvc.DispatchTransitAsync(new TransitDispatchArgs
         {
@@ -843,7 +843,7 @@ public sealed class ChangeFrameRoutingGateTests
         validator.OrderSink = _order;
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<RcsTaskService>.Instance);
+            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
         var options = Options.Create(new AppOptions
         {
             Rcs = new RcsOptions

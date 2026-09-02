@@ -145,7 +145,7 @@ public sealed class QueryConditionItem
     [JsonPropertyName("order")] public string Order { get; set; } = "None";
 }
 
-/// <summary>RCS 应答外层 { Success, Message, Data }（Success 可能是布尔或字符串"true"）。</summary>
+/// <summary>RCS 应答外层 { Success, Message, Data }。Success 可能是布尔、字符串 "true"、数字 1；解析见 <see cref="RcsAckParser"/>。</summary>
 public sealed class RcsAck
 {
     [JsonPropertyName("Success")] public object? Success { get; set; }

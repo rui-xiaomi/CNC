@@ -27,7 +27,7 @@ alwaysApply: true
 - 并发：PLC 客户端同 `plcId` 请求须串行；UI 改 `ObservableCollection` / Growl 必须经 Dispatcher；派工队列 Enqueue/Dequeue 须同锁
 - 外部交互：RCS `BaseUrl`/`ClientCode`/回调端口、LOCATION_MAP 编码、PLC 点位地址须与现场一致；缺 LOCATION_MAP **禁止**生成 `FRAME-{id}` 假码下发
 - 安全底线：LOADED/UNLOADED 须 RCS 完成 **且** PLC HasMat **确认态**复核通过才写 `POS_TEST_START`；HasMat 读失败/未知 fail-closed（Hold→Alarm），禁止当无料；Alarm 粘滞只能人工 `ResetAlarm`
-- 派工门禁：自动派工须先槽位预记再 RCS（ADR-0002）；启动对账成功前不开派工（fail-closed，失败按 `ReconcileRetryIntervalMs` 重试）；新外部执行须经受管路由且配置 `STATE=="0"`；盘点/人工校正不得覆盖 `SLOT_STATE=Reserved`
+- 派工门禁：自动派工须先槽位预记再 RCS（ADR-0002）；Redo / Redispatch / AutoRedo 预记已回滚须先再预记再下发（已有预记跳过；上料有物料码只锁该件）；启动对账成功前不开派工（fail-closed，失败按 `ReconcileRetryIntervalMs` 重试）；新外部执行须经受管路由且配置 `STATE=="0"`；盘点/人工校正不得覆盖 `SLOT_STATE=Reserved`；HasMat 未知不得落账也不得回滚预记（对账①b 与运行期同一决策，不回 WaitLoad）
 - 回调：持久化成功后才 final seen；失败/取消释放；`ForgetTask` 须同步移除顺序结构中的键
 - 配置双源：RCS 出站优先读 `MAS_AUTO_WORKLINE_AGV`；`CallbackHost`/`CallbackPort` 变更需重启；`Version`/`TokenCode` 仅 appsettings
 - 资源：HostedService / CTS / 回调 Kestrel / PLC 连接正确释放；禁止空 catch 吞通信异常（回调处理器故意不回 5xx 除外）；首次启动对账不得阻塞后续 HostedService 启动

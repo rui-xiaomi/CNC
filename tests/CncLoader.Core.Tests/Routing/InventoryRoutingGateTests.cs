@@ -64,7 +64,7 @@ public sealed class InventoryRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         var taskSvc = new RcsTaskService(
             _client, _tasks, new InvNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         var equipment = new StoreBackedFrameBindEquipment(_eq);
         _alarms = new NoopAlarms();
@@ -219,7 +219,7 @@ public sealed class InventoryRoutingGateTests
         _loc.SetStateByCode(FrameShelfCode, remove: false, state: "1");
         var taskSvc = new RcsTaskService(
             _client, _tasks, new InvNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         var result = await taskSvc.DispatchIdentifyAsync(new IdentifyDispatchArgs
         {

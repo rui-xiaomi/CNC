@@ -5,7 +5,7 @@ namespace CncLoader.Core.Rcs;
 /// 时序（开发文档 §6.1 补充规则）：
 /// 1) 选定孔位时 Reserve（槽位置预记，绑定 taskId）；
 /// 2) RCS 回调 completed + PLC 复核通过后 Confirm（落账：源槽位清空、目标槽位占用）；
-/// 3) 取消/失败 Rollback（预记回滚到原状）；redo 不重复记账（同 taskId 幂等）。
+/// 3) 取消/失败 Rollback（预记回滚到原状）；redo 已有预记则幂等跳过，已回滚须先再预记再下发。
 /// 同一料架并发保护：多加工位同时从一料架取料时，选孔位需加锁，防止两任务选中同一物料。
 /// </summary>
 public interface ISlotAccountService
@@ -23,6 +23,14 @@ public interface ISlotAccountService
     /// <summary>取料预记（TAKE 方向）：在 source 料架选首个占用槽位，置预记态 + 绑定 taskId，保留物料码。
     /// 返回选中的槽位（含 materialId）；无占用槽或并发冲突返回 null。用于上料/中转架回流从料架取件。</summary>
     Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default);
+
+    /// <summary>按 taskId 查仍有效的预记；无则 null。默认空实现供旧 fake 编译。</summary>
+    Task<ReservedSlot?> FindReservedAsync(string taskId, CancellationToken ct = default)
+        => Task.FromResult<ReservedSlot?>(null);
+
+    /// <summary>取料预记：只锁指定物料所在占用槽；找不到该物料返回 null（不改抢其它件）。</summary>
+    Task<ReservedSlot?> ReserveTakeByMaterialAsync(long frameId, string taskId, string materialId, CancellationToken ct = default)
+        => ReserveTakeAsync(frameId, taskId, ct);
 
     /// <summary>取料落账（TAKE）：按 taskId 找到预记槽位，清空（物料已被取走）。redo 同 taskId 幂等。</summary>
     Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default);

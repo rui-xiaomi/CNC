@@ -95,6 +95,50 @@ public sealed class SlotAccountStore : ISlotAccountStore
         }
     }
 
+    public async Task<ReservedSlot?> FindReservedByTaskIdAsync(string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return null;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var slot = await db.FrameSlots.AsNoTracking()
+            .Where(s => s.Remark == taskId && s.SlotState == SlotStates.Reserved)
+            .Select(s => new { s.FrameId, s.SlotNo, s.LayerNo, s.PosInLayer, s.MaterialId })
+            .FirstOrDefaultAsync(ct);
+        return slot is null
+            ? null
+            : new ReservedSlot(slot.FrameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.MaterialId);
+    }
+
+    public async Task<ReservedSlot?> ReserveTakeByMaterialAsync(long frameId, string taskId, string materialId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(materialId)) return null;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = DateTime.Now;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var slot = await db.FrameSlots.AsNoTracking()
+                .Where(s => s.FrameId == frameId
+                            && s.SlotState == SlotStates.Occupied
+                            && s.MaterialId == materialId)
+                .OrderBy(s => s.LayerNo).ThenBy(s => s.PosInLayer)
+                .Select(s => new { s.Id, s.SlotNo, s.LayerNo, s.PosInLayer, s.MaterialId })
+                .FirstOrDefaultAsync(ct);
+            if (slot is null) return null;
+
+            var affected = await db.FrameSlots
+                .Where(s => s.Id == slot.Id
+                            && s.SlotState == SlotStates.Occupied
+                            && s.MaterialId == materialId)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.SlotState, SlotStates.Reserved)
+                    .SetProperty(s => s.Remark, taskId)
+                    .SetProperty(s => s.BindSource, ReserveTake)
+                    .SetProperty(s => s.BindTime, (DateTime?)now), ct);
+            if (affected == 1)
+                return new ReservedSlot(frameId, slot.SlotNo, slot.LayerNo, slot.PosInLayer, slot.MaterialId);
+        }
+    }
+
     public async Task<bool> ConfirmPutAsync(string taskId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);

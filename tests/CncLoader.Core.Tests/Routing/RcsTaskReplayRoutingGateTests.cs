@@ -108,7 +108,7 @@ public sealed class RcsTaskReplayRoutingGateTests
     }
 
     [Test]
-    public async Task R18_Redispatch_NotCoveredByRedoAlone_SeparateEntry()
+    public void R18_Redispatch_NotCoveredByRedoAlone_SeparateEntry()
     {
         // 契约锁：RedispatchAsync 与 RedoAsync 是不同入口；本测只打 Redispatch。
         var method = typeof(global::CncLoader.Communication.Rcs.RcsTaskService).GetMethod("RedispatchAsync");

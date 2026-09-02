@@ -174,11 +174,12 @@ ADR：`docs/adr/0002-槽位预记先于RCS下发.md`
 - [x] P0-2 槽位预记先于 RCS 下发（ADR-0002）
 - [x] P0-3 启动对账 fail-closed + `ReconcileRetryIntervalMs` 重试 + 看板状态
 - [x] P0-4 回调持久化成功后 final seen / single-flight
-- [x] P0-5 软删配置不得参与新外部执行路由；AutoRedo Gate→Claim→Send
+- [x] P0-5 软删配置不得参与新外部执行路由；AutoRedo Gate→补预记→Claim→Send
 - [x] P0-6 盘点/人工校正不得覆盖 Reserved
 - [x] P1-1 首次启动对账不阻塞后续 HostedService
 - [x] P1-2 ForgetTask 同步移除顺序结构（无僵尸淘汰）
-- [x] 验证：Core 418/418；`dotnet build` 0 警告 0 错误
+- [x] 验证：Core 418/418（2026-08-05 归档当时）；后续单测以 `dotnet test tests/CncLoader.Core.Tests` 为准
+- [x] 2026-08 后续：Redo 补预记；落账/对账①b HasMat 未知不撤账（ADR-0002、开发文档 §6）
 - [ ] 真 MySQL / RCS / PLC / 换架盘点 — **归 Phase 6 待真机验证**
 
 ### Phase 7 — 监控看板悬浮卡片视觉升级　Status: 已完成（待目视确认）

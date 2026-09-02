@@ -30,6 +30,14 @@ public interface ISlotAccountStore
     Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default)
         => throw new NotSupportedException("此 Store 未实现预记状态机接缝");
 
+    /// <summary>按 taskId 查 Reserved 预记。</summary>
+    Task<ReservedSlot?> FindReservedByTaskIdAsync(string taskId, CancellationToken ct = default)
+        => throw new NotSupportedException("此 Store 未实现预记状态机接缝");
+
+    /// <summary>取料预记：只锁指定物料占用槽。</summary>
+    Task<ReservedSlot?> ReserveTakeByMaterialAsync(long frameId, string taskId, string materialId, CancellationToken ct = default)
+        => throw new NotSupportedException("此 Store 未实现预记状态机接缝");
+
     /// <summary>入库落账（PUT）：按 taskId 所有权确认。</summary>
     Task<bool> ConfirmPutAsync(string taskId, CancellationToken ct = default)
         => throw new NotSupportedException("此 Store 未实现预记状态机接缝");

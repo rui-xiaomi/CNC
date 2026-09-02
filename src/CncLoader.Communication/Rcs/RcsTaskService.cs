@@ -25,6 +25,7 @@ public sealed class RcsTaskService : IRcsTaskService
     private readonly IRcsCallbackProcessor _callbackProcessor;
     private readonly IManagedDispatchRouteResolver _routeResolver;
     private readonly IRoutingAvailabilityValidator _routingValidator;
+    private readonly ISlotAccountService _slots;
     private readonly ILogger<RcsTaskService> _logger;
 
     public RcsTaskService(
@@ -34,7 +35,8 @@ public sealed class RcsTaskService : IRcsTaskService
         IRcsCallbackProcessor callbackProcessor,
         IManagedDispatchRouteResolver routeResolver,
         IRoutingAvailabilityValidator routingValidator,
-        ILogger<RcsTaskService> logger)
+        ILogger<RcsTaskService> logger,
+        ISlotAccountService slots)
     {
         _client = client;
         _store = store;
@@ -43,6 +45,7 @@ public sealed class RcsTaskService : IRcsTaskService
         _routeResolver = routeResolver;
         _routingValidator = routingValidator;
         _logger = logger;
+        _slots = slots;
     }
 
     public async Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
@@ -219,8 +222,13 @@ public sealed class RcsTaskService : IRcsTaskService
         var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!final.Ok) return final.Failure!;
 
+        var hold = await EnsureReplayReservationAsync(row, final.Context!, ct);
+        if (!hold.Ok) return hold.Failure!;
+
         await _store.IncrementRedoAsync(rcsTaskId, ct);
         var result = await BuildAndSendAsync(row, "redo", ct);
+        if (!result.Success)
+            await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
         await FinishAsync(rcsTaskId, result, ct);
         if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
         return result;
@@ -241,7 +249,12 @@ public sealed class RcsTaskService : IRcsTaskService
         var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!final.Ok) return final.Failure!;
 
+        var hold = await EnsureReplayReservationAsync(row, final.Context!, ct);
+        if (!hold.Ok) return hold.Failure!;
+
         var result = await BuildAndSendAsync(row, "redo", ct);
+        if (!result.Success)
+            await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
         await FinishAsync(rcsTaskId, result, ct);
         if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
         return result;
@@ -262,9 +275,13 @@ public sealed class RcsTaskService : IRcsTaskService
         var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!final.Ok) return final.Failure!;
 
+        var hold = await EnsureReplayReservationAsync(row, final.Context!, ct);
+        if (!hold.Ok) return hold.Failure!;
+
         var claim = await _store.TryClaimAutoRedoAsync(rcsTaskId, maxRedoCount, ct);
         if (claim != AutoRedoClaimResult.Claimed)
         {
+            await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
             _logger.LogWarning(
                 "自动重派 Claim 未成功 {TaskId} 结果={Claim}（非路由配置失败）",
                 rcsTaskId, claim);
@@ -285,12 +302,15 @@ public sealed class RcsTaskService : IRcsTaskService
         }
         catch (OperationCanceledException)
         {
+            await RollbackReplayIfCreatedAsync(hold, rcsTaskId, CancellationToken.None);
             _logger.LogWarning(
                 "自动重派 Claim 成功后取消，已消耗 RedoCount，不发送 {TaskId}", rcsTaskId);
             throw;
         }
 
         var result = await BuildAndSendAsync(row, "redo", ct);
+        if (!result.Success)
+            await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
         await FinishAsync(rcsTaskId, result, ct);
         if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
         return result;
@@ -566,6 +586,40 @@ public sealed class RcsTaskService : IRcsTaskService
             Position = { new RcsPosition(row.FromCode, "cell"), new RcsPosition(row.ToCode, "cell") }
         };
         return await _client.TransitTaskAsync(tr, ct);
+    }
+
+    private async Task<ReplayReservationHold> EnsureReplayReservationAsync(
+        RcsTaskRow row, DispatchRouteContext route, CancellationToken ct)
+    {
+        var plan = ReplayReservation.Decide(
+            row.Kind, row.TaskType, route.FromEndpoint?.Kind, route.ToEndpoint?.Kind);
+        if (plan == ReplayReservationPlan.Skip)
+            return ReplayReservationHold.Skipped();
+
+        var frameId = plan == ReplayReservationPlan.Take
+            ? route.SourceFrameId.Id
+            : route.DestFrameId.Id;
+        if (frameId is not long id || id <= 0)
+            return ReplayReservationHold.Reject("料架未解析，拒绝重发");
+
+        var hold = await ReplayReservation.EnsureAsync(
+            _slots, row.RcsTaskId ?? "", plan, id, row.MaterialId, ct);
+        if (!hold.Ok)
+            _logger.LogWarning("重发预记失败 {TaskId}：{Msg}", row.RcsTaskId, hold.Failure?.Error);
+        else if (hold.Created)
+            _logger.LogInformation("重发已补预记 {TaskId} 方向={Plan} 料架={Frame}",
+                row.RcsTaskId, plan, id);
+        return hold;
+    }
+
+    private async Task RollbackReplayIfCreatedAsync(
+        ReplayReservationHold hold, string taskId, CancellationToken ct)
+    {
+        if (!hold.Created) return;
+        if (hold.IsTake)
+            await _slots.RollbackTakeAsync(taskId, ct);
+        else
+            await _slots.RollbackAsync(taskId, ct);
     }
 
     private static T? TryParse<T>(string? json)

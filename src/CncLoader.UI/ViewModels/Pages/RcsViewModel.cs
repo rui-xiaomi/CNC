@@ -318,8 +318,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
     // 手动下发表单
     [ObservableProperty] private string _selectedKind = "搬运";
-    [ObservableProperty] private string _fromCode = "601203";
-    [ObservableProperty] private string _toCode = "603201";
+    [ObservableProperty] private string _fromCode = "201101";
+    [ObservableProperty] private string _toCode = "201102";
     [ObservableProperty] private int _priority = 5;
 
     /// <summary>搬运：起终点都要。</summary>
@@ -985,12 +985,15 @@ public sealed partial class RcsViewModel : PageViewModelBase
             EffectiveBaseUrl = _runtime.BaseUrl;
             Append($"> 测试连接 queryTask → {_runtime.BaseUrl}");
             var r = await _rcs.QueryAsync(new QueryTaskRequest { PageIndex = 1, PageSize = 1 });
-            if (r.Success)
+            if (RcsAckParser.IsHttpReachable(r))
             {
                 ConnectionHealthText = $"连通 {r.ElapsedMs}ms";
                 ConnectionHealthBrushKey = "OkBrush";
                 _verifiedConnectionKey = ConnectionKey(BaseUrl, ClientCode);
-                Append($"< 连通 OK {r.ElapsedMs}ms");
+                if (r.Success)
+                    Append($"< 连通 OK {r.ElapsedMs}ms");
+                else
+                    Append($"< 连通 OK HTTP{r.HttpStatus} {r.ElapsedMs}ms（业务ACK：{r.Message ?? "无 Success"}）");
                 NotifySuccess($"RCS 连通成功 {r.ElapsedMs}ms");
                 RefreshDispatchGateHint();
             }

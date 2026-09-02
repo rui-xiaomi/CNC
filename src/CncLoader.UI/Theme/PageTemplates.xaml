@@ -1561,12 +1561,12 @@
                         <TextBlock Text="{Binding SlotsTitle}" Style="{StaticResource PanelTitle}" Margin="12,0"
                                    TextTrimming="CharacterEllipsis"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="12,0" VerticalAlignment="Center">
-                            <TextBlock Text="电极反查" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                            <TextBox Text="{Binding ElectrodeQuery, UpdateSourceTrigger=PropertyChanged}" Width="100"
+                            <TextBlock Text="物料反查" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Text="{Binding MaterialQuery, UpdateSourceTrigger=PropertyChanged}" Width="100"
                                      Height="26" FontSize="12" FontFamily="{StaticResource FontMono}" Margin="6,0,0,0"
                                      VerticalContentAlignment="Center"/>
                             <Button Content="查询" Style="{StaticResource PrimaryButton}" Padding="12,0" Height="26"
-                                    FontSize="12" Margin="6,0,0,0" Command="{Binding FindElectrodeCommand}"/>
+                                    FontSize="12" Margin="6,0,0,0" Command="{Binding FindMaterialCommand}"/>
                         </StackPanel>
                     </Grid>
                     <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
@@ -1602,8 +1602,8 @@
                                     <TextBlock Grid.Column="1" Text="{Binding SelectedSlot.Label, TargetNullValue='—'}"
                                                FontFamily="{StaticResource FontMono}" FontSize="13" VerticalAlignment="Center"
                                                MinWidth="56" Margin="0,0,10,0"/>
-                                    <TextBlock Grid.Column="2" Text="电极" Style="{StaticResource MutedText}" FontSize="13" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                    <TextBox Grid.Column="3" Text="{Binding CorrectElectrode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                    <TextBlock Grid.Column="2" Text="物料" Style="{StaticResource MutedText}" FontSize="13" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                    <TextBox Grid.Column="3" Text="{Binding CorrectMaterial, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                              FontFamily="{StaticResource FontMono}" FontSize="13" Height="32" Margin="0,0,8,0"
                                              VerticalContentAlignment="Center"/>
                                     <ComboBox Grid.Column="4" ItemsSource="{Binding SlotStateOptions}" SelectedItem="{Binding CorrectSlotState}"
@@ -1660,7 +1660,7 @@
                                                                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                                                                         <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{StaticResource FgMutedBrush}"
                                                                                    HorizontalAlignment="Center"/>
-                                                                        <TextBlock x:Name="eid" Text="{Binding ElectrodeText}" FontFamily="{StaticResource FontMono}"
+                                                                        <TextBlock x:Name="eid" Text="{Binding MaterialText}" FontFamily="{StaticResource FontMono}"
                                                                                    FontSize="13" HorizontalAlignment="Center" Foreground="{StaticResource FgBrush}"/>
                                                                     </StackPanel>
                                                                 </Border>

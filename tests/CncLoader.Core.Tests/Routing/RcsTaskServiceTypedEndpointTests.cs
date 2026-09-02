@@ -53,7 +53,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
         _tasks = new MutableRcsTaskStore();
         _svc = new RcsTaskService(
             _client, _tasks, new NoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
     }
 
     // ─── RED 6｜AREA→POSITION ────────────────────────────────────
@@ -302,7 +302,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
                 _loc, _frames, NullLogger<ManagedDispatchRouteResolver>.Instance));
         var svc = new RcsTaskService(
             _client, _tasks, new NoopMsgLog(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<RcsTaskService>.Instance);
+            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         var result = await svc.DispatchTransitAsync(new TransitDispatchArgs
         {

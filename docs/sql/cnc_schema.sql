@@ -620,24 +620,26 @@ INSERT INTO MAS_AUTO_FRAME_SLOT (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT
   (92,7,2,1,'0'),(92,8,2,2,'0'),(92,9,2,3,'0'),(92,10,2,4,'0'),(92,11,2,5,'0'),(92,12,2,6,'0');
 
 -- =============================================================
--- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（演示编码，接真机按现场替换）
---   匹配规则（代码）：上/下料区 LOC_TYPE='AREA'+LOC_NAME；加工位 RCS_TYPE='cell'+EQ+POS；
---   料架站点 RCS_TYPE='shelf'+FRAME_ID；料架 cell（分流入库）RCS_TYPE='cell'+FRAME_ID；换架/回收区 LOC_TYPE='AREA'。
+-- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（宝龙 B5）
+--   搬运 cell = 货架码3位 + 孔位码3位；站点/shelf = 货架码3位。
+--   货架百位：1上料 / 2 CNC / 3下料。CNC 孔位百位固定 1。
+--   上料区/上料总架 shelf 不能同时写成 101（解析器同码多行会歧义拒发）；shelf 仍留演示码。
+--   中转/NG 无 B5 百位，保持演示码。
 -- =============================================================
 -- 命名区域：上料区/下料区 + 换架缓存区/空托盘回收区
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
-  ('AREA', 'LOAD_AREA',     '601001', 'station', '0', 'system'),
-  ('AREA', 'UNLOAD_AREA',   '609001', 'station', '0', 'system'),
+  ('AREA', 'LOAD_AREA',     '101', 'station', '0', 'system'),
+  ('AREA', 'UNLOAD_AREA',   '301', 'station', '0', 'system'),
   ('AREA', 'FULL_BUFFER',   '650001', 'station', '0', 'system'),
   ('AREA', 'EMPTY_BUFFER',  '650002', 'station', '0', 'system'),
   ('AREA', 'PALLET_RETURN', '650003', 'station', '0', 'system');
 -- 加工位 cell（5 个加工位）
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, POSITION_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
-  ('POSITION', 1, 1, '601203', 'cell', '0', 'system'),
-  ('POSITION', 1, 2, '601204', 'cell', '0', 'system'),
-  ('POSITION', 2, 3, '602203', 'cell', '0', 'system'),
-  ('POSITION', 3, 5, '603203', 'cell', '0', 'system'),
-  ('POSITION', 3, 6, '603204', 'cell', '0', 'system');
+  ('POSITION', 1, 1, '201101', 'cell', '0', 'system'),
+  ('POSITION', 1, 2, '201102', 'cell', '0', 'system'),
+  ('POSITION', 2, 3, '202101', 'cell', '0', 'system'),
+  ('POSITION', 3, 5, '203101', 'cell', '0', 'system'),
+  ('POSITION', 3, 6, '203102', 'cell', '0', 'system');
 -- 料架站点 shelf（换架/盘点用）
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('FRAME', 1,  '上料总架',  '651001', 'shelf', '0', 'system'),
@@ -648,7 +650,7 @@ INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_T
 -- 料架 cell（下料/中转/NG 分流入库按此解析；缺失则拒发，禁止 FRAME-{id} 假码）
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('FRAME', 2,  'EQ2中转架cell', '653002', 'cell', '0', 'system'),
-  ('FRAME', 3,  '下料总架cell',  '653003', 'cell', '0', 'system'),
+  ('FRAME', 3,  '下料总架cell',  '301101', 'cell', '0', 'system'),
   ('FRAME', 91, 'NG架cell',      '653091', 'cell', '0', 'system'),
   ('FRAME', 92, 'EQ3中转架cell', '653092', 'cell', '0', 'system');
 

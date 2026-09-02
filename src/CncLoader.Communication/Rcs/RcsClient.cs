@@ -89,7 +89,7 @@ public sealed class RcsClient : IRcsClient
                 var respBody = await resp.Content.ReadAsStringAsync(timeoutCts.Token);
                 sw.Stop();
 
-                var (success, message) = ParseAck(respBody);
+                var (success, message) = RcsAckParser.Parse(respBody);
                 var ok = resp.IsSuccessStatusCode;
                 last = new RcsResult(ok, (int)resp.StatusCode, ok && success, message, body, respBody,
                     ok ? null : $"HTTP {(int)resp.StatusCode}", (int)sw.ElapsedMilliseconds);
@@ -126,37 +126,6 @@ public sealed class RcsClient : IRcsClient
         {
             _logger.LogWarning(ex, "RCS 报文流水落库失败（不影响主流程）");
         }
-    }
-
-    private static (bool success, string? message) ParseAck(string? respBody)
-    {
-        if (string.IsNullOrWhiteSpace(respBody)) return (false, null);
-        try
-        {
-            using var doc = JsonDocument.Parse(respBody);
-            var root = doc.RootElement;
-            var success = ReadBool(root, "Success") ?? ReadBool(root, "success") ?? false;
-            string? message = null;
-            if (root.TryGetProperty("Message", out var m) && m.ValueKind == JsonValueKind.String) message = m.GetString();
-            else if (root.TryGetProperty("message", out var m2) && m2.ValueKind == JsonValueKind.String) message = m2.GetString();
-            return (success, message);
-        }
-        catch
-        {
-            return (false, null);
-        }
-    }
-
-    private static bool? ReadBool(JsonElement root, string name)
-    {
-        if (!root.TryGetProperty(name, out var v)) return null;
-        return v.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.String => bool.TryParse(v.GetString(), out var b) && b,
-            _ => null
-        };
     }
 
     private static string CombineUrl(string baseUrl, string path)

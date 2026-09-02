@@ -363,7 +363,7 @@ public sealed class SlotAccountReservedProtectionTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            if (string.Equals((targetState ?? string.Empty).Trim(), SlotStates.Reserved, StringComparison.Ordinal))
+            if (string.Equals(targetState.Trim(), SlotStates.Reserved, StringComparison.Ordinal))
                 return Task.FromResult(new ExternalSlotWriteAttempt(0, null, InvalidTargetState: true));
 
             AtomicUpdateCount++;

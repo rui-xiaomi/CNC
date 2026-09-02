@@ -69,7 +69,7 @@ public sealed class RcsTaskTrackerRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         _svc = new RcsTaskService(
             _client, _tasks, new TrackerNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance);
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
 
         _alarms = new NoopAlarms();
         var options = Options.Create(new AppOptions
@@ -569,7 +569,7 @@ public sealed class RcsTaskTrackerRoutingGateTests
         validator.OrderSink = _order;
         _svc = new RcsTaskService(
             _client, _tasks, new TrackerNoopMsgLog(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<RcsTaskService>.Instance);
+            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
         var options = Options.Create(new AppOptions
         {
             Rcs = new RcsOptions { TrackerEnabled = true, MaxAutoRedo = MaxAutoRedo, PollIntervalMs = 60_000 }

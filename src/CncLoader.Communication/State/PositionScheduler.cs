@@ -199,6 +199,13 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// <summary>测试接缝：标记已对账，以便 ProbeDispatchOnce 进入上料分配。</summary>
     internal void ProbeMarkReconciled() => _isReconciled = true;
 
+    /// <summary>测试接缝：装载点位缓存后跑一轮真实启动对账（①/①b/②/③），不启 HostedService 循环。</summary>
+    internal async Task<ReconcileRoundResult> ProbeReconcileAsync(CancellationToken ct = default)
+    {
+        await LoadPositionCacheAsync(ct);
+        return await ReconcileAsync(ct);
+    }
+
     /// <summary>测试接缝：播种 WaitLoad+UploadRequested 候选（不经 PLC 循环）。</summary>
     internal void ProbeSeedUploadCandidate(long equipmentId, long positionId)
     {
@@ -323,29 +330,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
 
         // 1. 装载加工位与 POS_TEST_START 点位缓存（仅受启动 token 控制）
-        try
-        {
-            var allPoints = await _points.GetAllAsync(cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            var posKeys = new HashSet<(long, long)>();
-            foreach (var p in allPoints)
-            {
-                if (p.PositionId is null) continue;
-                var key = (p.EquipmentId, p.PositionId.Value);
-                posKeys.Add(key);
-                if (p.IsWrite && p.Signal == SignalKey.PosTestStart)
-                    _testStartPoints[key] = (p.PlcId, p.RegisterAddress);
-                if (!p.IsWrite && p.Signal == SignalKey.PosHasMat)
-                    _hasMatPoints[key] = (p.PlcId, p.RegisterAddress, p.OnValue, p.OffValue);
-            }
-            _positions = posKeys.Select(k => (k.Item1, k.Item2, _testStartPoints.TryGetValue(k, out var tp) ? tp.PlcId : 0L)).ToList();
-            _logger.LogInformation("位置调度器装载 {N} 个加工位", _positions.Count);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "装载加工位点位失败，调度器将以空集启动"); }
+        await LoadPositionCacheAsync(cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -705,6 +690,33 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
     }
 
+    private async Task LoadPositionCacheAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var allPoints = await _points.GetAllAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var posKeys = new HashSet<(long, long)>();
+            foreach (var p in allPoints)
+            {
+                if (p.PositionId is null) continue;
+                var key = (p.EquipmentId, p.PositionId.Value);
+                posKeys.Add(key);
+                if (p.IsWrite && p.Signal == SignalKey.PosTestStart)
+                    _testStartPoints[key] = (p.PlcId, p.RegisterAddress);
+                if (!p.IsWrite && p.Signal == SignalKey.PosHasMat)
+                    _hasMatPoints[key] = (p.PlcId, p.RegisterAddress, p.OnValue, p.OffValue);
+            }
+            _positions = posKeys.Select(k => (k.Item1, k.Item2, _testStartPoints.TryGetValue(k, out var tp) ? tp.PlcId : 0L)).ToList();
+            _logger.LogInformation("位置调度器装载 {N} 个加工位", _positions.Count);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "装载加工位点位失败，调度器将以空集启动"); }
+    }
+
     /// <summary>§6.3 启动三方对账：经 <see cref="StartupReconcileCoordinator"/> fail-closed 编排 ①/①b/②/③。</summary>
     private Task<ReconcileRoundResult> ReconcileAsync(CancellationToken ct)
     {
@@ -836,49 +848,46 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 _contexts.TryGetValue((eq, pos), out ctx);
 
             var phase = ctx?.Phase ?? (row.TaskType == "1" ? PositionPhase.Unload : PositionPhase.Upload);
+            var plcCheckApplicable = ctx is not null;
+            bool? hasMat = null;
+            if (plcCheckApplicable && state == RcsTaskState.Completed)
+                hasMat = await ReadHasMatFreshAsync(ctx!, ct);
+
+            var action = await SettleSlotForTerminalAsync(taskId, phase, state, hasMat, plcCheckApplicable, ct);
+
             if (ctx is null)
             {
-                // 无工位上下文（任务未绑加工位，如换架）：仅按方向收口槽位账
-                await SettleSlotForTerminalAsync(taskId, phase, state, hasMat: null, ct);
-                settled.Add(taskId);
-                _logger.LogInformation("对账①b：无工位任务 {TaskId} 终态 {State}，已收口槽位账", taskId, state);
+                if (action != SlotSettlementAction.Hold)
+                    settled.Add(taskId);
+                _logger.LogInformation("对账①b：无工位任务 {TaskId} 终态 {State} 槽位动作 {Action}", taskId, state, action);
                 continue;
             }
 
-            bool? hasMat = null;
-            if (state == RcsTaskState.Completed)
-                hasMat = await ReadHasMatFreshAsync(ctx, ct);
-
-            await SettleSlotForTerminalAsync(taskId, phase, state, hasMat, ct);
-
-            if (state == RcsTaskState.Completed && phase == PositionPhase.Upload && hasMat == true)
+            if (action == SlotSettlementAction.Hold)
             {
-                // 上料完成且 PLC 有料 → 进 Loaded，由主循环写启动/加工记录
+                // HasMat 未知：预记与工位绑定都留着，等 PLC 可读后再收口；不回 WaitLoad（避免同槽再派工）
+                ctx.CurrentTaskId = taskId;
+                ctx.Phase = phase;
+                _logger.LogWarning("对账①b：{TaskId} COMPLETED 但 PLC HasMat 未读到（phase={Phase}），预记保留，工位保持绑定", taskId, phase);
+                continue;
+            }
+
+            if (action == SlotSettlementAction.ConfirmTake)
+            {
                 ctx.CurrentTaskId = taskId;
                 ctx.Phase = PositionPhase.Upload;
                 SetState(ctx, PositionState.Loaded);
             }
-            else if (state == RcsTaskState.Completed && phase == PositionPhase.Unload && hasMat == false)
+            else if (action == SlotSettlementAction.ConfirmPut)
             {
-                // 下料完成且 PLC 无料 → 复位检测启动后清任务回 WaitLoad（跳过 Unloaded 态，补写 POS_TEST_START=2）
                 await WriteTestStartAsync(ctx, 2, ct);
                 ctx.CurrentTaskId = null;
                 ctx.Phase = null;
                 ctx.MaterialId = null;
                 SetState(ctx, PositionState.WaitLoad);
             }
-            else if (state == RcsTaskState.Completed && hasMat is null)
-            {
-                // PLC 尚未可读（启动瞬间常见）：预记已保守回滚，工位回 WaitLoad，不 latch Alarm（避免误粘滞挡后续派工）
-                ctx.CurrentTaskId = null;
-                ctx.Phase = null;
-                ctx.MaterialId = null;
-                SetState(ctx, PositionState.WaitLoad);
-                _logger.LogWarning("对账①b：{TaskId} COMPLETED 但 PLC HasMat 未读到（phase={Phase}），预记已回滚，工位回 WaitLoad", taskId, phase);
-            }
             else if (state == RcsTaskState.Completed)
             {
-                // COMPLETED 且 PLC 明确不符（上料 hasMat=false / 下料 hasMat=true）→ Alarm，预记已回滚
                 ctx.CurrentTaskId = null;
                 ctx.Phase = null;
                 ctx.MaterialId = null;
@@ -890,7 +899,6 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             }
             else
             {
-                // CANCELED / FAILED：预记已回滚，工位回 WaitLoad（FAILED 的自动 redo 由 tracker 另途处理）
                 ctx.CurrentTaskId = null;
                 ctx.Phase = null;
                 ctx.MaterialId = null;
@@ -906,28 +914,25 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         return (ReconcilePhaseResult.Ok(ReconcilePhase.OneB), settled);
     }
 
-    /// <summary>终态槽位收口：COMPLETED 且 PLC 符合阶段预期才 Confirm，否则 Rollback（避免误清空/误入库）。</summary>
-    private async Task SettleSlotForTerminalAsync(string taskId, PositionPhase phase, string state, bool? hasMat, CancellationToken ct)
+    /// <summary>终态槽位收口：政策见 <see cref="SlotSettlement.Decide"/>。</summary>
+    private async Task<SlotSettlementAction> SettleSlotForTerminalAsync(
+        string taskId, PositionPhase phase, string state, bool? hasMat, bool plcCheckApplicable, CancellationToken ct)
     {
-        if (state == RcsTaskState.Completed)
-        {
-            if (phase == PositionPhase.Upload)
-            {
-                if (hasMat == true) await _slots.ConfirmTakeAsync(taskId, ct);
-                else await _slots.RollbackTakeAsync(taskId, ct); // 无料或未知：物料应仍在源架
-            }
-            else if (phase == PositionPhase.Unload)
-            {
-                if (hasMat == false) await _slots.ConfirmAsync(taskId, ct);
-                else await _slots.RollbackAsync(taskId, ct); // 仍有料或未知：入库未真正完成
-            }
-            return;
-        }
-
-        // CANCELED / FAILED
-        if (phase == PositionPhase.Upload) await _slots.RollbackTakeAsync(taskId, ct);
-        else if (phase == PositionPhase.Unload) await _slots.RollbackAsync(taskId, ct);
+        var action = SlotSettlement.Decide(phase, state, hasMat, plcCheckApplicable);
+        await ApplySlotSettlementAsync(action, taskId, ct);
+        return action;
     }
+
+    private async Task<bool> ApplySlotSettlementAsync(SlotSettlementAction action, string taskId, CancellationToken ct)
+        => action switch
+        {
+            SlotSettlementAction.Hold => false,
+            SlotSettlementAction.ConfirmTake => await _slots.ConfirmTakeAsync(taskId, ct),
+            SlotSettlementAction.ConfirmPut => await _slots.ConfirmAsync(taskId, ct),
+            SlotSettlementAction.RollbackTake => await _slots.RollbackTakeAsync(taskId, ct),
+            SlotSettlementAction.RollbackPut => await _slots.RollbackAsync(taskId, ct),
+            _ => false
+        };
 
     /// <summary>解析 queryTask 应答 items[] → (taskId, status)。</summary>
     private static IReadOnlyList<(string taskId, string status)> ParseQueryItems(string? raw)
@@ -1016,58 +1021,32 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             var row = await _taskStore.GetByTaskIdAsync(item.TaskId, ct);
             if (row is null) continue;
 
-            // 无工位绑定（换架等）：无 PLC 可核，按方向直接补落账
-            if (row.EquipmentId is not long eq || row.PositionId is not long pos)
+            var phase = item.IsTake ? PositionPhase.Upload : PositionPhase.Unload;
+            var plcCheckApplicable = row.EquipmentId is long && row.PositionId is long;
+            bool? hasMat = null;
+            if (plcCheckApplicable)
             {
-                var ok = item.IsTake
-                    ? await _slots.ConfirmTakeAsync(item.TaskId, ct)
-                    : await _slots.ConfirmAsync(item.TaskId, ct);
-                if (ok) settled++;
+                var tmp = new PositionContext { EquipmentId = row.EquipmentId!.Value, PositionId = row.PositionId!.Value };
+                hasMat = await ReadHasMatFreshAsync(tmp, ct);
+            }
+
+            var action = SlotSettlement.Decide(phase, RcsTaskState.Completed, hasMat, plcCheckApplicable);
+            if (action == SlotSettlementAction.Hold)
+            {
+                _logger.LogDebug("COMPLETED 预记 {Task} HasMat 未知，跳过本轮", item.TaskId);
                 continue;
             }
 
-            var tmp = new PositionContext { EquipmentId = eq, PositionId = pos };
-            var hasMat = await ReadHasMatFreshAsync(tmp, ct);
+            if (!await ApplySlotSettlementAsync(action, item.TaskId, ct))
+                continue;
 
-            if (item.IsTake)
+            settled++;
+            if (action is SlotSettlementAction.RollbackTake or SlotSettlementAction.RollbackPut)
             {
-                // 上料 TAKE：目标工位有料才 ConfirmTake；明确无料 → Rollback；未知跳过
-                if (hasMat == true)
-                {
-                    if (await _slots.ConfirmTakeAsync(item.TaskId, ct)) settled++;
-                }
-                else if (hasMat == false)
-                {
-                    if (await _slots.RollbackTakeAsync(item.TaskId, ct))
-                    {
-                        settled++;
-                        _logger.LogWarning("COMPLETED 取料预记 {Task} PLC 无料 → 回滚（假完成/未到位）", item.TaskId);
-                        await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            $"任务 {item.TaskId} COMPLETED 但工位无料，取料预记已回滚，请核对", item.TaskId, ct);
-                    }
-                }
-                else
-                    _logger.LogDebug("COMPLETED 取料预记 {Task} HasMat 未知，跳过本轮", item.TaskId);
-            }
-            else
-            {
-                // 下料 PUT：源工位无料才 Confirm；明确仍有料 → Rollback；未知跳过
-                if (hasMat == false)
-                {
-                    if (await _slots.ConfirmAsync(item.TaskId, ct)) settled++;
-                }
-                else if (hasMat == true)
-                {
-                    if (await _slots.RollbackAsync(item.TaskId, ct))
-                    {
-                        settled++;
-                        _logger.LogWarning("COMPLETED 入库预记 {Task} PLC 仍有料 → 回滚（假完成/未取走）", item.TaskId);
-                        await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            $"任务 {item.TaskId} COMPLETED 但工位仍有料，入库预记已回滚，请核对", item.TaskId, ct);
-                    }
-                }
-                else
-                    _logger.LogDebug("COMPLETED 入库预记 {Task} HasMat 未知，跳过本轮", item.TaskId);
+                var detail = item.IsTake ? "工位无料，取料预记已回滚" : "工位仍有料，入库预记已回滚";
+                _logger.LogWarning("COMPLETED 预记 {Task} PLC 不符 → 回滚（假完成/未到位）", item.TaskId);
+                await _alarms.RaiseRcsWarnAsync("SCHEDULER", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    $"任务 {item.TaskId} COMPLETED 但{detail}，请核对", item.TaskId, ct);
             }
         }
         return settled;

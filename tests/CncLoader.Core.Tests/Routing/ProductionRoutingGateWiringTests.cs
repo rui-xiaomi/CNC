@@ -105,6 +105,7 @@ public sealed class ProductionRoutingGateWiringTests
             AssertNoOptionalParameters(typeof(RcsViewModel));
 
             // PositionScheduler：门禁依赖必填；writeHook/notifier 为非路由可选（模拟器/测试），不得扩大到 Validator
+            AssertRequiredParameter(typeof(RcsTaskService), typeof(ISlotAccountService));
             AssertRequiredParameter(typeof(PositionScheduler), typeof(IRcsTaskService));
             AssertRequiredParameter(typeof(PositionScheduler), typeof(IRoutingAvailabilityValidator));
             AssertOptionalAllowlist(typeof(PositionScheduler),

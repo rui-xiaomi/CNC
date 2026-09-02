@@ -56,7 +56,7 @@ internal sealed class ConcurrentSlotLedger : ISlotAccountStore
         long frameId, int slotNo, string targetState, string? materialId,
         bool clearRemarkAndBindTime, DateTime updateTime, CancellationToken ct = default)
     {
-        if (string.Equals((targetState ?? string.Empty).Trim(), SlotStates.Reserved, StringComparison.Ordinal))
+        if (string.Equals(targetState.Trim(), SlotStates.Reserved, StringComparison.Ordinal))
         {
             TraceEvent("InvalidTargetState");
             return new ExternalSlotWriteAttempt(0, null, InvalidTargetState: true);
@@ -336,7 +336,7 @@ internal sealed class ConcurrentSlotLedger : ISlotAccountStore
             bool clearRemarkAndBindTime, DateTime updateTime, CancellationToken ct = default,
             InventorySlotWriteExtras? extras = null)
         {
-            if (string.Equals((targetState ?? string.Empty).Trim(), SlotStates.Reserved, StringComparison.Ordinal))
+            if (string.Equals(targetState.Trim(), SlotStates.Reserved, StringComparison.Ordinal))
             {
                 owner.TraceEvent("InvalidTargetState");
                 return new ExternalSlotWriteAttempt(0, null, InvalidTargetState: true);

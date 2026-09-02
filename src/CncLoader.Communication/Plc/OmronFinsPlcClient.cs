@@ -29,7 +29,8 @@ public sealed class OmronFinsPlcClient : IPlcClient
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
     private readonly object _sync = new();
-    private readonly SemaphoreSlim _ioGate = new(1, 1);
+    private readonly SemaphoreSlim _ioGate;
+    private int _nonFatalWarned;
 
     private UdpClient? _udp;
     private byte _destNode;
@@ -46,6 +47,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
         _rwTimeoutMs = rwTimeoutMs;
         _logger = logger;
         _deviceLogger = deviceLogger;
+        _ioGate = FinsEndpointIoGate.For(endpoint.Host, endpoint.Port);
     }
 
     public long PlcId { get; }
@@ -238,7 +240,10 @@ public sealed class OmronFinsPlcClient : IPlcClient
         }
     }
 
-    /// <summary>发送一帧 FINS 命令并返回完整响应（含已校验的结束码与 SID）。整次请求串行化，防轮询/写操作串包。</summary>
+    /// <summary>
+    /// 发送一帧 FINS 命令并返回完整响应（含已校验的结束码与 SID）。
+    /// I/O 闸按物理端点共享：共物理 PLC 的多台逻辑客户端不得并发在途。
+    /// </summary>
     private async Task<byte[]> SendAsync(byte mrc, byte src, byte[] body, CancellationToken ct)
     {
         await _ioGate.WaitAsync(ct);
@@ -266,21 +271,28 @@ public sealed class OmronFinsPlcClient : IPlcClient
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(_rwTimeoutMs);
 
-            // 用带 CancellationToken 的重载：超时会真正取消底层 socket 操作，
-            // 避免遗留未完成的 ReceiveAsync 任务在关闭时抛“未观察的 Task 异常”。
-            await udp.SendAsync(frame.AsMemory(0, frame.Length), timeoutCts.Token);
-
-            // UDP 可能滞留旧响应：丢弃 SID 不匹配的包，直到匹配或超时。
             byte[] resp;
-            while (true)
+            try
             {
-                var recv = await udp.ReceiveAsync(timeoutCts.Token);
-                resp = recv.Buffer;
-                if (resp.Length < 14)
-                    throw new InvalidOperationException($"FINS 响应过短（{resp.Length} 字节）");
-                if (resp[9] == sid) break;
-                _logger.LogDebug("PLC {PlcId} 丢弃 SID 不匹配的 FINS 响应（期望 {Sid:X2}，收到 {Got:X2}）",
-                    PlcId, sid, resp[9]);
+                // 用带 CancellationToken 的重载：超时会真正取消底层 socket 操作，
+                // 避免遗留未完成的 ReceiveAsync 任务在关闭时抛“未观察的 Task 异常”。
+                await udp.SendAsync(frame.AsMemory(0, frame.Length), timeoutCts.Token);
+
+                // UDP 可能滞留旧响应：丢弃 SID 不匹配的包，直到匹配或超时。
+                while (true)
+                {
+                    var recv = await udp.ReceiveAsync(timeoutCts.Token);
+                    resp = recv.Buffer;
+                    if (resp.Length < 14)
+                        throw new InvalidOperationException($"FINS 响应过短（{resp.Length} 字节）");
+                    if (resp[9] == sid) break;
+                    _logger.LogDebug("PLC {PlcId} 丢弃 SID 不匹配的 FINS 响应（期望 {Sid:X2}，收到 {Got:X2}）",
+                        PlcId, sid, resp[9]);
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"FINS 应答超时（{_rwTimeoutMs}ms）");
             }
 
             // 结束码 resp[12..13] 含 3 个状态标志位，必须剥离后再判成败：
@@ -295,8 +307,8 @@ public sealed class OmronFinsPlcClient : IPlcClient
             var realCode = ((mres & 0x7F) << 8) | (sres & 0x3F);
             if (relayError || pcFatalError || realCode != 0)
                 throw new InvalidOperationException($"FINS 错误码 {mres:X2}{sres:X2}");
-            if (pcNonFatalError)
-                _logger.LogWarning("PLC {PlcId} 存在非致命错误（如电池欠压），通信正常但建议现场检查。", PlcId);
+            if (pcNonFatalError && Interlocked.Exchange(ref _nonFatalWarned, 1) == 0)
+                _logger.LogWarning("PLC {PlcId} 存在非致命错误（如电池欠压），通信正常但建议现场检查。后续同类响应不再重复告警。", PlcId);
             return resp;
         }
         finally
@@ -332,7 +344,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
 
     public void Dispose()
     {
-        // 持锁销毁：不 Release，避免 Release→Dispose 窗口内其它线程再 Wait/Release。
+        // 闸是按物理端点共享的，只能 Release，不能 Dispose。
         _ioGate.Wait();
         try
         {
@@ -344,7 +356,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
         }
         finally
         {
-            _ioGate.Dispose();
+            _ioGate.Release();
         }
     }
 }
