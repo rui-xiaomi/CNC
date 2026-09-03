@@ -2035,7 +2035,6 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridCheckBoxColumn Header="写" Binding="{Binding IsWrite}" Width="40"/>
                             <DataGridTextColumn Header="ON" Binding="{Binding OnValue, UpdateSourceTrigger=PropertyChanged}" Width="50">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">

@@ -316,7 +316,8 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         }
         try
         {
-            var results = await _operations.ReadPointsAsync(SelectedPlc.PlcId);
+            // 管理页读面板展示全部映射点位（含写信号）；IsWrite 只描述方向，不互斥分流。
+            var results = await _operations.ReadPointsAsync(SelectedPlc.PlcId, readOnlySignals: false);
             var pointMeta = await _points.GetByPlcAsync(SelectedPlc.PlcId);
             var metaByAddr = pointMeta.ToDictionary(p => p.RegisterAddress, StringComparer.OrdinalIgnoreCase);
             ReadRows.Clear();
@@ -344,7 +345,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     private async Task ShowDisconnectedReadRowsAsync(long plcId)
     {
         var pointMeta = await _points.GetByPlcAsync(plcId);
-        var reads = pointMeta.Where(p => !p.IsWrite).ToList();
+        var reads = PlcManagementIoSet.ForManualIo(pointMeta);
         ReadRows.Clear();
         foreach (var p in reads)
         {
@@ -427,7 +428,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
 
     private async Task LoadWriteSignalsAsync(long plcId)
     {
-        var signals = await _points.GetWriteSignalsAsync(plcId);
+        var points = await _points.GetByPlcAsync(plcId);
+        var eqName = EquipmentOptions.FirstOrDefault(e => e.PlcId == plcId)?.DisplayName;
+        var signals = PlcManagementIoSet.ToWriteOptions(points, eqName);
         WriteSignals.Clear();
         foreach (var s in signals) WriteSignals.Add(s);
         SelectedWriteSignal = WriteSignals.FirstOrDefault();

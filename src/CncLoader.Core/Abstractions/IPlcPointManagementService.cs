@@ -10,5 +10,6 @@ public interface IPlcPointManagementService
     Task DeletePointAsync(long pointId, string author, CancellationToken ct = default);
     /// <summary>按测试机信号表模板批量导入某机台 12 读 + 2 写点位（已存在则跳过）。</summary>
     Task<int> ImportSignalTableAsync(long equipmentId, long plcId, string author, CancellationToken ct = default);
+    /// <summary>管理页写下拉：该 PLC 全部活动点位（不按 Rw 过滤）。</summary>
     Task<IReadOnlyList<WriteSignalOption>> GetWriteSignalsAsync(long? plcId = null, CancellationToken ct = default);
 }

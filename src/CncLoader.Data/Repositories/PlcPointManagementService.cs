@@ -124,8 +124,10 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
     public async Task<IReadOnlyList<WriteSignalOption>> GetWriteSignalsAsync(long? plcId = null, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var query = db.PlcPoints.AsNoTracking().Where(p => p.Rw == "1" && p.State == "0");
+        // 管理页写面板：全部活动点位均可下发，不按 Rw 互斥过滤。
+        var query = db.PlcPoints.AsNoTracking().Where(p => p.State == "0");
         if (plcId.HasValue) query = query.Where(p => p.PlcId == plcId.Value);
+        query = query.OrderBy(p => p.RegisterAddr);
 
         var points = await query.ToListAsync(ct);
         var equipments = await db.Equipments.AsNoTracking().ToDictionaryAsync(e => e.Id, e => e.EquipmentName, ct);
