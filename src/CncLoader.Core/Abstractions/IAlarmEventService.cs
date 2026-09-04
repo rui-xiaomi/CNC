@@ -39,6 +39,9 @@ public interface IAlarmEventService
     /// <summary>物理删除全部告警（清空 MAS_AUTO_ALARM_EVENT）。返回删除行数。不可恢复。</summary>
     Task<int> DeleteAllAsync(CancellationToken ct = default);
 
+    /// <summary>删除早于 cutoff 的告警，返回删除行数（归档，防无界膨胀，P1-4）。</summary>
+    Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
+
     /// <summary>未处理告警数（STATE='0'），供标题栏角标展示。</summary>
     Task<int> GetUnhandledCountAsync(CancellationToken ct = default);
 }

@@ -50,7 +50,7 @@ public sealed class RcsOptions
     /// <summary>任务失败自动 redo 上限（同 taskId 幂等重发；超出告警人工）。</summary>
     public int MaxAutoRedo { get; set; } = 3;
 
-    /// <summary>加工位状态机调度器循环间隔（毫秒，默认 500ms）。每加工位并行驱动。</summary>
+    /// <summary>加工位状态机调度器循环间隔（毫秒，默认 500ms）。主循环逐个串行驱动加工位。</summary>
     public int SchedulerIntervalMs { get; set; } = 500;
 
     /// <summary>
@@ -136,6 +136,14 @@ public sealed class PlcOptions
 
     public int PollingIntervalMs { get; set; } = 500;
 
+    /// <summary>PLC 信号读值有效期（毫秒）。超过此值的机台快照/读值视为过期（unknown），
+    /// 调度器按 fail-closed 处理（不再派工）。默认 2500 = PollingIntervalMs × 5。</summary>
+    public int SignalMaxAgeMs { get; set; } = 2500;
+
+    /// <summary>PLC 持续失联多少毫秒后触发失联告警（PlcHealthMonitor）。默认 30000（30s）。
+    /// 设 ≤0 停用失联监测。失联期间工位已 Offline 停派工，本项只补「大声告警」。</summary>
+    public int OfflineAlarmAfterMs { get; set; } = 30000;
+
     /// <summary>是否启用持续轮询循环（信号仓周期刷新）。设 false 可停掉自动轮询做手动单步调试；
     /// 启动自检的单轮读与 PLC 页手动读不受影响。默认 true。</summary>
     public bool PollingEnabled { get; set; } = true;
@@ -172,4 +180,10 @@ public sealed class LoggingOptions
 
     /// <summary>设备流水表保留天数；≤0 表示不自动清理。默认 14。</summary>
     public int DeviceLogRetentionDays { get; set; } = 14;
+
+    /// <summary>RCS 报文流水（MAS_AUTO_RCS_MSG_LOG，TEXT 大字段）保留天数；≤0 不清理。默认 30。</summary>
+    public int RcsMsgLogRetentionDays { get; set; } = 30;
+
+    /// <summary>告警表（MAS_AUTO_ALARM_EVENT）保留天数；≤0 不清理。默认 30。</summary>
+    public int AlarmEventRetentionDays { get; set; } = 30;
 }

@@ -23,6 +23,7 @@ public static class CommunicationServiceCollectionExtensions
     {
         services.AddSingleton<IDeviceLogger, CompositeDeviceLogger>();
         services.AddHostedService<DeviceLogPurgeService>();
+        services.AddHostedService<OperationalLogPurgeService>();
 
         services.AddSingleton<IPlcClientFactory>(sp =>
         {
@@ -135,6 +136,9 @@ public static class CommunicationServiceCollectionExtensions
         });
         // 持续轮询循环随主机启动（信号仓单一数据源，调度器/UI 均依赖其实时刷新）。
         services.AddHostedService(sp => (PlcPollingService)sp.GetRequiredService<IPlcPollingService>());
+
+        // PLC 失联监测：持续离线超阈值补大声告警（不负责重连，P0-5）。
+        services.AddHostedService<PlcHealthMonitor>();
 
         return services;
     }

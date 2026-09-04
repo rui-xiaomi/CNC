@@ -81,11 +81,11 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
         var points = await _pointSource.GetAllAsync(ct);
         var readCount = 0;
 
-        // 按机台分组，便于合成工位状态。
-        foreach (var eqGroup in points.GroupBy(p => p.EquipmentId))
+        // 按（机台，PLC）分组：机台点位可能跨 PLC，各自用对应 PLC client 读，避免把一台 PLC 的地址发到另一台（P1-5）。
+        foreach (var eqGroup in points.GroupBy(p => (p.EquipmentId, p.PlcId)))
         {
-            var equipmentId = eqGroup.Key;
-            var plcId = eqGroup.First().PlcId;
+            var equipmentId = eqGroup.Key.EquipmentId;
+            var plcId = eqGroup.Key.PlcId;
             var client = _connections.Get(plcId);
             var online = client?.IsConnected ?? false;
 
@@ -121,7 +121,7 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
             var safe = reads.GetValueOrDefault((SignalKey.MachineSafe, null));
             _store.UpdateMachine(new MachineStatus
             {
-                EquipmentId = equipmentId, DoorOpen = doorOpen, Safe = safe, PlcOnline = online
+                EquipmentId = equipmentId, PlcId = plcId, DoorOpen = doorOpen, Safe = safe, PlcOnline = online
             });
 
             // 工位级状态合成由 PositionScheduler（第四阶段⑤）统一驱动，轮询只负责信号采集。

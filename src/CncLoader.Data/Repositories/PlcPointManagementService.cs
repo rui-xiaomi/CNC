@@ -10,8 +10,13 @@ namespace CncLoader.Data.Repositories;
 public sealed class PlcPointManagementService : IPlcPointManagementService
 {
     private readonly IDbContextFactory<CncDbContext> _factory;
+    private readonly IPlcPointSource _pointSource;
 
-    public PlcPointManagementService(IDbContextFactory<CncDbContext> factory) => _factory = factory;
+    public PlcPointManagementService(IDbContextFactory<CncDbContext> factory, IPlcPointSource pointSource)
+    {
+        _factory = factory;
+        _pointSource = pointSource;
+    }
 
     public async Task<IReadOnlyList<PlcPointRow>> GetByPlcAsync(long plcId, CancellationToken ct = default)
     {
@@ -53,6 +58,7 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
         entity.DataLen = row.DataLength;
         entity.UpdateTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
+        _pointSource.Invalidate();
     }
 
     public async Task DeletePointAsync(long pointId, string author, CancellationToken ct = default)
@@ -63,6 +69,7 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
         entity.State = "1";
         entity.UpdateTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
+        _pointSource.Invalidate();
     }
 
     public async Task<int> ImportSignalTableAsync(long equipmentId, long plcId, string author, CancellationToken ct = default)
@@ -118,7 +125,11 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
             added++;
         }
 
-        if (added > 0) await db.SaveChangesAsync(ct);
+        if (added > 0)
+        {
+            await db.SaveChangesAsync(ct);
+            _pointSource.Invalidate();
+        }
         return added;
     }
 

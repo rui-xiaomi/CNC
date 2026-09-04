@@ -266,6 +266,7 @@ public sealed class ReconcileSlotSettlementTests
 
         public Task<IReadOnlyList<PlcPointDefinition>> GetByPlcAsync(long plcId, CancellationToken ct = default) => GetAllAsync(ct);
         public Task<IReadOnlyList<PlcPointDefinition>> GetByEquipmentAsync(long equipmentId, CancellationToken ct = default) => GetAllAsync(ct);
+        public void Invalidate() { }
     }
 
     private sealed class StubEquipment : IEquipmentConfigService

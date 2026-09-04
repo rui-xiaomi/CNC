@@ -193,6 +193,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
         }
         catch (Exception ex)
         {
+            MarkFaultedIfLinkFailure(ex);
             _deviceLogger.Log(new DeviceLogEntry
             {
                 DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
@@ -230,6 +231,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
         }
         catch (Exception ex)
         {
+            MarkFaultedIfLinkFailure(ex);
             _deviceLogger.Log(new DeviceLogEntry
             {
                 DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
@@ -333,6 +335,16 @@ public sealed class OmronFinsPlcClient : IPlcClient
         if (ip is null) return fallback;
         var bytes = ip.MapToIPv4().GetAddressBytes();
         return bytes.Length == 4 && bytes[3] != 0 ? bytes[3] : fallback;
+    }
+
+    /// <summary>
+    /// 链路级失败（超时/套接字/IO）才置 Faulted：UDP 断链后 IsConnected 必须翻 false，
+    /// 否则轮询会拿着陈旧信号继续派工。取消（关停）与协议级错误（已收到应答）不视为断链。
+    /// </summary>
+    private void MarkFaultedIfLinkFailure(Exception ex)
+    {
+        if (ex is TimeoutException or SocketException or IOException)
+            SetState(PlcConnectionState.Faulted, ex.Message);
     }
 
     private void SetState(PlcConnectionState state, string? message = null)

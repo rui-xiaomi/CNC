@@ -16,6 +16,10 @@ public sealed class CompositeDeviceLogger : IDeviceLogger
     private readonly IDeviceLogStore _store;
     private readonly LoggingOptions _logging;
     private readonly Func<string> _author;
+    /// <summary>失败记录同源节流窗口：PLC 离线时每点位每 500ms 一次失败，节流避免洪水写库打满连接池（P1-3）。</summary>
+    private static readonly TimeSpan FailureThrottle = TimeSpan.FromSeconds(30);
+    private readonly object _throttleGate = new();
+    private readonly Dictionary<string, DateTime> _lastFailureAt = new();
 
     public CompositeDeviceLogger(ILogger<CompositeDeviceLogger> logger, IDeviceLogStore store,
         IOptions<AppOptions> options, CncLoader.Common.Identity.ICurrentUser currentUser)
@@ -54,6 +58,30 @@ public sealed class CompositeDeviceLogger : IDeviceLogger
             && e.Action is DeviceAction.Read or DeviceAction.Connect or DeviceAction.Disconnect or DeviceAction.Heartbeat)
             return;
 
-        _ = _store.AppendAsync(e);
+        // 失败落库同源 30s 节流：避免 PLC 离线时洪水式并发写库打满连接池；节流期内的失败仍写文件日志（上方已记）。
+        if (!e.Success && !TryAcquireFailureThrottle(e))
+            return;
+
+        _ = PersistObservedAsync(e);
+    }
+
+    /// <summary>观察落库异常（不抛未观察 Task 异常），DB 抖动时只记日志不拖垮调用方。</summary>
+    private async Task PersistObservedAsync(DeviceLogEntry e)
+    {
+        try { await _store.AppendAsync(e); }
+        catch (Exception ex) { _logger.LogWarning(ex, "设备流水落库失败"); }
+    }
+
+    private bool TryAcquireFailureThrottle(DeviceLogEntry e)
+    {
+        var key = $"{e.DeviceType}|{e.DeviceId}|{e.Action}|{e.RegisterAddress}";
+        var now = DateTime.UtcNow;
+        lock (_throttleGate)
+        {
+            if (_lastFailureAt.TryGetValue(key, out var last) && now - last < FailureThrottle)
+                return false;
+            _lastFailureAt[key] = now;
+            return true;
+        }
     }
 }

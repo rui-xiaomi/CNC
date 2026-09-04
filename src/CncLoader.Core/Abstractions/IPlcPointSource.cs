@@ -15,4 +15,7 @@ public interface IPlcPointSource
 
     /// <summary>取某机台的全部点位。</summary>
     Task<IReadOnlyList<PlcPointDefinition>> GetByEquipmentAsync(long equipmentId, CancellationToken ct = default);
+
+    /// <summary>点位增删改后失效进程内缓存（PlcPointManagementService 在 CRUD 后调用）。</summary>
+    void Invalidate();
 }

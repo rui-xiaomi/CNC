@@ -46,10 +46,15 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
 
         _positionThrottle = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(200) };
         _positionThrottle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdatePositionStatesUi(); } };
-        _positionThrottle.Start();
 
         _ = InitializeAsync();
     }
+
+    /// <summary>激活：启动 200ms 节流定时器（隐藏页不跑，P2-2）。</summary>
+    public override void OnActivated() => _positionThrottle.Start();
+
+    /// <summary>失活：停节流定时器。</summary>
+    public override void OnDeactivated() => _positionThrottle.Stop();
 
     public override string Key => "eq";
     public override string Title => "机台管理";

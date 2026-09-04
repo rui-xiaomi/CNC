@@ -109,7 +109,7 @@ public sealed class PositionDriveExecutorTests
     }
 
     [Test]
-    public async Task Loaded_TestStartWriteFails_AlarmsAndMustNotSettleSlot()
+    public async Task Loaded_TestStartWriteFails_AlarmsButSlotAlreadySettled()
     {
         var h = await BuildAsync();
         h.SetMachine();
@@ -125,16 +125,16 @@ public sealed class PositionDriveExecutorTests
         Assert.Multiple(() =>
         {
             Assert.That(state, Is.EqualTo(PositionState.Alarm));
-            Assert.That(h.Slots.ConfirmTakeCount, Is.EqualTo(0),
-                "写启动失败必须中止后续动作，绝不能先落账再报警");
+            // P1-6：落账先于写启动——写启动失败时物料已在机台，账目已落账，后续回滚才是 no-op，避免账实不符。
+            Assert.That(h.Slots.ConfirmTakeCount, Is.EqualTo(1), "物料已到位，须先取料落账再写启动");
             Assert.That(rollbackSameTick, Is.EqualTo(0), "转 Alarm 当轮不落告警包");
-            Assert.That(h.Slots.RollbackTakeCount, Is.EqualTo(1), "下一 tick 补落：回滚取料预记");
+            Assert.That(h.Slots.RollbackTakeCount, Is.EqualTo(1), "下一 tick 补落：回滚取料预记（已落账则为 no-op）");
             Assert.That(h.Alarms.RaiseCount, Is.EqualTo(1));
         });
     }
 
     [Test]
-    public async Task Unloaded_TestStartWriteFails_AlarmsAndMustNotSettleSlotOrClearItem()
+    public async Task Unloaded_TestStartWriteFails_AlarmsButSlotAlreadySettled()
     {
         var h = await BuildAsync();
         h.SetMachine();
@@ -150,9 +150,10 @@ public sealed class PositionDriveExecutorTests
         Assert.Multiple(() =>
         {
             Assert.That(state, Is.EqualTo(PositionState.Alarm));
-            Assert.That(h.Slots.ConfirmPutCount, Is.EqualTo(0));
+            // P1-6：落账先于写复位——写复位失败时件已在料架，账目已落账，回滚才是 no-op，避免撞料。
+            Assert.That(h.Slots.ConfirmPutCount, Is.EqualTo(1), "件已到料架，须先入库落账再写复位");
             Assert.That(ctx.CurrentTaskId, Is.EqualTo("T-2"), "写复位失败不得清件，否则丢账");
-            Assert.That(h.Slots.RollbackPutCount, Is.EqualTo(1), "下料方向回滚入库预记");
+            Assert.That(h.Slots.RollbackPutCount, Is.EqualTo(1), "下料方向回滚入库预记（已落账则为 no-op）");
         });
     }
 
@@ -375,6 +376,7 @@ public sealed class PositionDriveExecutorTests
             => GetAllAsync(ct);
         public Task<IReadOnlyList<PlcPointDefinition>> GetByEquipmentAsync(long equipmentId, CancellationToken ct = default)
             => GetAllAsync(ct);
+        public void Invalidate() { }
     }
 
     /// <summary>可编排的 PLC 操作：控制写确认结果与 fresh HasMat 读值/错误。</summary>

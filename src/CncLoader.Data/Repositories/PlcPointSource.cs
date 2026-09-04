@@ -10,12 +10,41 @@ namespace CncLoader.Data.Repositories;
 /// </summary>
 public sealed class PlcPointSource : IPlcPointSource
 {
+    /// <summary>全量点位缓存 TTL：轮询每 500ms 调 GetAllAsync，缓存后降到 TTL 内一次，避免每拍全表查库。</summary>
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
+
     private readonly IPlcPointRoutingStore _routing;
+    private readonly object _gate = new();
+    private IReadOnlyList<PlcPointDefinition>? _allCache;
+    private DateTime _allCacheAt = DateTime.MinValue;
 
     public PlcPointSource(IPlcPointRoutingStore routing) => _routing = routing;
 
-    public Task<IReadOnlyList<PlcPointDefinition>> GetAllAsync(CancellationToken ct = default)
-        => QueryAsync(null, null, ct);
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            _allCache = null;
+            _allCacheAt = DateTime.MinValue;
+        }
+    }
+
+    public async Task<IReadOnlyList<PlcPointDefinition>> GetAllAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (_allCache is not null && DateTime.UtcNow - _allCacheAt < CacheTtl)
+                return _allCache;
+        }
+
+        var all = await QueryAsync(null, null, ct);
+        lock (_gate)
+        {
+            _allCache = all;
+            _allCacheAt = DateTime.UtcNow;
+        }
+        return all;
+    }
 
     public Task<IReadOnlyList<PlcPointDefinition>> GetByPlcAsync(long plcId, CancellationToken ct = default)
         => QueryAsync(plcId, null, ct);

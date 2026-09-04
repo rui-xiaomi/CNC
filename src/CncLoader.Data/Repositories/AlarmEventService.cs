@@ -158,6 +158,16 @@ public sealed class AlarmEventService : IAlarmEventService
         return n;
     }
 
+    public async Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var n = await db.AlarmEvents
+            .Where(x => x.CreateTime != null && x.CreateTime < cutoff)
+            .ExecuteDeleteAsync(ct);
+        if (n > 0) AlarmsChanged?.Invoke(this, EventArgs.Empty);
+        return n;
+    }
+
     public async Task<int> GetUnhandledCountAsync(CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);

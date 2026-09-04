@@ -57,4 +57,12 @@ public sealed class RcsMessageLog : IRcsMessageLog
 
     private static string? Trim(string? s)
         => s is null ? null : (s.Length > 60000 ? s[..60000] : s);
+
+    public async Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.RcsMsgLogs
+            .Where(x => x.CreateTime != null && x.CreateTime < cutoff)
+            .ExecuteDeleteAsync(ct);
+    }
 }

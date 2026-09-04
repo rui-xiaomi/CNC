@@ -31,7 +31,9 @@ public sealed class DatabaseConnectionFactory : IDatabaseConnectionFactory
     {
         var password = ResolvePassword();
         // 注意：仅返回连接串，不在任何日志中输出口令。
-        return $"Server={_db.Server};Port={_db.Port};Database={_db.Database};Uid={_db.User};Pwd={password};{_db.ExtraParameters}";
+        // 显式连接池参数：上限 100（避免洪水写打满），连接超时 15s，池预热 1。
+        return $"Server={_db.Server};Port={_db.Port};Database={_db.Database};Uid={_db.User};Pwd={password};" +
+               $"MaximumPoolSize=100;MinimumPoolSize=1;ConnectionTimeout=15;{_db.ExtraParameters}";
     }
 
     private string ResolvePassword()

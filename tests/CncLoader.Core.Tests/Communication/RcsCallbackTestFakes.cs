@@ -156,6 +156,7 @@ internal static class RcsCallbackTestFakes
         public Task MarkHandledAsync(long id, string author, CancellationToken ct = default) => Task.CompletedTask;
         public Task<int> DeleteAllAsync(CancellationToken ct = default) => Task.FromResult(0);
         public Task<int> GetUnhandledCountAsync(CancellationToken ct = default) => Task.FromResult(0);
+        public Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => Task.FromResult(0);
     }
 
     internal sealed record WarnCall(
@@ -168,5 +169,6 @@ internal static class RcsCallbackTestFakes
             => Task.FromResult<IReadOnlyList<RcsMsgRow>>(Array.Empty<RcsMsgRow>());
         public Task<IReadOnlyList<RcsMsgRow>> QueryAsync(RcsMsgQuery query, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<RcsMsgRow>>(Array.Empty<RcsMsgRow>());
+        public Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => Task.FromResult(0);
     }
 }

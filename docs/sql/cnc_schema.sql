@@ -319,7 +319,9 @@ CREATE TABLE MAS_AUTO_WORK_RECORD (
   PRIMARY KEY (ID1),
   KEY idx_rec_line (WORKLINE_ID),
   KEY idx_rec_eq (EQUIMENT_ID),
-  KEY idx_rec_electrode (ELECTRODE_ID)
+  KEY idx_rec_electrode (ELECTRODE_ID),
+  KEY idx_rec_start (WORK_START_TIME),
+  KEY idx_rec_eq_pos_result (EQUIMENT_ID, POSITION_CODE, WORK_RESULT)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='加工/检测记录';
 
 -- 12. AGV/RCS 任务记录（第四阶段扩展：承载 RCS 任务全生命周期）

@@ -138,12 +138,11 @@ public static class PositionTransition
 
             case PositionState.Loaded:
             {
-                // 上料到位：写启动 → 源料架取料落账（物料已被取走）→ 开加工记录
-                var actions = new List<PositionAction>
-                {
-                    PositionAction.WriteTestStart(1)
-                };
+                // 上料到位：先源料架取料落账（物料已到位），再写启动、开加工记录。
+                // 落账先于写启动：写启动失败时物料已在机台，账目已落账，告警回滚才是 no-op（P1-6）。
+                var actions = new List<PositionAction>();
                 if (i.HasCurrentTask) actions.Add(new PositionAction(PositionActionKind.ConfirmTake));
+                actions.Add(PositionAction.WriteTestStart(1));
                 actions.Add(new PositionAction(PositionActionKind.RecordWorkStart));
                 return new TransitionOutcome
                 {
@@ -155,12 +154,11 @@ public static class PositionTransition
 
             case PositionState.Unloaded:
             {
-                // 下料到位：写复位 → 入库料架落账 → 清件（件已离开本工位）
-                var actions = new List<PositionAction>
-                {
-                    PositionAction.WriteTestStart(2)
-                };
+                // 下料到位：先入库料架落账（件已到料架），再写复位、清件。
+                // 落账先于写复位：写复位失败时件已在料架，账目已落账，告警回滚才是 no-op（P1-6）。
+                var actions = new List<PositionAction>();
                 if (i.HasCurrentTask) actions.Add(new PositionAction(PositionActionKind.ConfirmPut));
+                actions.Add(PositionAction.WriteTestStart(2));
                 actions.Add(new PositionAction(PositionActionKind.ClearCurrentItem));
                 return new TransitionOutcome
                 {

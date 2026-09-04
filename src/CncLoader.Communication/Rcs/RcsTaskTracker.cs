@@ -129,7 +129,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         var found = new HashSet<string>(StringComparer.Ordinal);
         if (!string.IsNullOrWhiteSpace(result.RawResponse))
         {
-            foreach (var (taskId, status) in ParseItems(result.RawResponse))
+            foreach (var (taskId, status) in ParseItems(result.RawResponse, _logger))
             {
                 found.Add(taskId);
                 await ApplyPollStateAsync(taskId, status, ct);
@@ -258,7 +258,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
     }
 
     /// <summary>解析 queryTask 应答 items[]：返回 (taskId, status) 列表。</summary>
-    private static IReadOnlyList<(string taskId, string status)> ParseItems(string? raw)
+    private static IReadOnlyList<(string taskId, string status)> ParseItems(string? raw, ILogger<RcsTaskTracker> logger)
     {
         var list = new List<(string, string)>();
         if (string.IsNullOrWhiteSpace(raw)) return list;
@@ -275,7 +275,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
                     list.Add((id!, st!));
             }
         }
-        catch { /* 解析失败：忽略本次，下一轮重试 */ }
+        catch (Exception ex) { logger.LogDebug(ex, "RCS queryTask 响应解析失败，忽略本次，下一轮重试"); }
         return list;
     }
 

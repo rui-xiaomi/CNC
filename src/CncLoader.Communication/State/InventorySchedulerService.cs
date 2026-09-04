@@ -129,7 +129,7 @@ public sealed class InventorySchedulerService : IHostedService, IAsyncDisposable
             var completed = await Task.WhenAny(tcs.Task, Task.Delay(Timeout.Infinite, timeoutCts.Token));
             if (completed == tcs.Task)
             {
-                var r = tcs.Task.Result;
+                var r = await tcs.Task; // WhenAny 已确认完成；await 解包，异常走原异常而非 AggregateException
                 _logger.LogInformation("定期盘点：料架 {Frame} 任务 {Task} {State}，校正 {C}", frameId, taskId, r.State, r.CorrectedCount);
             }
             else

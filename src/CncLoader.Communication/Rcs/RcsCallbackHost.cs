@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -13,12 +14,13 @@ namespace CncLoader.Communication.Rcs;
 /// RCS 回调服务端（内嵌 Kestrel 自宿主）。监听 <c>RcsOptions.CallbackHost:CallbackPort</c>，
 /// 提供 <c>/externalApi/pushTaskStatus|scanTaskStatus|warnCallback</c> 三个 POST 端点，
 /// 收到即交 <see cref="IRcsCallbackProcessor"/> 处理并应答 <c>{"taskId":"..."}</c>。
-/// 作为 <see cref="IHostedService"/> 随主机启动；端口占用等启动失败仅记日志，不影响主程序。
+/// 作为 <see cref="IHostedService"/> 随主机启动；端口占用等启动失败记日志并落严重告警（不阻断主程序，但操作员须知晓回调不可用）。
 /// </summary>
 public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsyncDisposable
 {
     private readonly IRcsRuntimeConfig _runtime;
     private readonly IRcsCallbackProcessor _processor;
+    private readonly IAlarmEventService _alarms;
     private readonly ILogger<RcsCallbackHost> _logger;
     private WebApplication? _app;
     private volatile bool _isListening;
@@ -26,10 +28,11 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
     private string _boundHost = "0.0.0.0";
     private int _boundPort = 9080;
 
-    public RcsCallbackHost(IRcsRuntimeConfig runtime, IRcsCallbackProcessor processor, ILogger<RcsCallbackHost> logger)
+    public RcsCallbackHost(IRcsRuntimeConfig runtime, IRcsCallbackProcessor processor, IAlarmEventService alarms, ILogger<RcsCallbackHost> logger)
     {
         _runtime = runtime;
         _processor = processor;
+        _alarms = alarms;
         _logger = logger;
     }
 
@@ -80,11 +83,22 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
         }
         catch (Exception ex)
         {
-            // 端口被占用（常因开多个实例）等启动失败：仅记日志，不阻断主程序。
+            // 端口被占用（常因开多个实例）等启动失败：仅记日志，不阻断主程序，但落严重告警让操作员立刻知晓回调不可用（P2-6）。
             _isListening = false;
             _listenError = ex.Message;
             _logger.LogError(ex, "RCS 回调服务启动失败（端口 {Port} 可能被占用）", port);
             _app = null;
+            try
+            {
+                await _alarms.RaiseRcsWarnAsync("CALLBACK",
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    $"RCS 回调服务启动失败（端口 {port} 可能被占用），任务状态/扫码/告警将无法回推，请检查端口后重启客户端", null,
+                    CancellationToken.None);
+            }
+            catch (Exception alarmEx)
+            {
+                _logger.LogWarning(alarmEx, "回调启动失败告警落库失败");
+            }
         }
     }
 

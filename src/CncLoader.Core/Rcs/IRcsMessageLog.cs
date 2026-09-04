@@ -10,6 +10,9 @@ public interface IRcsMessageLog
 
     /// <summary>按条件服务端查询（方向/接口/taskId 模糊 + 条数上限），倒序。供报文流水筛选。</summary>
     Task<IReadOnlyList<RcsMsgRow>> QueryAsync(RcsMsgQuery query, CancellationToken ct = default);
+
+    /// <summary>删除早于 cutoff 的报文流水，返回删除行数（TEXT 表归档，防无界膨胀，P1-4）。</summary>
+    Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 }
 
 /// <summary>报文流水查询条件（null/空表示不限）。</summary>

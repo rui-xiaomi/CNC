@@ -646,6 +646,7 @@ public sealed class PositionSchedulerNonBlockingStartupTests
             => Task.FromResult<IReadOnlyList<PlcPointDefinition>>(Array.Empty<PlcPointDefinition>());
         public Task<IReadOnlyList<PlcPointDefinition>> GetByEquipmentAsync(long equipmentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<PlcPointDefinition>>(Array.Empty<PlcPointDefinition>());
+        public void Invalidate() { }
     }
 
     private sealed class FakeSlots : ISlotAccountService
@@ -713,6 +714,7 @@ public sealed class PositionSchedulerNonBlockingStartupTests
         public Task MarkHandledAsync(long id, string author, CancellationToken ct = default) => Task.CompletedTask;
         public Task<int> DeleteAllAsync(CancellationToken ct = default) => Task.FromResult(0);
         public Task<int> GetUnhandledCountAsync(CancellationToken ct = default) => Task.FromResult(0);
+        public Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => Task.FromResult(0);
     }
 
     private sealed class FakeWorkRecords : IWorkRecordService

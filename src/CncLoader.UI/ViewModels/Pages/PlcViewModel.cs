@@ -2,11 +2,13 @@ using System.Collections.ObjectModel;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CncLoader.Common.Configuration;
 using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
 using CncLoader.UI.Services;
+using Microsoft.Extensions.Options;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -26,15 +28,18 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     private readonly IUserNotificationService _notify;
     private readonly IUiDispatcher _ui;
     private readonly IDialogService _dialogs;
+    private readonly PlcOptions _plcOptions;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _heartbeatTimer;
     private long _heartbeat;
+    private bool _pageActive;
 
     public PlcViewModel(IPlcCatalogService catalog, IPlcConnectionService connections,
         IPlcOperationService operations, IPlcPointManagementService points,
         IDeviceLogStore logStore, IAlarmEventService alarms, ICurrentUser user,
         PointMappingViewModel pointMapping,
-        IUserNotificationService notify, IUiDispatcher ui, IDialogService dialogs)
+        IUserNotificationService notify, IUiDispatcher ui, IDialogService dialogs,
+        IOptions<AppOptions> options)
     {
         _catalog = catalog;
         _connections = connections;
@@ -46,7 +51,10 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         _notify = notify;
         _ui = ui;
         _dialogs = dialogs;
+        _plcOptions = options.Value.Plc;
         PointMapping = pointMapping;
+
+        RefreshModeBanner();
 
         PlcRows = new ObservableCollection<PlcRowVm>();
         ReadRows = new ObservableCollection<ReadRowVm>();
@@ -66,9 +74,41 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
 
         _heartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _heartbeatTimer.Tick += (_, _) => HeartbeatCounter = (++_heartbeat).ToString("D6");
-        _heartbeatTimer.Start();
 
         _ = InitializeAsync();
+    }
+
+    /// <summary>激活：启动心跳/轮询定时器（隐藏页不读 PLC，P2-2）。</summary>
+    public override void OnActivated()
+    {
+        _pageActive = true;
+        _heartbeatTimer.Start();
+        if (IsPolling) _pollTimer.Start();
+    }
+
+    /// <summary>失活：停心跳/轮询定时器。</summary>
+    public override void OnDeactivated()
+    {
+        _pageActive = false;
+        _heartbeatTimer.Stop();
+        _pollTimer.Stop();
+    }
+
+    /// <summary>模拟器模式红线横幅：Plc.UseSimulator=true 时醒目提示「未驱动真机」，防现场误当联调（P0-3）。</summary>
+    private void RefreshModeBanner()
+    {
+        if (_plcOptions.UseSimulator)
+        {
+            PlcModeText = "模拟器";
+            PlcModeBrushKey = "WarnBrush";
+            PlcModeHint = "当前为 PLC 模拟器模式（Plc.UseSimulator=true），未驱动真实机台";
+        }
+        else
+        {
+            PlcModeText = "真实 PLC";
+            PlcModeBrushKey = "AccentBrush";
+            PlcModeHint = "当前对接真实 PLC（Plc.UseSimulator=false）";
+        }
     }
 
     public override string Key => "plc";
@@ -94,6 +134,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     [ObservableProperty] private bool _isPolling;
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private string _heartbeatCounter = "000000";
+    [ObservableProperty] private string _plcModeText = "";
+    [ObservableProperty] private string _plcModeBrushKey = "AccentBrush";
+    [ObservableProperty] private string _plcModeHint = "";
 
     partial void OnSelectedPlcChanged(PlcRowVm? value)
     {
@@ -113,7 +156,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
 
     partial void OnIsPollingChanged(bool value)
     {
-        if (value) _pollTimer.Start();
+        if (value) { if (_pageActive) _pollTimer.Start(); }
         else _pollTimer.Stop();
     }
 
@@ -539,7 +582,8 @@ public sealed partial class PlcRowVm : ObservableObject
             _ => "离线"
         },
         StatusBrushKey = p.IsConnected ? "OkBrush" : p.LinkState == PlcLinkState.Faulted ? "AlarmBrush" : "IdleBrush",
-        HeartbeatText = p.IsConnected ? Random.Shared.Next(1000, 999999).ToString("D6") : "------"
+        // 无真实心跳计数源，不用随机数伪造跳动（误导运维以为在实时刷新）；显示固定「在线」。
+        HeartbeatText = p.IsConnected ? "在线" : "------"
     };
 }
 

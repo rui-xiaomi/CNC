@@ -18,4 +18,10 @@ public abstract partial class PageViewModelBase : ViewModelBase
 
     /// <summary>占位说明（Phase 1 各页骨架展示用）。</summary>
     public virtual string Description => "该模块将在后续开发阶段实现。";
+
+    /// <summary>页面被导航激活时调用（默认空；页面可在此启动定时器/立即刷新）。</summary>
+    public virtual void OnActivated() { }
+
+    /// <summary>页面被导航离开时调用（默认空；页面可在此停止定时器，避免隐藏页持续刷库）。</summary>
+    public virtual void OnDeactivated() { }
 }

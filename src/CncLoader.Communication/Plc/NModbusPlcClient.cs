@@ -148,6 +148,7 @@ public sealed class NModbusPlcClient : IPlcClient
             }
             catch (Exception ex)
             {
+                MarkFaultedIfLinkFailure(ex);
                 _deviceLogger.Log(new DeviceLogEntry
                 {
                     DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
@@ -183,6 +184,7 @@ public sealed class NModbusPlcClient : IPlcClient
             }
             catch (Exception ex)
             {
+                MarkFaultedIfLinkFailure(ex);
                 _deviceLogger.Log(new DeviceLogEntry
                 {
                     DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
@@ -198,6 +200,16 @@ public sealed class NModbusPlcClient : IPlcClient
         }
     }
 
+    /// <summary>
+    /// 链路级失败（超时/套接字/IO）才置 Faulted：TCP 断链后 IsConnected 必须翻 false，
+    /// 否则轮询会拿着陈旧信号继续派工。取消（关停）与 Modbus 设备异常响应（已收到应答）不视为断链。
+    /// </summary>
+    private void MarkFaultedIfLinkFailure(Exception ex)
+    {
+        if (ex is TimeoutException or SocketException or IOException)
+            SetState(PlcConnectionState.Faulted, ex.Message);
+    }
+
     private void SetState(PlcConnectionState state, string? message = null)
     {
         if (_state == state) return;
@@ -207,7 +219,7 @@ public sealed class NModbusPlcClient : IPlcClient
 
     public void Dispose()
     {
-        // 持锁销毁：不 Release，避免 Release→Dispose 窗口内其它线程再 Wait/Release。
+        // 占闸销毁在途读写后释放（不 Dispose 信号量）：关停窗口内若有残留调用，Dispose 会抛 ObjectDisposedException（P1-7）。
         _ioGate.Wait();
         try
         {
@@ -221,7 +233,7 @@ public sealed class NModbusPlcClient : IPlcClient
         }
         finally
         {
-            _ioGate.Dispose();
+            _ioGate.Release();
         }
     }
 }

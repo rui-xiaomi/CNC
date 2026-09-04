@@ -19,7 +19,9 @@ public sealed class NavigationService : INavigationService
     {
         if (!_pages.TryGetValue(key, out var page) || ReferenceEquals(page, Current))
             return;
+        Current?.OnDeactivated();
         Current = page;
+        page.OnActivated();
         Navigated?.Invoke(this, page);
     }
 }

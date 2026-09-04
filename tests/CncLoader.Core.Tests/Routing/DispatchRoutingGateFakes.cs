@@ -568,6 +568,7 @@ internal sealed class EmptyPoints : IPlcPointSource
         => GetAllAsync(ct);
     public Task<IReadOnlyList<PlcPointDefinition>> GetByEquipmentAsync(long equipmentId, CancellationToken ct = default)
         => GetAllAsync(ct);
+    public void Invalidate() { }
 }
 
 internal sealed class NoopAlarms : IAlarmEventService
@@ -613,6 +614,7 @@ internal sealed class NoopAlarms : IAlarmEventService
     public Task MarkHandledAsync(long id, string author, CancellationToken ct = default) => Task.CompletedTask;
     public Task<int> DeleteAllAsync(CancellationToken ct = default) => Task.FromResult(0);
     public Task<int> GetUnhandledCountAsync(CancellationToken ct = default) => Task.FromResult(0);
+        public Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => Task.FromResult(0);
 }
 
 internal sealed class NoopWorkRecords : IWorkRecordService

@@ -11,7 +11,7 @@ artifacts/
 ## Logs / secrets
 logs/
 *.log
-appsettings.*.local.json
+appsettings*.local.json
 secrets.local.json
 
 ## Node (docs/scripts PPT 生成)

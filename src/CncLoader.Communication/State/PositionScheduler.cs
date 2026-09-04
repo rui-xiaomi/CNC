@@ -14,7 +14,7 @@ namespace CncLoader.Communication.State;
 
 /// <summary>
 /// 加工位状态机调度器（第四阶段⑤，<see cref="IHostedService"/>）。
-/// 每加工位一个独立 <see cref="PositionContext"/> 并行驱动（双位并行），按 §7 状态机推进：
+/// 每加工位一个独立 <see cref="PositionContext"/>，主循环逐个串行驱动（DriveAllAsync 逐一 await），按 §7 状态机推进：
 /// WAIT_LOAD→DISPATCHING→TRANSPORTING→(PLC复核)→LOADED→PROCESSING→DONE→DISPATCHING→TRANSPORTING→UNLOADED→WAIT_LOAD。
 /// LOADED/UNLOADED 双条件（RCS completed 且 PLC 复核通过）；复核不过 → ALARM 不写启动（安全底线）。
 /// 启动时先做 §6.3 对账（未完结任务绑定回加工位），对账完成前不自动派工。
@@ -35,6 +35,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     private readonly ISlotAccountService _slots;
     private readonly IRoutingAvailabilityValidator _routingValidator;
     private readonly RcsOptions _options;
+    private readonly TimeSpan _signalMaxAge;
     private readonly ILogger<PositionScheduler> _logger;
     private readonly ReservationFirstDispatcher _reservationFirstDispatcher = new();
     private readonly StartupReconcileCoordinator _reconcileCoordinator = new();
@@ -112,6 +113,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         _queue = queue;
         _alarms = alarms;
         _options = options.Value.Rcs;
+        _signalMaxAge = TimeSpan.FromMilliseconds(options.Value.Plc.SignalMaxAgeMs);
         _logger = logger;
         _workRecords = workRecords;
         _equipment = equipment;
@@ -558,8 +560,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             ObserveAsync(_loopTask),
             ObserveAsync(_dispatchTask),
             ObserveAsync(_reconcileWorkflowTask));
-        // 下游忽略 CT 时 workflow 可能继续挂起：有界等待，不硬杀、不并发替代 attempt（D4）。
-        await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+        // 有界等待覆盖最坏 PLC 写（FINS 3s + 250ms 重试 + 3s）：确保循环真正退出后再返回，
+        // 避免宿主随后 Dispose 连接管理器时撞在途读写（P1-7）。下游忽略 CT 时由宿主 5s CTS 兜底。
+        await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
     }
 
     private static async Task ObserveAsync(Task? task)
@@ -813,7 +816,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             if (_expectedInbound.ContainsKey((eq, pos))) continue;
 
             var machine = _store.GetMachine(eq);
-            if (machine is null || !machine.PlcOnline) continue; // PLC 未上线，交给运行态离线处理
+            if (machine is null || !machine.IsFresh(_signalMaxAge) || !machine.PlcOnline) continue; // PLC 未上线/快照过期，交给运行态离线处理
             var tmp = new PositionContext { EquipmentId = eq, PositionId = pos };
             var hasMat = await ReadHasMatFreshAsync(tmp, ct);
             if (hasMat == true)
@@ -862,7 +865,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return (queryPhase, settled);
         }
 
-        foreach (var (taskId, rcsStatus) in ParseQueryItems(result.RawResponse))
+        foreach (var (taskId, rcsStatus) in ParseQueryItems(result.RawResponse, _logger))
         {
             var state = RcsStatusMapper.ToTaskState(rcsStatus);
             if (state is null || !RcsStatusMapper.IsTerminal(state)) continue;
@@ -967,7 +970,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         };
 
     /// <summary>解析 queryTask 应答 items[] → (taskId, status)。</summary>
-    private static IReadOnlyList<(string taskId, string status)> ParseQueryItems(string? raw)
+    private static IReadOnlyList<(string taskId, string status)> ParseQueryItems(string? raw, ILogger<PositionScheduler> logger)
     {
         var list = new List<(string, string)>();
         if (string.IsNullOrWhiteSpace(raw)) return list;
@@ -984,7 +987,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                     list.Add((id!, st!));
             }
         }
-        catch { /* 解析失败：本轮跳过 */ }
+        catch (Exception ex) { logger.LogDebug(ex, "RCS queryTask 响应解析失败，本轮跳过"); }
         return list;
     }
 
@@ -1096,7 +1099,9 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     private async Task DrivePositionCoreAsync(PositionContext ctx, CancellationToken ct)
     {
         var machine = _store.GetMachine(ctx.EquipmentId);
-        var plcOnline = machine?.PlcOnline ?? false;
+        // 机台快照过期（轮询停摆/链路断）→ 视为离线，不再派工；切勿把「未知」折成「安全」。
+        var machineFresh = machine is not null && machine.IsFresh(_signalMaxAge);
+        var plcOnline = machineFresh && machine!.PlcOnline;
         var safe = machine?.Safe ?? true;
         var doorOpen = machine?.DoorOpen ?? false;
 
@@ -1105,6 +1110,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         foreach (var r in readings)
         {
             if (r.PositionId != ctx.PositionId) continue;
+            if (!r.IsFresh(_signalMaxAge)) continue; // 过期读值当 unknown，勿参与状态判定
             switch (r.Signal)
             {
                 case SignalKey.PosHasMat: hasMat = r.On; break;
@@ -1530,7 +1536,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         foreach (var eq in equipmentIds)
         {
             var machine = _store.GetMachine(eq);
-            if (machine is null || !machine.PlcOnline || machine.Safe == false || machine.DoorOpen == true) continue;
+            if (machine is null || !machine.IsFresh(_signalMaxAge) || !machine.PlcOnline || machine.Safe == false || machine.DoorOpen == true) continue;
             var readings = _store.GetReadings(eq);
             foreach (var (pEq, pPos, _) in _positions)
             {
@@ -1725,6 +1731,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         if (_expectedInbound.ContainsKey((ctx.EquipmentId, ctx.PositionId)))
             return UploadDecision.WaitMaterial;
 
+        // 下发前采样：回填时校验工位未被主循环推进（如 Alarm/Offline），防覆盖粘滞告警（P0-2）。
+        var expectedState = ctx.State;
+        var expectedTaskId = ctx.CurrentTaskId;
+
         var plan = await ResolveUploadPlanAsync(ctx, ct);
         if (plan.Decision == UploadDecision.WaitMaterial) return UploadDecision.WaitMaterial;
         if (plan.Decision == UploadDecision.Failed)
@@ -1881,6 +1891,21 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 return UploadDecision.WaitMaterial;
             }
 
+            // 下发窗口内工位状态漂移（被主循环推进为 Alarm/Offline 等）：不绑定，收口任务并按方向回滚预记（P0-2）。
+            // 仅任务确已下发（result.Success）才需收口+回滚；下发本身已失败时 ReservationFirstDispatcher 已回滚，勿二次回滚。
+            if (ctx.State != expectedState || ctx.CurrentTaskId != expectedTaskId)
+            {
+                _logger.LogWarning("EQ{Eq} POS{Pos} 上料下发窗口内状态漂移（{From}→{To}），放弃绑定任务 {Task}",
+                    ctx.EquipmentId, ctx.PositionId, expectedState, ctx.State, result.TaskId ?? "—");
+                if (result.Success && !string.IsNullOrEmpty(result.TaskId))
+                {
+                    await CloseOrphanTaskAsync(result.TaskId, "UPLOAD_SUPERSEDED_BY_STATE_DRIFT", ct);
+                    if (plan.SourceFrameId is not null)
+                        await _slots.RollbackTakeAsync(result.TaskId, ct);
+                }
+                return UploadDecision.WaitMaterial;
+            }
+
             if (!result.Success || string.IsNullOrEmpty(result.TaskId))
             {
                 // 下发失败 → 粘滞 Alarm，等人工恢复；不自动重发（防重试风暴）
@@ -1918,6 +1943,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         }
 
         var ctx = _contexts.GetOrAdd((item.EquipmentId, item.PositionId), k => new PositionContext { EquipmentId = k.Eq, PositionId = k.Pos });
+
+        // 下发前采样：回填时校验工位未被主循环推进（如 Alarm/Offline），防覆盖粘滞告警（P0-2）。
+        var expectedState = ctx.State;
+        var expectedTaskId = ctx.CurrentTaskId;
 
         // 终点决策（NG架/选下游空工位/中转架/下料架）在消费者内串行完成。
         var decision = await ResolveUnloadTargetAsync(ctx, item.IsOk, ct);
@@ -2069,6 +2098,20 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         await gate.WaitAsync(ct);
         try
         {
+            // 下发窗口内工位状态漂移（被主循环推进为 Alarm/Offline 等）：不绑定，收口任务并按方向回滚预记/交接（P0-2）。
+            // 仅任务确已下发（result.Success）才需收口+回滚；下发本身已失败时 ReservationFirstDispatcher 已回滚，勿二次回滚。
+            if (ctx.State != expectedState || ctx.CurrentTaskId != expectedTaskId)
+            {
+                _logger.LogWarning("EQ{Eq} POS{Pos} 下料下发窗口内状态漂移（{From}→{To}），放弃绑定任务 {Task}",
+                    item.EquipmentId, item.PositionId, expectedState, ctx.State, result.TaskId ?? "—");
+                if (result.Success && !string.IsNullOrEmpty(result.TaskId))
+                {
+                    await CloseOrphanTaskAsync(result.TaskId, "UNLOAD_SUPERSEDED_BY_STATE_DRIFT", ct);
+                    await RollbackUnloadReservationAsync(d, result.TaskId, ct);
+                }
+                return;
+            }
+
             if (result.Success && !string.IsNullOrEmpty(result.TaskId))
             {
                 ctx.CurrentTaskId = result.TaskId;

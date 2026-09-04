@@ -66,11 +66,9 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
 
         _throttle = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(200) };
         _throttle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdateMachinesUi(); } };
-        _throttle.Start();
 
         _statsTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
         _statsTimer.Tick += (_, _) => _ = RefreshStatsAndAlarmsAsync();
-        _statsTimer.Start();
 
         _positionsDirty = true;
         _ = InitAsync();
@@ -141,6 +139,22 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         _store.PositionChanged -= OnStoreChanged;
         _store.MachineChanged -= OnStoreChanged;
         _alarms.AlarmRaised -= OnAlarmRaised;
+    }
+
+    /// <summary>激活：启动节流/统计定时器并立即刷一轮（避免隐藏页持续刷库，P2-2）。</summary>
+    public override void OnActivated()
+    {
+        _throttle.Start();
+        _statsTimer.Start();
+        _positionsDirty = true;
+        _ = RefreshStatsAndAlarmsAsync();
+    }
+
+    /// <summary>失活：停定时器，隐藏页不再每 2s 查库。</summary>
+    public override void OnDeactivated()
+    {
+        _throttle.Stop();
+        _statsTimer.Stop();
     }
 
     private async Task InitAsync()

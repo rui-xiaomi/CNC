@@ -164,7 +164,7 @@ public sealed class PositionTransitionTests
     // ─── Loaded / Unloaded：写 PLC 失败即中止后续落账 ──────────────────────
 
     [Test]
-    public void Loaded_WritesTestStartBeforeSettlingSlot_AndFallsToAlarmOnFailure()
+    public void Loaded_SettlesSlotBeforeWriteTestStart_AndFallsToAlarmOnFailure()
     {
         var outcome = PositionTransition.Decide(Online(PositionState.Loaded) with
         {
@@ -175,11 +175,11 @@ public sealed class PositionTransitionTests
         Assert.That(outcome.Target, Is.EqualTo(PositionState.Processing));
         Assert.That(Kinds(outcome), Is.EqualTo(new[]
         {
-            PositionActionKind.WriteTestStart,
             PositionActionKind.ConfirmTake,
+            PositionActionKind.WriteTestStart,
             PositionActionKind.RecordWorkStart
-        }), "写启动必须先于取料落账");
-        Assert.That(outcome.Actions[0].TestStartValue, Is.EqualTo(1));
+        }), "取料落账必须先于写启动（写启动失败时账目已落账，告警回滚才是 no-op）");
+        Assert.That(outcome.Actions[1].TestStartValue, Is.EqualTo(1));
         Assert.That(outcome.OnActionFailure, Is.EqualTo(PositionState.Alarm));
     }
 
@@ -197,7 +197,7 @@ public sealed class PositionTransitionTests
     }
 
     [Test]
-    public void Unloaded_WritesResetThenSettlesThenClearsItem()
+    public void Unloaded_SettlesThenResetsThenClearsItem()
     {
         var outcome = PositionTransition.Decide(Online(PositionState.Unloaded) with
         {
@@ -208,11 +208,11 @@ public sealed class PositionTransitionTests
         Assert.That(outcome.Target, Is.EqualTo(PositionState.WaitLoad));
         Assert.That(Kinds(outcome), Is.EqualTo(new[]
         {
-            PositionActionKind.WriteTestStart,
             PositionActionKind.ConfirmPut,
+            PositionActionKind.WriteTestStart,
             PositionActionKind.ClearCurrentItem
         }));
-        Assert.That(outcome.Actions[0].TestStartValue, Is.EqualTo(2));
+        Assert.That(outcome.Actions[1].TestStartValue, Is.EqualTo(2));
         Assert.That(outcome.OnActionFailure, Is.EqualTo(PositionState.Alarm));
     }
 

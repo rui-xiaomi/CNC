@@ -8,6 +8,7 @@ using CncLoader.Common.DependencyInjection;
 using CncLoader.Common.Logging;
 using CncLoader.Communication.DependencyInjection;
 using CncLoader.Communication.Plc;
+using CncLoader.Core.Abstractions;
 using CncLoader.Core.DependencyInjection;
 using CncLoader.Core.Polling;
 using CncLoader.Data.DependencyInjection;
@@ -70,6 +71,8 @@ public partial class App : Application
         var configuration = new ConfigurationBuilder()
             .SetBasePath(baseDir)
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            // 本机敏感值（如 DB 口令）放 gitignored 的 appsettings.local.json，禁止提交明文到 appsettings.json。
+            .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)
             .AddEnvironmentVariables()
             .Build();
 
@@ -160,8 +163,15 @@ public partial class App : Application
     private void OnDispatcherException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         Log.Logger.Error(e.Exception, "UI 线程未处理异常");
-        MessageBox.Show($"发生未处理异常：\n{e.Exception.Message}", "智造云枢 LineOS",
-            MessageBoxButton.OK, MessageBoxImage.Warning);
+        // 7×24 无人值守：禁止弹阻断式模态框（无人点会冻结 UI 线程、后台仍派工）；改用非阻塞 Growl + 日志（P0-4）。
+        try
+        {
+            _host?.Services.GetService<IUserNotificationService>()?.Error($"发生未处理异常：{e.Exception.Message}");
+        }
+        catch (Exception notifyEx)
+        {
+            Log.Logger.Warning(notifyEx, "未处理异常通知失败");
+        }
         e.Handled = true; // 不崩溃退出
     }
 

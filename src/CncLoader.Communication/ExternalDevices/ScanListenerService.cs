@@ -13,7 +13,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
     private readonly ILogger<ScanListenerService> _logger;
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
-    private readonly ConcurrentBag<TcpClient> _clients = new();
+    private readonly ConcurrentDictionary<TcpClient, byte> _clients = new();
     private readonly ConcurrentQueue<ScanRecord> _recent = new();
     private const int MaxRecent = 50;
     private int _connectedCount;
@@ -53,7 +53,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
         {
             _cts?.Cancel();
             _listener.Stop();
-            foreach (var c in _clients)
+            foreach (var c in _clients.Keys)
                 try { c.Close(); } catch { }
             _clients.Clear();
             UpdateConnectedCount(0);
@@ -80,8 +80,16 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
         {
             TcpClient client;
             try { client = await _listener.AcceptTcpClientAsync(ct); }
-            catch { break; }
-            _clients.Add(client);
+            catch (OperationCanceledException) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch (Exception ex)
+            {
+                // 真实监听故障：置 IsListening=false，避免 UI 误报「在监听」（P2-3）。
+                _logger.LogWarning(ex, "扫码枪监听 accept 异常，停止监听");
+                _listener = null;
+                break;
+            }
+            _clients.TryAdd(client, 0);
             UpdateConnectedCount(_connectedCount + 1);
             _ = HandleClientAsync(client, ct);
         }
@@ -117,6 +125,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
         finally
         {
             try { client.Close(); } catch { }
+            _clients.TryRemove(client, out _); // 断开即摘除，避免关闭的 TcpClient 无界累积（P2-3）
             UpdateConnectedCount(Math.Max(0, _connectedCount - 1));
         }
     }

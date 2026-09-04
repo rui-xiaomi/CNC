@@ -88,7 +88,9 @@ public sealed class WorkRecordService : IWorkRecordService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var today = DateTime.Today;
-        var q = db.WorkRecords.AsNoTracking().Where(x => x.WorkStartTime != null && x.WorkStartTime.Value.Date == today);
+        var tomorrow = today.AddDays(1);
+        // 范围比较可走 WORK_START_TIME 索引；DateTime.Date 是列上函数会使索引失效（P1-2）。
+        var q = db.WorkRecords.AsNoTracking().Where(x => x.WorkStartTime >= today && x.WorkStartTime < tomorrow);
         var ok = await q.CountAsync(x => x.WorkResult == "0", ct);
         var ng = await q.CountAsync(x => x.WorkResult == "1", ct);
         var total = await q.CountAsync(ct);

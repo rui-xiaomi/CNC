@@ -592,6 +592,7 @@ public sealed class RoutingSoftDeleteQueryTests
             => GetAllAsync(ct);
         public Task<IReadOnlyList<PlcPointDefinition>> GetByEquipmentAsync(long equipmentId, CancellationToken ct = default)
             => GetAllAsync(ct);
+        public void Invalidate() { }
     }
 
     private sealed class NoopPlcOps : IPlcOperationService
@@ -735,6 +736,7 @@ public sealed class RoutingSoftDeleteQueryTests
         public Task MarkHandledAsync(long id, string author, CancellationToken ct = default) => Task.CompletedTask;
         public Task<int> DeleteAllAsync(CancellationToken ct = default) => Task.FromResult(0);
         public Task<int> GetUnhandledCountAsync(CancellationToken ct = default) => Task.FromResult(0);
+        public Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => Task.FromResult(0);
     }
 
     private sealed class NoopWorkRecords : IWorkRecordService

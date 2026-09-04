@@ -21,7 +21,12 @@ public static class DataServiceCollectionExtensions
         services.AddDbContextFactory<CncDbContext>((sp, options) =>
         {
             var connFactory = sp.GetRequiredService<IDatabaseConnectionFactory>();
-            options.UseMySql(connFactory.BuildConnectionString(), serverVersion);
+            options.UseMySql(connFactory.BuildConnectionString(), serverVersion, mySql =>
+            {
+                // 现场网络抖动自动重试（瞬断不直接失败）；命令超时 30s（大表 ExecuteDelete 兜底）。
+                mySql.EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(5), errorNumbersToAdd: null);
+                mySql.CommandTimeout(30);
+            });
         });
 
         services.AddSingleton<IPlcPointRoutingStore, PlcPointRoutingStore>();

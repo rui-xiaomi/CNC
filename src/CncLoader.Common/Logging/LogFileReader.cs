@@ -45,15 +45,12 @@ public sealed class LogFileReader : ILogFileReader
         var file = FindLatestLog();
         if (file is null) return Array.Empty<LogLine>();
 
-        var raw = await ReadAllLinesSharedAsync(file, ct);
-        var parsed = ParseEntries(raw);
+        int? min = null;
+        if (!string.IsNullOrWhiteSpace(minLevel) && LevelRank.TryGetValue(minLevel, out var m)) min = m;
 
-        if (!string.IsNullOrWhiteSpace(minLevel) && LevelRank.TryGetValue(minLevel, out var min))
-            parsed = parsed.Where(l => LevelRank.TryGetValue(l.Level, out var r) && r >= min).ToList();
-
-        // 尾部 maxLines，倒序（最新在前）
-        var tail = parsed.Count > maxLines ? parsed.Skip(parsed.Count - maxLines).ToList() : parsed;
-        tail.Reverse();
+        // 流式读取 + 过滤 + 只保留末尾 maxLines：避免大日志文件全量读入内存（P2-7）。
+        var tail = await ReadTailEntriesAsync(file, maxLines, min, ct);
+        tail.Reverse(); // 倒序（最新在前）
         return tail;
     }
 
@@ -66,36 +63,38 @@ public sealed class LogFileReader : ILogFileReader
             .FirstOrDefault()?.FullName;
     }
 
-    private static async Task<List<string>> ReadAllLinesSharedAsync(string path, CancellationToken ct)
+    private static async Task<List<LogLine>> ReadTailEntriesAsync(string path, int maxLines, int? min, CancellationToken ct)
     {
-        var lines = new List<string>();
+        var result = new List<LogLine>(maxLines + 1);
         await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(fs, Encoding.UTF8);
+
+        LogLine? current = null;
         string? line;
         while ((line = await reader.ReadLineAsync(ct)) is not null)
-            lines.Add(line);
-        return lines;
-    }
-
-    private static List<LogLine> ParseEntries(IReadOnlyList<string> lines)
-    {
-        var result = new List<LogLine>();
-        foreach (var line in lines)
         {
             var m = HeadRegex.Match(line);
             if (m.Success)
             {
+                if (current is not null) AddIfPass(current, min, result, maxLines);
                 DateTime? ts = DateTime.TryParse(m.Groups["ts"].Value, out var t) ? t : null;
-                result.Add(new LogLine(ts, m.Groups["lvl"].Value.ToUpperInvariant(), m.Groups["msg"].Value));
+                current = new LogLine(ts, m.Groups["lvl"].Value.ToUpperInvariant(), m.Groups["msg"].Value);
             }
-            else if (result.Count > 0)
+            else if (current is not null)
             {
                 // 异常堆栈等续行：并入上一条
-                var prev = result[^1];
-                result[^1] = prev with { Text = prev.Text + Environment.NewLine + line };
+                current = current with { Text = current.Text + Environment.NewLine + line };
             }
             // 无法解析且无上一条：丢弃（罕见）
         }
+        if (current is not null) AddIfPass(current, min, result, maxLines);
         return result;
+    }
+
+    private static void AddIfPass(LogLine entry, int? min, List<LogLine> result, int maxLines)
+    {
+        if (min.HasValue && (!LevelRank.TryGetValue(entry.Level, out var r) || r < min.Value)) return;
+        result.Add(entry);
+        if (result.Count > maxLines) result.RemoveAt(0); // 只保留末尾 maxLines
     }
 }

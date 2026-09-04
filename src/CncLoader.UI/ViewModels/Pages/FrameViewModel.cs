@@ -99,8 +99,17 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         await LoadEquipmentOptionsAsync();
         await ReloadAsync();
-        _refreshTimer.Start();
     }
+
+    /// <summary>激活：启动 1.5s 刷新定时器并立即刷一轮（隐藏页不刷库，P2-2）。</summary>
+    public override void OnActivated()
+    {
+        _refreshTimer.Start();
+        _ = ReloadAsync();
+    }
+
+    /// <summary>失活：停刷新定时器。</summary>
+    public override void OnDeactivated() => _refreshTimer.Stop();
 
     private async Task LoadEquipmentOptionsAsync()
     {
