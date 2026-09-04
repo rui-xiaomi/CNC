@@ -1,0 +1,96 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:p="clr-namespace:CncLoader.UI.ViewModels.Pages"
+                    xmlns:conv="clr-namespace:CncLoader.UI.Converters">
+
+    <!-- surface: view-agv（AGV 管理） -->
+    <!-- ============================================================
+         AGV 管理（连通性测试，仅测试，按原型一比一）
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type p:AgvViewModel}">
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="700" HorizontalAlignment="Left">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="AGV 连通性测试" Style="{StaticResource PanelTitle}"/>
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="2"
+                                    Padding="6,1" Margin="8,0,0,0" Background="{StaticResource SurfaceBrush}">
+                                <TextBlock Text="仅测试，不纳入调度" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+
+                    <!-- 表单 -->
+                    <StackPanel DockPanel.Dock="Top" Margin="14,12,14,8">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="名称" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="通信方式" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding CommWayOptions}" SelectedItem="{Binding SelectedCommWay}"
+                                      Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="地址" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="84,0,0,0">
+                            <Button Content="测试连接" Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding TestConnectionCommand}"
+                                    IsEnabled="{Binding IsTesting, Converter={StaticResource InverseConv}}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- 测试结果 -->
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                            <TextBlock Text="测试结果" Style="{StaticResource PanelTitle}"/>
+                            <Border BorderBrush="{Binding ResultBadgeBrushKey, Converter={StaticResource BrushConv}}"
+                                    BorderThickness="1" CornerRadius="2" Padding="6,1" Margin="8,0,0,0"
+                                    Background="{StaticResource SurfaceBrush}">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                             Fill="{Binding ResultBadgeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                    <TextBlock Text="{Binding ResultBadgeText}" FontSize="12"
+                                               Foreground="{Binding ResultBadgeBrushKey, Converter={StaticResource BrushConv}}"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                    <Border Background="{StaticResource TermBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
+                            Padding="10,8">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" conv:AutoScroll.ToEnd="True">
+                            <ItemsControl ItemsSource="{Binding TerminalLines}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontFamily="{StaticResource FontMono}"
+                                                   FontSize="11" Foreground="{StaticResource ChromeFgBrush}" LineHeight="18"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="1" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+</ResourceDictionary>

@@ -29,7 +29,8 @@ public sealed class ProductionRoutingGateWiringTests
 
         Assert.Multiple(() =>
         {
-            AssertUniqueImplementation<IRcsTaskService>(services, typeof(RcsTaskService));
+            // IRcsTaskService 经 factory 构造（内部自建 internal RcsClient，容器里没有裸客户端）
+            AssertUniqueFactoryRegistration<IRcsTaskService>(services);
             AssertUniqueImplementation<IManagedDispatchRouteResolver>(services, typeof(ManagedDispatchRouteResolver));
             AssertUniqueImplementation<IRoutingAvailabilityValidator>(services, typeof(RoutingAvailabilityValidator));
             AssertUniqueImplementation<IRcsTaskStore>(services, typeof(RcsTaskStore));
@@ -39,11 +40,9 @@ public sealed class ProductionRoutingGateWiringTests
             AssertUniqueImplementation<IChangeFrameOrchestrator>(services, typeof(ChangeFrameOrchestrator));
             AssertUniqueImplementation<IInventoryService>(services, typeof(InventoryService));
 
-            var client = services.Where(d => d.ServiceType == typeof(IRcsClient)).ToList();
-            Assert.That(client, Has.Count.EqualTo(1), "IRcsClient 须唯一注册");
-            Assert.That(client[0].ImplementationFactory, Is.Not.Null,
-                "生产 IRcsClient 经 factory 构造 RcsClient");
-            Assert.That(client[0].Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            // 结构性门禁：容器里不得有裸 IRcsClient 可拿，新增服务无法 GetRequiredService 绕过门禁
+            Assert.That(services.Where(d => d.ServiceType == typeof(IRcsClient)), Is.Empty,
+                "IRcsClient 不得注册进容器；出站客户端只能由 RcsTaskService 内部持有");
 
             Assert.That(services.Any(d =>
                     d.ImplementationType == typeof(RcsTaskTracker)
@@ -140,6 +139,15 @@ public sealed class ProductionRoutingGateWiringTests
             var storeCtor = typeof(RcsTaskStore).GetConstructors()[0];
             Assert.That(storeCtor.GetParameters().Select(p => p.ParameterType),
                 Does.Contain(typeof(IDbContextFactory<CncDbContext>)));
+
+            // RcsTaskService 经 factory 注册，不在上面按 ImplementationType 的枚举里，单独审计
+            foreach (var p in typeof(RcsTaskService)
+                         .GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                         .SelectMany(c => c.GetParameters()))
+            {
+                Assert.That(p.ParameterType == typeof(CncDbContext), Is.False,
+                    "RcsTaskService 不得直接注入 DbContext");
+            }
         });
     }
 
@@ -154,11 +162,12 @@ public sealed class ProductionRoutingGateWiringTests
 
         Assert.Multiple(() =>
         {
-            AssertLastImplementation<IRcsTaskService>(services, typeof(RcsTaskService));
+            Assert.That(services.Last(d => d.ServiceType == typeof(IRcsTaskService)).ImplementationFactory,
+                Is.Not.Null, "IRcsTaskService 末位仍为生产 factory");
             AssertLastImplementation<IManagedDispatchRouteResolver>(services, typeof(ManagedDispatchRouteResolver));
             AssertLastImplementation<IRoutingAvailabilityValidator>(services, typeof(RoutingAvailabilityValidator));
             Assert.That(services.Count(d => d.ServiceType == typeof(IRcsTaskService)), Is.EqualTo(1));
-            Assert.That(services.Count(d => d.ServiceType == typeof(IRcsClient)), Is.EqualTo(1));
+            Assert.That(services.Count(d => d.ServiceType == typeof(IRcsClient)), Is.EqualTo(0));
         });
     }
 
@@ -196,10 +205,21 @@ public sealed class ProductionRoutingGateWiringTests
         Assert.That(last.ImplementationType, Is.EqualTo(expectedImpl));
     }
 
+    private static void AssertUniqueFactoryRegistration<TService>(IServiceCollection services)
+    {
+        var matches = services.Where(d => d.ServiceType == typeof(TService)).ToList();
+        Assert.That(matches, Has.Count.EqualTo(1), $"{typeof(TService).Name} 注册数");
+        Assert.That(matches[0].ImplementationFactory, Is.Not.Null,
+            $"{typeof(TService).Name} 须经 factory 构造");
+        Assert.That(matches[0].Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+    }
+
     private static void AssertNoOptionalParameters(Type type)
     {
-        var ctors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-        Assert.That(ctors, Is.Not.Empty, $"{type.Name} 须有公共构造");
+        // 含非公开构造：门禁类型的构造可能因 internal 入参降为 internal（如 RcsTaskService 持 IRcsClient）
+        var ctors = type.GetConstructors(
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.That(ctors, Is.Not.Empty, $"{type.Name} 须有构造");
         foreach (var ctor in ctors)
         {
             foreach (var p in ctor.GetParameters())
@@ -212,7 +232,8 @@ public sealed class ProductionRoutingGateWiringTests
 
     private static void AssertRequiredParameter(Type type, Type parameterType)
     {
-        var p = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+        var p = type.GetConstructors(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
             .SelectMany(c => c.GetParameters())
             .FirstOrDefault(x => x.ParameterType == parameterType
                                  || Nullable.GetUnderlyingType(x.ParameterType) == parameterType);

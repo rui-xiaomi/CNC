@@ -439,8 +439,18 @@ internal sealed class TracingSlots : ISlotAccountService
     public Task<IReadOnlyList<CompletedPendingConfirm>> ListCompletedPendingConfirmAsync(
         IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<CompletedPendingConfirm>>(Array.Empty<CompletedPendingConfirm>());
-    public Task<bool> ConfirmAsync(string taskId, CancellationToken ct = default) => Task.FromResult(false);
-    public Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default) => Task.FromResult(false);
+    public int ConfirmPutCount { get; private set; }
+    public int ConfirmTakeCount { get; private set; }
+    public Task<bool> ConfirmAsync(string taskId, CancellationToken ct = default)
+    {
+        ConfirmPutCount++;
+        return Task.FromResult(false);
+    }
+    public Task<bool> ConfirmTakeAsync(string taskId, CancellationToken ct = default)
+    {
+        ConfirmTakeCount++;
+        return Task.FromResult(false);
+    }
     public Task<SlotMutationResult> SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default)
         => Task.FromResult(SlotMutationResult.From(SlotMutationStatus.NotFound, frameId, slotNo, null));
     public Task<SlotLocation?> LocateMaterialAsync(string materialId, CancellationToken ct = default)
@@ -520,16 +530,26 @@ internal sealed class TracingPlcOps : IPlcOperationService
         => Task.FromResult(new PlcWriteResult(registerAddress, expectedValue, null, true, 0, null));
 }
 
+/// <summary>
+/// 路由 fake：默认全部解析成功，返回的编码刻意不使用 <c>FRAME-{id}</c> 形状——
+/// 那是生产 <c>RouteResolver.ResolveFrameCellAsync</c> 明令禁止生成的假码，fake 不得示范。
+/// 需要走「缺 LOCATION_MAP 拒发」路径时把对应 <c>Missing*</c> 置 true，解析即返回 null。
+/// </summary>
 internal sealed class FixedRoutes : IRouteResolver
 {
+    public bool MissingUpload { get; set; }
+    public bool MissingUnload { get; set; }
+    public bool MissingPositionCell { get; set; }
+    public bool MissingFrameCell { get; set; }
+
     public Task<(string from, string to)?> ResolveUploadAsync(long equipmentId, long positionId, CancellationToken ct = default)
-        => Task.FromResult<(string, string)?>(("FROM-A", "TO-B"));
+        => Task.FromResult(MissingUpload ? null : ((string, string)?)("FROM-A", "TO-B"));
     public Task<(string from, string to)?> ResolveUnloadAsync(long equipmentId, long positionId, CancellationToken ct = default)
-        => Task.FromResult<(string, string)?>(("POS-CELL", "UNLOAD-CELL"));
+        => Task.FromResult(MissingUnload ? null : ((string, string)?)("POS-CELL", "UNLOAD-CELL"));
     public Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default)
-        => Task.FromResult<string?>($"CELL-EQ{equipmentId}-P{positionId}");
+        => Task.FromResult(MissingPositionCell ? null : $"CELL-EQ{equipmentId}-P{positionId}");
     public Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default)
-        => Task.FromResult<string?>($"FRAME-{frameId}");
+        => Task.FromResult(MissingFrameCell ? null : $"RACK-CELL-{frameId}");
 }
 
 internal sealed class UnusedDbContextFactory : IDbContextFactory<CncDbContext>
@@ -572,9 +592,13 @@ internal sealed class NoopAlarms : IAlarmEventService
         RaiseCount++;
         return Task.FromResult(0L);
     }
+    public int NotFoundCount { get; private set; }
+    public string? LastNotFoundReason { get; private set; }
     public Task<long> RaiseRcsTaskNotFoundAsync(string rcsTaskId, string? reason = null, CancellationToken ct = default)
     {
         RaiseCount++;
+        NotFoundCount++;
+        LastNotFoundReason = reason;
         return Task.FromResult(0L);
     }
     public Task<long> RaiseRcsRedoLimitAsync(string rcsTaskId, int maxRedo, string? reason = null, CancellationToken ct = default)
@@ -673,11 +697,20 @@ internal static class DispatchGateHarness
         IDispatchQueue? queue = null,
         IAlarmEventService? alarms = null,
         IEquipmentRoutingStore? routingStore = null,
-        IRoutingAvailabilityValidator? validator = null)
+        IRoutingAvailabilityValidator? validator = null,
+        IRouteResolver? routes = null,
+        IPlcPointSource? points = null,
+        IRcsTaskStore? taskStore = null,
+        int hasMatRecheckFailThreshold = 6)
     {
         var options = Options.Create(new AppOptions
         {
-            Rcs = new RcsOptions { SchedulerEnabled = false, ReconcileRetryIntervalMs = 5000 }
+            Rcs = new RcsOptions
+            {
+                SchedulerEnabled = false,
+                ReconcileRetryIntervalMs = 5000,
+                HasMatRecheckFailThreshold = hasMatRecheckFailThreshold
+            }
         });
         var v = validator ?? new RoutingAvailabilityValidator(
             routingStore ?? throw new ArgumentNullException(nameof(routingStore),
@@ -688,10 +721,10 @@ internal static class DispatchGateHarness
         return new PositionScheduler(
             store ?? new SignalStateStore(),
             tasks,
-            new NoopTaskStore(),
-            new EmptyPoints(),
+            taskStore ?? new NoopTaskStore(),
+            points ?? new EmptyPoints(),
             plc,
-            new FixedRoutes(),
+            routes ?? new FixedRoutes(),
             queue ?? new PriorityDispatchQueue(),
             alarms ?? new NoopAlarms(),
             options,

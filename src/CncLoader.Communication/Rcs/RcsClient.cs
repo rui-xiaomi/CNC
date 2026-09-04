@@ -11,7 +11,7 @@ namespace CncLoader.Communication.Rcs;
 /// RCS 出站 HTTP 客户端。封装公共字段、序列化、超时、网络级重试（指数退避 ≤ MaxRetries），
 /// 每次调用双向报文落 <see cref="IRcsMessageLog"/>。地址/超时/重试读 <see cref="IRcsRuntimeConfig"/>（可热更新）。
 /// </summary>
-public sealed class RcsClient : IRcsClient
+internal sealed class RcsClient : IRcsClient
 {
     private const string TransitPath = "/api/ExternalInterfaces/transitTask";
     private const string ExcutePath = "/api/ExternalInterfaces/excuteTask";

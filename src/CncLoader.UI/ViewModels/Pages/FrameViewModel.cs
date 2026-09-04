@@ -8,7 +8,7 @@ using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
 using CncLoader.Core.Rcs;
 using CncLoader.Core.State;
-using CncLoader.UI.Views.Dialogs;
+using CncLoader.UI.Services;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -24,10 +24,13 @@ public sealed partial class FrameViewModel : PageViewModelBase
     private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
     private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
+    private readonly IDialogService _dialogs;
     private readonly DispatcherTimer _refreshTimer;
 
     public FrameViewModel(IFrameService service, ISlotAccountService slots, IInventoryService inventory,
-        IPositionScheduler scheduler, ICurrentUser user, IUserNotificationService notify)
+        IPositionScheduler scheduler, ICurrentUser user, IUserNotificationService notify,
+        IUiDispatcher ui, IDialogService dialogs)
     {
         _service = service;
         _slots = slots;
@@ -35,6 +38,8 @@ public sealed partial class FrameViewModel : PageViewModelBase
         _scheduler = scheduler;
         _user = user;
         _notify = notify;
+        _ui = ui;
+        _dialogs = dialogs;
         Frames = new ObservableCollection<FrameRowVm>();
         Bindings = new ObservableCollection<FrameBindRow>();
         Layers = new ObservableCollection<SlotLayerVm>();
@@ -185,95 +190,89 @@ public sealed partial class FrameViewModel : PageViewModelBase
     {
         try
         {
-            var dlg = new FrameEditDialog { Owner = Application.Current?.MainWindow };
-            if (dlg.ShowDialog() != true || dlg.Result is null) return;
+            var created = _dialogs.CreateFrame();
+            if (created is null) return;
 
-            var id = await _service.CreateFrameAsync(dlg.Result, _user.Name);
-            HandyControl.Controls.Growl.Success(
-                $"料架 {dlg.Result.Name} 已新增，预建 {dlg.Result.LayerTotal * dlg.Result.SlotsPerLayer} 个空槽位。");
-            StatusMessage = $"料架 {dlg.Result.Name} 已新增";
+            var id = await _service.CreateFrameAsync(created, _user.Name);
+            _notify.Success(
+                $"料架 {created.Name} 已新增，预建 {created.LayerTotal * created.SlotsPerLayer} 个空槽位。");
+            StatusMessage = $"料架 {created.Name} 已新增";
             await ReloadAsync();
             SelectedFrame = Frames.FirstOrDefault(f => f.Id == id);
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"新增失败：{ex.Message}");
+            _notify.Error($"新增失败：{ex.Message}");
         }
     }
 
     [RelayCommand]
     private async Task EditFrameAsync()
     {
-        if (SelectedFrame is null) { HandyControl.Controls.Growl.Warning("请先选中料架。"); return; }
+        if (SelectedFrame is null) { _notify.Warning("请先选中料架。"); return; }
         try
         {
             var edit = await _service.GetFrameForEditAsync(SelectedFrame.Id);
-            if (edit is null) { HandyControl.Controls.Growl.Warning("料架不存在。"); return; }
-            var dlg = new FrameEditDialog(edit) { Owner = Application.Current?.MainWindow };
-            if (dlg.ShowDialog() != true || dlg.EditResult is null) return;
+            if (edit is null) { _notify.Warning("料架不存在。"); return; }
+            var edited = _dialogs.EditFrame(edit);
+            if (edited is null) return;
 
-            await _service.UpdateFrameAsync(dlg.EditResult, _user.Name);
-            HandyControl.Controls.Growl.Success($"料架 {dlg.EditResult.Name} 已更新。");
+            await _service.UpdateFrameAsync(edited, _user.Name);
+            _notify.Success($"料架 {edited.Name} 已更新。");
             var keepId = SelectedFrame.Id;
             await ReloadAsync();
             SelectedFrame = Frames.FirstOrDefault(f => f.Id == keepId) ?? Frames.FirstOrDefault();
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"编辑失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"编辑失败：{ex.Message}"); }
     }
 
     [RelayCommand]
     private async Task DeleteFrameAsync()
     {
-        if (SelectedFrame is null) { HandyControl.Controls.Growl.Warning("请先选中料架。"); return; }
+        if (SelectedFrame is null) { _notify.Warning("请先选中料架。"); return; }
         try
         {
             var check = await _service.CheckDeleteFrameAsync(SelectedFrame.Id);
-            if (!check.CanDelete) { HandyControl.Controls.Growl.Warning(check.Message); return; }
-            var confirm = HandyControl.Controls.MessageBox.Show(
-                $"确认删除料架 {SelectedFrame.Name}？（软删，可恢复）", "删除确认",
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (confirm != MessageBoxResult.OK) return;
+            if (!check.CanDelete) { _notify.Warning(check.Message); return; }
+            if (!_notify.Confirm($"确认删除料架 {SelectedFrame.Name}？（软删，可恢复）", "删除确认")) return;
 
             await _service.DeleteFrameAsync(SelectedFrame.Id, _user.Name);
-            HandyControl.Controls.Growl.Success($"料架 {SelectedFrame.Name} 已删除。");
+            _notify.Success($"料架 {SelectedFrame.Name} 已删除。");
             await ReloadAsync();
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"删除失败：{ex.Message}"); }
     }
 
     [RelayCommand]
     private async Task BindEquipmentAsync()
     {
-        if (SelectedFrame is null) { HandyControl.Controls.Growl.Warning("请先选中料架。"); return; }
-        if (SelectedBindEquipment is null) { HandyControl.Controls.Growl.Warning("请选择要绑定的机台。"); return; }
+        if (SelectedFrame is null) { _notify.Warning("请先选中料架。"); return; }
+        if (SelectedBindEquipment is null) { _notify.Warning("请选择要绑定的机台。"); return; }
         try
         {
             var eqId = SelectedBindEquipment.Id;
             await _service.BindEquipmentAsync(SelectedFrame.Id, eqId, SelectedBindRole.Code, _user.Name);
             _scheduler.InvalidateFrameBindingCache(eqId);
-            HandyControl.Controls.Growl.Success($"已绑定：{SelectedBindEquipment.DisplayName} · {SelectedBindRole.Label}");
+            _notify.Success($"已绑定：{SelectedBindEquipment.DisplayName} · {SelectedBindRole.Label}");
             await LoadDetailAsync(SelectedFrame.Id);
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"绑定失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"绑定失败：{ex.Message}"); }
     }
 
     [RelayCommand]
     private async Task UnbindAsync(FrameBindRow? row)
     {
         if (row is null || SelectedFrame is null) return;
-        var confirm = HandyControl.Controls.MessageBox.Show(
-            $"确认解绑 {row.EquipmentDisplay} · {row.RoleText}？", "解绑确认",
-            MessageBoxButton.OKCancel, MessageBoxImage.Question);
-        if (confirm != MessageBoxResult.OK) return;
+        if (!_notify.Confirm($"确认解绑 {row.EquipmentDisplay} · {row.RoleText}？", "解绑确认")) return;
         try
         {
             await _service.UnbindAsync(row.BindId, _user.Name);
             _scheduler.InvalidateFrameBindingCache(row.EquipmentId);
-            HandyControl.Controls.Growl.Success($"已解绑 {row.EquipmentDisplay} · {row.RoleText}");
+            _notify.Success($"已解绑 {row.EquipmentDisplay} · {row.RoleText}");
             await LoadDetailAsync(SelectedFrame.Id);
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"解绑失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"解绑失败：{ex.Message}"); }
     }
 
     partial void OnSelectedFrameChanged(FrameRowVm? value)
@@ -455,20 +454,14 @@ public sealed partial class FrameViewModel : PageViewModelBase
 
     private void OnInventoryCompleted(object? sender, InventoryResultEvent e)
     {
-        // headless 无 Dispatcher 时同步执行，便于单测观察通知。
-        void Apply()
+        _ui.Invoke(() =>
         {
             NotifyInventoryFinalResult(e);
             if (e.State == "COMPLETED"
                 && SelectedFrame is not null
                 && SelectedFrame.Id == e.FrameId)
                 _ = LoadDetailAsync(e.FrameId);
-        }
-
-        if (Application.Current?.Dispatcher is { } dispatcher)
-            dispatcher.Invoke(Apply);
-        else
-            Apply();
+        });
     }
 
     /// <summary>最终盘点回写通知：只发一次；发起 Info 不算完成。</summary>

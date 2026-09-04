@@ -1,0 +1,638 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:p="clr-namespace:CncLoader.UI.ViewModels.Pages"
+                    xmlns:conv="clr-namespace:CncLoader.UI.Converters">
+
+    <!-- surface: view-dashboard（监控看板） -->
+    <!-- ============================================================
+         监控看板（对齐 docs/prototype：一屏 · KPI + 产线流 + 左机台/右记录告警）
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type p:DashboardViewModel}">
+        <Grid Margin="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*" MinHeight="200"/>
+            </Grid.RowDefinitions>
+
+            <!-- ① KPI：悬浮卡 + 波形底纹 + 语义图标 -->
+            <UniformGrid Grid.Row="0" Columns="4" Margin="0,0,0,8">
+                <Border Style="{StaticResource DashKpiCard}" Margin="0,0,6,0"
+                        ToolTip="PLC 在线的机台数 / 配置机台总数">
+                    <Grid>
+                        <StackPanel Margin="12,8">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0" VerticalAlignment="Center"
+                                      Data="{StaticResource DashIconOnline}" Fill="{StaticResource DashAccentBrush}"/>
+                                <TextBlock Text="在线机台" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <TextBlock Text="{Binding OnlineMachines}" FontFamily="{StaticResource FontMono}" FontSize="24"
+                                           Foreground="{StaticResource DashAccentBrush}"/>
+                                <TextBlock Text="{Binding TotalMachines, StringFormat=' / {0}'}" FontFamily="{StaticResource FontMono}"
+                                           FontSize="15" Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Bottom" Margin="0,0,0,2"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding OnlineSubText}" Style="{StaticResource MutedText}" FontSize="10.5" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource DashKpiCard}" Margin="6,0"
+                        ToolTip="今日各工位 PLC 出 OK 的次数；非整件合格数">
+                    <Grid>
+                        <StackPanel Margin="12,8">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0" VerticalAlignment="Center"
+                                      Data="{StaticResource DashIconOk}" Fill="{StaticResource OkBrush}"/>
+                                <TextBlock Text="工位 OK" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding OkCount}" FontFamily="{StaticResource FontMono}" FontSize="24" Margin="0,6,0,0"
+                                       Foreground="{StaticResource OkBrush}"/>
+                            <TextBlock Text="{Binding OkSubText}" Style="{StaticResource MutedText}" FontSize="10.5" Margin="0,4,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource DashKpiCard}" Margin="6,0"
+                        ToolTip="今日各工位 PLC 出 NG 的次数">
+                    <Grid>
+                        <StackPanel Margin="12,8">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0" VerticalAlignment="Center"
+                                      Data="{StaticResource DashIconNg}" Fill="{StaticResource NgBrush}"/>
+                                <TextBlock Text="工位 NG" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding NgCount}" FontFamily="{StaticResource FontMono}" FontSize="24" Margin="0,6,0,0"
+                                       Foreground="{StaticResource NgBrush}"/>
+                            <TextBlock Text="{Binding NgSubText}" Style="{StaticResource MutedText}" FontSize="10.5" Margin="0,4,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource DashKpiCard}" Margin="6,0,0,0"
+                        ToolTip="库内未确认的告警条数">
+                    <Grid>
+                        <StackPanel Margin="12,8">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0" VerticalAlignment="Center"
+                                      Data="{StaticResource DashIconAlarm}" Fill="{StaticResource DashAlarmBrush}"/>
+                                <TextBlock Text="未处理告警" Style="{StaticResource MutedText}" FontSize="11"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding AlarmCount}" FontFamily="{StaticResource FontMono}" FontSize="24" Margin="0,6,0,0"
+                                       Foreground="{StaticResource DashAlarmBrush}"/>
+                            <TextBlock Text="{Binding AlarmSubText}" Style="{StaticResource MutedText}" FontSize="10.5" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </UniformGrid>
+
+            <!-- ①b 启动对账状态条（全局调度门闩；与工位 Alarm / PLC 在线 / RCS 连接灯分离） -->
+            <Border Grid.Row="1" Style="{StaticResource DashPanel}" Margin="0,0,0,8" Padding="12,8"
+                    Background="{Binding ReconcileSoftBrushKey, Converter={StaticResource BrushConv}}"
+                    AutomationProperties.Name="启动对账状态"
+                    ToolTip="{Binding ReconcileDetailToolTip}">
+                <DockPanel LastChildFill="True">
+                    <Ellipse DockPanel.Dock="Left" Width="9" Height="9" Margin="0,0,10,0" VerticalAlignment="Center"
+                             Fill="{Binding ReconcileBrushKey, Converter={StaticResource BrushConv}}"/>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding ReconcileTitle}" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{Binding ReconcileBrushKey, Converter={StaticResource BrushConv}}"/>
+                        <TextBlock Text="{Binding ReconcileSubText}" Style="{StaticResource MutedText}" FontSize="11"
+                                   Margin="0,3,0,0" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                   MaxHeight="36"
+                                   ToolTip="{Binding ReconcileDetailToolTip}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- ② 产线流：DashPanel + 选中青光 + 状态矢量图标 -->
+            <Border Grid.Row="2" Style="{StaticResource DashPanel}" Margin="0,0,0,8" Padding="12,8">
+                <DockPanel>
+                    <Border DockPanel.Dock="Left" BorderBrush="{StaticResource DashBorderBrush}" BorderThickness="0,0,1,0"
+                            Padding="0,0,12,0" Margin="0,0,8,0" VerticalAlignment="Stretch">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="产线流" FontSize="10.5" Foreground="{StaticResource FgMutedBrush}"
+                                       FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding FlowLineCode}" FontSize="12" FontWeight="SemiBold" Margin="0,6,0,0"
+                                       Foreground="{StaticResource FgBrush}"/>
+                        </StackPanel>
+                    </Border>
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding FlowNodes}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Stretch">
+                                        <Border MinWidth="128" Cursor="Hand" CornerRadius="6" Margin="0"
+                                                Background="{StaticResource DashSurface2Brush}"
+                                                ToolTip="{Binding SummaryText}">
+                                            <Border.InputBindings>
+                                                <MouseBinding MouseAction="LeftClick"
+                                                              Command="{Binding DataContext.SelectFlowNodeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              CommandParameter="{Binding}"/>
+                                            </Border.InputBindings>
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource DashBorderBrush}"/>
+                                                    <Setter Property="BorderThickness" Value="1"/>
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEndFork}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource DashAccentBrush}"/>
+                                                            <Setter Property="BorderThickness" Value="2"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <DockPanel>
+                                                <Border DockPanel.Dock="Top" Height="3"
+                                                        Background="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                <StackPanel Margin="12,8">
+                                                    <DockPanel LastChildFill="False">
+                                                        <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource FgBrush}" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding EquipmentCode}"
+                                                                   FontFamily="{StaticResource FontMono}" FontSize="11"
+                                                                   Foreground="{StaticResource FgMutedBrush}" Margin="8,0,0,0"
+                                                                   VerticalAlignment="Center"/>
+                                                    </DockPanel>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                        <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0"
+                                                              VerticalAlignment="Center"
+                                                              Data="{Binding StateBadge, Converter={StaticResource StateBadgeIconConv}}"
+                                                              Fill="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                        <TextBlock Text="{Binding AggregateDisplay}" FontSize="12" FontWeight="SemiBold"
+                                                                   Foreground="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                    </StackPanel>
+                                                    <UniformGrid Columns="2" Margin="0,8,0,0">
+                                                        <Border Height="20" CornerRadius="3" Margin="0,0,4,0"
+                                                                Background="{Binding Seg1Badge, Converter={StaticResource DashStateBadgeSoftBrushConv}}">
+                                                            <TextBlock Text="{Binding Seg1Text}" FontSize="10.5" FontWeight="SemiBold"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                       Foreground="{Binding Seg1Badge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                        </Border>
+                                                        <Border Height="20" CornerRadius="3" Margin="4,0,0,0"
+                                                                Background="{Binding Seg2Badge, Converter={StaticResource DashStateBadgeSoftBrushConv}}">
+                                                            <TextBlock Text="{Binding Seg2Text}" FontSize="10.5" FontWeight="SemiBold"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                       Foreground="{Binding Seg2Badge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                        </Border>
+                                                    </UniformGrid>
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Border>
+
+                                        <TextBlock Text="›››" FontSize="13" FontWeight="Bold" Width="26"
+                                                   TextAlignment="Center" VerticalAlignment="Center" Opacity="0.55"
+                                                   FontFamily="{StaticResource FontMono}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource IdleBrush}"/>
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ShowArrowAfter}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsEndFork}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding ArrowActive}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource DashAccentBrush}"/>
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEndFork}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
+                                            <StackPanel VerticalAlignment="Center" Margin="0,0,10,0">
+                                                <TextBlock Text="↗" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" HorizontalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource NgBrush}"/>
+                                                            <Setter Property="Opacity" Value="0.45"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding NgArrowActive}" Value="True">
+                                                                    <Setter Property="Opacity" Value="1"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="↘" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource OkBrush}"/>
+                                                            <Setter Property="Opacity" Value="0.45"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding UnloadArrowActive}" Value="True">
+                                                                    <Setter Property="Opacity" Value="1"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <StackPanel>
+                                                <!-- NG 出站：实心橙底 + 深色字；NgArrowActive 时呼吸闪 -->
+                                                <Border CornerRadius="5" Padding="14,10" MinWidth="108" Margin="0,0,0,8"
+                                                        Background="{StaticResource NgBrush}"
+                                                        BorderThickness="0"
+                                                        HorizontalAlignment="Stretch">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding NgArrowActive}" Value="True">
+                                                                    <DataTrigger.EnterActions>
+                                                                        <BeginStoryboard x:Name="NgExitPulse">
+                                                                            <Storyboard RepeatBehavior="Forever" AutoReverse="True" FillBehavior="Stop">
+                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                 From="1" To="0.72" Duration="0:0:0.6"/>
+                                                                            </Storyboard>
+                                                                        </BeginStoryboard>
+                                                                    </DataTrigger.EnterActions>
+                                                                    <DataTrigger.ExitActions>
+                                                                        <StopStoryboard BeginStoryboardName="NgExitPulse"/>
+                                                                    </DataTrigger.ExitActions>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                        <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0"
+                                                              VerticalAlignment="Center"
+                                                              Data="{StaticResource DashIconNg}" Fill="{StaticResource AccentFgBrush}"/>
+                                                        <TextBlock Text="{Binding ForkSecondaryTitle}" FontSize="13" FontWeight="Bold"
+                                                                   VerticalAlignment="Center" Foreground="{StaticResource AccentFgBrush}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <!-- 下料出站：实心绿底 + 深色字；UnloadArrowActive 时呼吸闪 -->
+                                                <Border CornerRadius="5" Padding="14,10" MinWidth="108"
+                                                        Background="{StaticResource OkBrush}"
+                                                        BorderThickness="0">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding UnloadArrowActive}" Value="True">
+                                                                    <DataTrigger.EnterActions>
+                                                                        <BeginStoryboard x:Name="UnloadExitPulse">
+                                                                            <Storyboard RepeatBehavior="Forever" AutoReverse="True" FillBehavior="Stop">
+                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                 From="1" To="0.72" Duration="0:0:0.6"/>
+                                                                            </Storyboard>
+                                                                        </BeginStoryboard>
+                                                                    </DataTrigger.EnterActions>
+                                                                    <DataTrigger.ExitActions>
+                                                                        <StopStoryboard BeginStoryboardName="UnloadExitPulse"/>
+                                                                    </DataTrigger.ExitActions>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                        <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0"
+                                                              VerticalAlignment="Center"
+                                                              Data="{StaticResource DashIconOk}" Fill="{StaticResource AccentFgBrush}"/>
+                                                        <TextBlock Text="{Binding AggregateDisplay}" FontSize="13" FontWeight="Bold"
+                                                                   VerticalAlignment="Center" Foreground="{StaticResource AccentFgBrush}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- ③ 主区：左右共用行高——上段机台∥记录，下段机台∥告警 -->
+            <Grid Grid.Row="3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.06*" MinWidth="300"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="0.94*" MinWidth="320"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="1.1*" MinHeight="120"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="1*" MinHeight="120"/>
+                </Grid.RowDefinitions>
+
+                <Grid.Resources>
+                    <DataTemplate x:Key="DashMachineCardTemplate" DataType="{x:Type p:MachineCardVm}">
+                        <Border Margin="0,6,0,0" VerticalAlignment="Stretch">
+                            <Border.Style>
+                                <Style TargetType="Border" BasedOn="{StaticResource DashPanel}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                            <Setter Property="BorderBrush" Value="{StaticResource DashAccentBrush}"/>
+                                            <Setter Property="BorderThickness" Value="2"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <DockPanel LastChildFill="True">
+                                <Grid DockPanel.Dock="Top" Height="32" Margin="12,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14"
+                                                   Foreground="{StaticResource FgBrush}" VerticalAlignment="Center"/>
+                                        <Border BorderBrush="{StaticResource DashBorderBrush}" BorderThickness="1" CornerRadius="3"
+                                                Padding="8,0" Height="22" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                Background="{StaticResource DashSurface2Brush}">
+                                            <TextBlock Text="{Binding EquipmentCode}" FontFamily="{StaticResource FontMono}" FontSize="11"
+                                                       Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Center"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                                            <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,5,0"
+                                                  VerticalAlignment="Center"
+                                                  Data="{Binding DoorBadge, Converter={StaticResource StateBadgeIconConv}}"
+                                                  Fill="{Binding DoorBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                            <TextBlock Text="{Binding DoorText}" Style="{StaticResource MutedText}" FontSize="11"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,5,0"
+                                                  VerticalAlignment="Center"
+                                                  Data="{Binding SafeBadge, Converter={StaticResource StateBadgeIconConv}}"
+                                                  Fill="{Binding SafeBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                            <TextBlock Text="{Binding SafeText}" Style="{StaticResource MutedText}" FontSize="11"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                                <Border DockPanel.Dock="Top" Height="6" Background="{StaticResource DashCalibrationTicks}"/>
+                                <ItemsControl ItemsSource="{Binding Positions}" Margin="12,8"
+                                              VerticalAlignment="Stretch">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <UniformGrid Columns="1"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemContainerStyle>
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                            <Setter Property="VerticalAlignment" Value="Stretch"/>
+                                        </Style>
+                                    </ItemsControl.ItemContainerStyle>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,8" BorderThickness="1" CornerRadius="4" MinHeight="40"
+                                                    VerticalAlignment="Stretch"
+                                                    Background="{Binding StateBadge, Converter={StaticResource DashStateBadgeSoftBrushConv}}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource DashBorderBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsAlarm}" Value="True">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource DashAlarmBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="4"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" CornerRadius="4,0,0,4"
+                                                            Background="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                    <DockPanel Grid.Column="1" Margin="12,0" LastChildFill="False">
+                                                        <TextBlock DockPanel.Dock="Left" Text="{Binding PositionText}" Width="38"
+                                                                   Style="{StaticResource MutedText}" FontSize="11" VerticalAlignment="Center"/>
+                                                        <TextBlock DockPanel.Dock="Left" Text="{Binding VerdictText}"
+                                                                   FontFamily="{StaticResource FontMono}" FontSize="22" FontWeight="Bold"
+                                                                   Margin="10,0,0,0" VerticalAlignment="Center"
+                                                                   Foreground="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"
+                                                                   Visibility="{Binding IsVerdict, Converter={StaticResource BoolVisConv}}"/>
+                                                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="10,0,0,0"
+                                                                    VerticalAlignment="Center"
+                                                                    Visibility="{Binding IsVerdict, Converter={StaticResource BoolVisInvConv}}">
+                                                            <Path Width="12" Height="12" Stretch="Uniform" Margin="0,0,6,0"
+                                                                  VerticalAlignment="Center"
+                                                                  Data="{Binding StateBadge, Converter={StaticResource StateBadgeIconConv}}"
+                                                                  Fill="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                            <TextBlock Text="{Binding StateDisplay}" FontSize="13" FontWeight="SemiBold"
+                                                                       VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource FgBrush}"/>
+                                                        </StackPanel>
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding MaterialText, StringFormat=物料 {0}}"
+                                                                   FontFamily="{StaticResource FontMono}" FontSize="12"
+                                                                   Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Center"/>
+                                                    </DockPanel>
+                                                    <Button Grid.Column="2" Content="恢复" Height="26" Padding="12,0" FontSize="12"
+                                                            Margin="0,0,12,0" VerticalAlignment="Center"
+                                                            Command="{Binding DataContext.ResetAlarmCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
+                                                            CommandParameter="{Binding}">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource DashDangerButton}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsAlarm}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                    </Button>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </Grid.Resources>
+
+                <!-- 左栏：三台机台卡 UniformGrid 均分等高（工位数不同也拉满） -->
+                <ItemsControl Grid.Row="0" Grid.Column="0" Grid.RowSpan="3"
+                              ItemsSource="{Binding Machines}"
+                              ItemTemplate="{StaticResource DashMachineCardTemplate}"
+                              Margin="0,-6,0,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="1"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemContainerStyle>
+                        <Style TargetType="ContentPresenter">
+                            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                            <Setter Property="VerticalAlignment" Value="Stretch"/>
+                        </Style>
+                    </ItemsControl.ItemContainerStyle>
+                </ItemsControl>
+
+                <Border Grid.Row="0" Grid.Column="2" Style="{StaticResource DashPanel}">
+                    <Grid>
+                        <DockPanel>
+                            <Grid DockPanel.Dock="Top" Height="32" Background="{StaticResource DashSurface2Brush}">
+                                <TextBlock Text="最近加工记录" FontWeight="SemiBold" FontSize="12.5" Margin="12,0"
+                                           VerticalAlignment="Center" Foreground="{StaticResource FgBrush}"/>
+                                <TextBlock Text="调度节拍完成后自动写入" Style="{StaticResource MutedText}" FontSize="11"
+                                           HorizontalAlignment="Right" Margin="12,0" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource DashBorderBrush}"/>
+                            <Grid>
+                                <TextBlock Text="暂无加工记录" Style="{StaticResource MutedText}" FontSize="13"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Visibility="{Binding RecordsEmpty, Converter={StaticResource BoolVisConv}}"/>
+                                <DataGrid ItemsSource="{Binding RecentRecords}"
+                                          Style="{StaticResource DashRecordsGrid}"
+                                          Visibility="{Binding RecordsEmpty, Converter={StaticResource BoolVisInvConv}}">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="时间" Width="76" SortMemberPath="SortTime" CanUserSort="True">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding TimeText}" FontFamily="{StaticResource FontMono}"
+                                                               TextTrimming="None" TextWrapping="NoWrap"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Width="12" CanUserSort="False" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="机台" Width="72" SortMemberPath="EquipmentText" CanUserSort="True">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding EquipmentText}" TextTrimming="None" TextWrapping="NoWrap"
+                                                               ToolTip="{Binding EquipmentText}"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Width="12" CanUserSort="False" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="工位" Width="56" SortMemberPath="PositionText" CanUserSort="True">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding PositionText}" TextTrimming="None" TextWrapping="NoWrap"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Width="12" CanUserSort="False" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="物料" Width="80" SortMemberPath="MaterialText" CanUserSort="True">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding MaterialText}" FontFamily="{StaticResource FontMono}"
+                                                               TextTrimming="None" TextWrapping="NoWrap"
+                                                               ToolTip="{Binding MaterialText}"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Width="12" CanUserSort="False" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="结果" Width="68" SortMemberPath="ResultText" CanUserSort="True">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding ResultText}" FontSize="12" FontWeight="SemiBold"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               TextTrimming="None" TextWrapping="NoWrap"
+                                                               ToolTip="{Binding ResultText}"
+                                                               Foreground="{Binding ResultBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Width="12" CanUserSort="False" IsReadOnly="True"/>
+                                        <DataGridTemplateColumn Header="耗时" Width="*" MinWidth="48" SortMemberPath="SortElapsed" CanUserSort="True">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding ElapsedText}" FontFamily="{StaticResource FontMono}"
+                                                               HorizontalAlignment="Right" TextTrimming="None" TextWrapping="NoWrap"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </DockPanel>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="2" Grid.Column="2" Style="{StaticResource DashPanel}">
+                    <Grid>
+                        <DockPanel>
+                            <Grid DockPanel.Dock="Top" Height="32" Background="{StaticResource DashSurface2Brush}">
+                                <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                                    <Grid Width="14" Height="14" Margin="0,0,6,0" VerticalAlignment="Center">
+                                        <Path Width="12" Height="12" Stretch="Uniform"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Data="{StaticResource DashIconAlarm}" Fill="{StaticResource DashAlarmBrush}"/>
+                                    </Grid>
+                                    <TextBlock Text="实时告警" FontWeight="SemiBold" FontSize="12.5"
+                                               Foreground="{StaticResource FgBrush}" VerticalAlignment="Center"/>
+                                    <Border BorderBrush="{StaticResource DashAlarmBrush}" BorderThickness="1" CornerRadius="3"
+                                            Padding="8,0" Height="20" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding AlarmCount, StringFormat='{}{0} 未处理'}" FontSize="11"
+                                                   Foreground="{StaticResource DashAlarmBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </StackPanel>
+                                <Button Content="全部确认" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" FontSize="12"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center" Margin="12,0"
+                                        Command="{Binding MarkAllAlarmsHandledCommand}"
+                                        ToolTip="确认库内全部未处理告警"/>
+                            </Grid>
+                            <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource DashBorderBrush}"/>
+                            <Grid>
+                                <TextBlock Text="暂无未处理告警" Style="{StaticResource MutedText}" FontSize="13"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Visibility="{Binding AlarmsEmpty, Converter={StaticResource BoolVisConv}}"/>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              Visibility="{Binding AlarmsEmpty, Converter={StaticResource BoolVisInvConv}}">
+                                    <ItemsControl ItemsSource="{Binding Alarms}" Margin="0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Border2Brush}" BorderThickness="0,0,0,1" Padding="12,8">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="3"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="58"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Grid.Column="0" CornerRadius="2" Height="32" VerticalAlignment="Center"
+                                                                Background="{Binding LevelBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                        <Path Grid.Column="1" Width="12" Height="12" Stretch="Uniform" Margin="8,0,0,0"
+                                                              VerticalAlignment="Center"
+                                                              Data="{Binding LevelBadge, Converter={StaticResource StateBadgeIconConv}}"
+                                                              Fill="{Binding LevelBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding TimeText}" FontFamily="{StaticResource FontMono}"
+                                                                   FontSize="11" Foreground="{StaticResource FgMutedBrush}"
+                                                                   VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                        <TextBlock Grid.Column="3" Text="{Binding Message}" FontSize="12"
+                                                                   TextWrapping="Wrap" VerticalAlignment="Center" Margin="8,0"/>
+                                                        <Button Grid.Column="4" Content="确认" Style="{StaticResource GhostButton}"
+                                                                Height="26" Padding="12,0" FontSize="12" VerticalAlignment="Center"
+                                                                Command="{Binding DataContext.MarkAlarmHandledCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Grid>
+                        </DockPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </DataTemplate>
+
+</ResourceDictionary>

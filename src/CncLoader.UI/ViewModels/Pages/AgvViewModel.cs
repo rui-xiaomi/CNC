@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Core.Abstractions;
@@ -10,10 +9,14 @@ namespace CncLoader.UI.ViewModels.Pages;
 public sealed partial class AgvViewModel : PageViewModelBase
 {
     private readonly IAgvTestService _service;
+    private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
 
-    public AgvViewModel(IAgvTestService service)
+    public AgvViewModel(IAgvTestService service, IUserNotificationService notify, IUiDispatcher ui)
     {
         _service = service;
+        _notify = notify;
+        _ui = ui;
         CommWayOptions = new[] { "HTTP REST", "Socket" };
         TerminalLines = new ObservableCollection<string>();
     }
@@ -41,7 +44,7 @@ public sealed partial class AgvViewModel : PageViewModelBase
     {
         if (string.IsNullOrWhiteSpace(Endpoint))
         {
-            HandyControl.Controls.Growl.Warning("请填 AGV 地址。");
+            _notify.Warning("请填 AGV 地址。");
             return;
         }
         IsTesting = true;
@@ -64,7 +67,7 @@ public sealed partial class AgvViewModel : PageViewModelBase
                 AppendTerminal($"< 200 OK {r.ElapsedMs}ms");
                 if (!string.IsNullOrEmpty(r.RawResponse)) AppendTerminal($"< {r.RawResponse}");
                 StatusMessage = $"连通成功 {r.ElapsedMs}ms";
-                HandyControl.Controls.Growl.Success($"AGV {Name} 测试连接成功 {r.ElapsedMs}ms");
+                _notify.Success($"AGV {Name} 测试连接成功 {r.ElapsedMs}ms");
             }
             else
             {
@@ -72,19 +75,19 @@ public sealed partial class AgvViewModel : PageViewModelBase
                 ResultBadgeBrushKey = "AlarmBrush";
                 AppendTerminal($"< ERROR {r.Error}");
                 StatusMessage = r.Error ?? "测试失败";
-                HandyControl.Controls.Growl.Error($"AGV 测试失败：{r.Error}");
+                _notify.Error($"AGV 测试失败：{r.Error}");
             }
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"测试异常：{ex.Message}");
+            _notify.Error($"测试异常：{ex.Message}");
         }
         finally { IsTesting = false; }
     }
 
     private void AppendTerminal(string line)
     {
-        Application.Current?.Dispatcher.Invoke(() => TerminalLines.Add(line));
+        _ui.Invoke(() => TerminalLines.Add(line));
     }
 }

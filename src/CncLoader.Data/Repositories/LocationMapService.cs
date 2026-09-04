@@ -1,4 +1,5 @@
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Config;
 using CncLoader.Core.Rcs;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -21,7 +22,7 @@ public sealed class LocationMapService : ILocationMapService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rows = await db.LocationMaps.AsNoTracking()
-            .Where(x => x.State == "0")
+            .Where(x => x.State == ConfigActivity.Active)
             .OrderBy(x => x.LocType).ThenBy(x => x.RcsCode)
             .ToListAsync(ct);
 
@@ -33,17 +34,17 @@ public sealed class LocationMapService : ILocationMapService
         var eqNames = eqIds.Count == 0
             ? new Dictionary<long, string>()
             : await db.Equipments.AsNoTracking()
-                .Where(x => eqIds.Contains(x.Id) && x.State == "0")
+                .Where(x => eqIds.Contains(x.Id) && x.State == ConfigActivity.Active)
                 .ToDictionaryAsync(x => x.Id, x => x.EquipmentName, ct);
         var posNames = posIds.Count == 0
             ? new Dictionary<long, string>()
             : await db.Positions.AsNoTracking()
-                .Where(x => posIds.Contains(x.Id) && x.State == "0")
+                .Where(x => posIds.Contains(x.Id) && x.State == ConfigActivity.Active)
                 .ToDictionaryAsync(x => x.Id, x => x.PositionName, ct);
         var frameNames = frameIds.Count == 0
             ? new Dictionary<long, string>()
             : await db.Frames.AsNoTracking()
-                .Where(x => frameIds.Contains(x.Id) && x.State == "0")
+                .Where(x => frameIds.Contains(x.Id) && x.State == ConfigActivity.Active)
                 .ToDictionaryAsync(x => x.Id, x => x.FrameName, ct);
 
         return rows.Select(e => Map(e,
@@ -75,7 +76,7 @@ public sealed class LocationMapService : ILocationMapService
         entity.RcsCode = item.RcsCode;
         entity.RcsType = item.RcsType;
         entity.Remark = item.Remark;
-        entity.State = "0";
+        entity.State = ConfigActivity.Active;
         if (author is not null) entity.Author = author;
         await db.SaveChangesAsync(ct);
         return entity.Id;
@@ -93,21 +94,21 @@ public sealed class LocationMapService : ILocationMapService
     public async Task<LocationMapItem?> ResolvePositionAsync(long equipmentId, long? positionId, string rcsType, CancellationToken ct = default)
     {
         var e = (await _routing.FindByPositionAsync(equipmentId, positionId, rcsType, ct))
-            .FirstOrDefault(x => x.State == "0");
+            .FirstOrDefault(x => x.State == ConfigActivity.Active);
         return e is null ? null : MapRow(e);
     }
 
     public async Task<LocationMapItem?> ResolveFrameAsync(long frameId, string rcsType, CancellationToken ct = default)
     {
         var e = (await _routing.FindByFrameAsync(frameId, rcsType, ct))
-            .FirstOrDefault(x => x.State == "0");
+            .FirstOrDefault(x => x.State == ConfigActivity.Active);
         return e is null ? null : MapRow(e);
     }
 
     public async Task<LocationMapItem?> ResolveAreaAsync(string locName, CancellationToken ct = default)
     {
         var e = (await _routing.FindByAreaAsync(locName, ct))
-            .FirstOrDefault(x => x.State == "0");
+            .FirstOrDefault(x => x.State == ConfigActivity.Active);
         return e is null ? null : MapRow(e);
     }
 
@@ -116,7 +117,7 @@ public sealed class LocationMapService : ILocationMapService
         if (string.IsNullOrWhiteSpace(rcsCode)) return null;
         await using var db = await _factory.CreateDbContextAsync(ct);
         var e = await db.LocationMaps.AsNoTracking()
-            .Where(x => x.State == "0" && x.RcsCode == rcsCode)
+            .Where(x => x.State == ConfigActivity.Active && x.RcsCode == rcsCode)
             .FirstOrDefaultAsync(ct);
         return e is null ? null : Map(e);
     }

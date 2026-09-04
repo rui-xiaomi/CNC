@@ -11,6 +11,10 @@
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/Tokens.xaml"/>
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/Styles.xaml"/>
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/DashboardStyles.xaml"/>
+                <!-- 共享转换器/占位模板必须与 Styles 同层（App 级兄弟）：
+                     DataTemplate 内部的 StaticResource 只能解析到这一层，
+                     若嵌进 PageTemplates 的子字典里，模板实例化时会报「找不到资源」。 -->
+                <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/SharedResources.xaml"/>
                 <ResourceDictionary Source="pack://application:,,,/CncLoader.UI;component/Theme/PageTemplates.xaml"/>
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

@@ -1,4 +1,5 @@
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Config;
 using CncLoader.Core.Plc;
 using CncLoader.Data;
 using CncLoader.Data.Entities;
@@ -20,8 +21,8 @@ public sealed class PlcCatalogService : IPlcCatalogService
     public async Task<IReadOnlyList<PlcListItem>> GetAllAsync(CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var plcs = await db.Plcs.AsNoTracking().Where(p => p.State == "0").OrderBy(p => p.PlcId).ToListAsync(ct);
-        var equipments = await db.Equipments.AsNoTracking().Where(e => e.State == "0").ToListAsync(ct);
+        var plcs = await db.Plcs.AsNoTracking().Where(p => p.State == ConfigActivity.Active).OrderBy(p => p.PlcId).ToListAsync(ct);
+        var equipments = await db.Equipments.AsNoTracking().Where(e => e.State == ConfigActivity.Active).ToListAsync(ct);
         var states = _connections().GetLinkStates();
 
         return plcs.Select(p =>
@@ -44,7 +45,7 @@ public sealed class PlcCatalogService : IPlcCatalogService
     public async Task<PlcEditModel?> GetByIdAsync(long plcId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var p = await db.Plcs.AsNoTracking().FirstOrDefaultAsync(x => x.PlcId == plcId && x.State == "0", ct);
+        var p = await db.Plcs.AsNoTracking().FirstOrDefaultAsync(x => x.PlcId == plcId && x.State == ConfigActivity.Active, ct);
         return p is null ? null : new PlcEditModel(p.PlcId, p.PlcName ?? "", p.PlcComputerIp, p.PlcComputerPort ?? 502, p.PlcReadWay ?? "ModbusTCP");
     }
 
@@ -82,7 +83,7 @@ public sealed class PlcCatalogService : IPlcCatalogService
         }
         else
         {
-            var entity = await db.Plcs.FirstOrDefaultAsync(x => x.PlcId == model.PlcId && x.State == "0", ct)
+            var entity = await db.Plcs.FirstOrDefaultAsync(x => x.PlcId == model.PlcId && x.State == ConfigActivity.Active, ct)
                 ?? throw new InvalidOperationException($"PLC_ID={model.PlcId} 不存在或已删除。");
             // PlcId 不改（业务键，被机台/点位外键引用）。
             entity.PlcName = model.Name;
@@ -106,10 +107,16 @@ public sealed class PlcCatalogService : IPlcCatalogService
     public async Task<PlcDeleteCheckResult> CheckDeleteAsync(long plcId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        return await CheckDeleteCoreAsync(db, plcId, ct);
+    }
+
+    private static async Task<PlcDeleteCheckResult> CheckDeleteCoreAsync(
+        CncDbContext db, long plcId, CancellationToken ct)
+    {
         var eqRefs = await db.Equipments.AsNoTracking()
-            .CountAsync(e => e.PlcId == plcId && e.State == "0", ct);
+            .CountAsync(e => e.PlcId == plcId && e.State == ConfigActivity.Active, ct);
         var ptRefs = await db.PlcPoints.AsNoTracking()
-            .CountAsync(p => p.PlcId == plcId && p.State == "0", ct);
+            .CountAsync(p => p.PlcId == plcId && p.State == ConfigActivity.Active, ct);
 
         if (eqRefs == 0 && ptRefs == 0)
             return new PlcDeleteCheckResult(true, 0, 0, "可删除");
@@ -122,31 +129,30 @@ public sealed class PlcCatalogService : IPlcCatalogService
         return new PlcDeleteCheckResult(false, eqRefs, ptRefs, msg);
     }
 
-    public async Task DeleteAsync(long plcId, string author, CancellationToken ct = default)
-    {
-        var check = await CheckDeleteAsync(plcId, ct);
-        if (!check.CanDelete)
-            throw new InvalidOperationException(check.Message);
+    public Task DeleteAsync(long plcId, string author, CancellationToken ct = default)
+        => ConfigSoftDelete.RunAsync(_factory, async (db, token) =>
+        {
+            var check = await CheckDeleteCoreAsync(db, plcId, token);
+            if (!check.CanDelete)
+                throw new InvalidOperationException(check.Message);
 
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var entity = await db.Plcs.FirstOrDefaultAsync(x => x.PlcId == plcId && x.State == "0", ct)
-            ?? throw new InvalidOperationException($"PLC_ID={plcId} 不存在或已删除。");
-        entity.State = "1";
-        entity.Author = author;
-        entity.UpdateTime = DateTime.Now;
-        await db.SaveChangesAsync(ct);
-    }
+            var entity = await db.Plcs.FirstOrDefaultAsync(x => x.PlcId == plcId && x.State == ConfigActivity.Active, token)
+                ?? throw new InvalidOperationException($"PLC_ID={plcId} 不存在或已删除。");
+            entity.State = ConfigActivity.Disabled;
+            entity.Author = author;
+            entity.UpdateTime = DateTime.Now;
+        }, ct);
 
     public async Task BindEquipmentAsync(long plcId, long? equipmentId, string author, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         // 清所有原绑到本 PLC 的机台（一机一 PLC，保证 PLC 侧唯一绑定）
-        var prevBound = await db.Equipments.Where(e => e.PlcId == plcId && e.State == "0").ToListAsync(ct);
+        var prevBound = await db.Equipments.Where(e => e.PlcId == plcId && e.State == ConfigActivity.Active).ToListAsync(ct);
         foreach (var e in prevBound) { e.PlcId = null; e.Author = author; e.UpdateTime = DateTime.Now; }
 
         if (equipmentId is > 0)
         {
-            var target = await db.Equipments.FirstOrDefaultAsync(e => e.Id == equipmentId && e.State == "0", ct)
+            var target = await db.Equipments.FirstOrDefaultAsync(e => e.Id == equipmentId && e.State == ConfigActivity.Active, ct)
                 ?? throw new InvalidOperationException("目标机台不存在或已删除。");
             target.PlcId = plcId;
             target.Author = author;
@@ -159,7 +165,7 @@ public sealed class PlcCatalogService : IPlcCatalogService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var list = await db.Equipments.AsNoTracking()
-            .Where(e => e.State == "0" && e.PlcId != null)
+            .Where(e => e.State == ConfigActivity.Active && e.PlcId != null)
             .OrderBy(e => e.EquipmentNo)
             .ToListAsync(ct);
         return list.Select(e => new EquipmentOption(e.Id, $"{e.EquipmentName} ({e.EquipmentNo})", e.PlcId!.Value)).ToList();

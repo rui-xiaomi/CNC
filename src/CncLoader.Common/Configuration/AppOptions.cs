@@ -142,7 +142,6 @@ public sealed class PlcOptions
 
     public int ConnectTimeoutMs { get; set; } = 3000;
     public int ReadWriteTimeoutMs { get; set; } = 2000;
-    public int MaxReconnectAttempts { get; set; } = 3;
 
     /// <summary>是否在启动时启用内置 Modbus TCP 模拟器（开发期无真机时使用）。</summary>
     public bool UseSimulator { get; set; } = true;

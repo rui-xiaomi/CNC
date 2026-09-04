@@ -9,8 +9,8 @@ using Microsoft.Extensions.Logging;
 namespace CncLoader.Communication.Polling;
 
 /// <summary>
-/// 中央轮询中枢实现：按点位表读各 PLC → 合成加工位状态 → 写入状态仓（单一数据源）。
-/// 每台 PLC 独立处理，一台失败不影响其他机台。
+/// 中央轮询中枢实现：按点位表读各 PLC → 写入信号仓（单一数据源）。工位状态不在此合成，
+/// 由 PositionScheduler 经 PositionTransition 统一推进。每台 PLC 独立处理，一台失败不影响其他机台。
 /// 作为 <see cref="IHostedService"/> 随主机启动持续轮询（StartAsync 内部 Task.Run 立即返回，不阻塞启动）；
 /// PLC 建链在窗口显示后由 PlcRuntimeBootstrapper 完成，本循环容忍"暂无连接"并在建链后自动读到实时值。
 /// </summary>
@@ -19,7 +19,6 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
     private readonly IPlcPointSource _pointSource;
     private readonly PlcConnectionManager _connections;
     private readonly ISignalStateStore _store;
-    private readonly IStatusSynthesizer _synthesizer;
     private readonly ILogger<PlcPollingService> _logger;
     private readonly int _intervalMs;
     private readonly bool _pollingEnabled;
@@ -28,13 +27,12 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
     private Task? _loopTask;
 
     public PlcPollingService(IPlcPointSource pointSource, PlcConnectionManager connections,
-        ISignalStateStore store, IStatusSynthesizer synthesizer, ILogger<PlcPollingService> logger,
+        ISignalStateStore store, ILogger<PlcPollingService> logger,
         int intervalMs, bool pollingEnabled = true)
     {
         _pointSource = pointSource;
         _connections = connections;
         _store = store;
-        _synthesizer = synthesizer;
         _logger = logger;
         _intervalMs = intervalMs;
         _pollingEnabled = pollingEnabled;

@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Core.Abstractions;
@@ -10,10 +9,14 @@ namespace CncLoader.UI.ViewModels.Pages;
 public sealed partial class ScanViewModel : PageViewModelBase, IDisposable
 {
     private readonly IScanListenerService _service;
+    private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
 
-    public ScanViewModel(IScanListenerService service)
+    public ScanViewModel(IScanListenerService service, IUserNotificationService notify, IUiDispatcher ui)
     {
         _service = service;
+        _notify = notify;
+        _ui = ui;
         ModeOptions = new[] { "TCP 服务端（被动接收）", "TCP 客户端（主动连）" };
         ScanRows = new ObservableCollection<ScanRowVm>();
 
@@ -57,7 +60,7 @@ public sealed partial class ScanViewModel : PageViewModelBase, IDisposable
     {
         if (!int.TryParse(Port, out var p) || p <= 0 || p > 65535)
         {
-            HandyControl.Controls.Growl.Warning("监听端口需为 1..65535。");
+            _notify.Warning("监听端口需为 1..65535。");
             return;
         }
         var ok = await _service.StartAsync(p);
@@ -65,12 +68,12 @@ public sealed partial class ScanViewModel : PageViewModelBase, IDisposable
         {
             IsListening = true;
             StatusMessage = $"已监听端口 {p}";
-            HandyControl.Controls.Growl.Success($"扫码枪开始监听端口 {p}");
+            _notify.Success($"扫码枪开始监听端口 {p}");
         }
         else
         {
             StatusMessage = "启动监听失败";
-            HandyControl.Controls.Growl.Error("启动监听失败，请检查端口是否被占用。");
+            _notify.Error("启动监听失败，请检查端口是否被占用。");
         }
     }
 
@@ -81,12 +84,12 @@ public sealed partial class ScanViewModel : PageViewModelBase, IDisposable
         IsListening = false;
         ConnectedCount = 0;
         StatusMessage = "已停止监听";
-        HandyControl.Controls.Growl.Info("扫码枪监听已停止");
+        _notify.Info("扫码枪监听已停止");
     }
 
     private void OnScanReceived(ScanRecord rec)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        _ui.Invoke(() =>
         {
             ScanRows.Insert(0, new ScanRowVm(rec.Time.ToString("HH:mm:ss"), rec.Source, rec.Content));
             while (ScanRows.Count > 50) ScanRows.RemoveAt(ScanRows.Count - 1);
@@ -95,7 +98,7 @@ public sealed partial class ScanViewModel : PageViewModelBase, IDisposable
 
     private void OnConnectedChanged(int v)
     {
-        Application.Current?.Dispatcher.Invoke(() => ConnectedCount = v);
+        _ui.Invoke(() => ConnectedCount = v);
     }
 
     public void Dispose()

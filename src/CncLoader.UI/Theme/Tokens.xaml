@@ -43,6 +43,13 @@
     <Color x:Key="DashSoftIdleColor">#243040</Color>      <!-- 冷灰蓝底，替代脏灰 SoftIdle -->
     <Color x:Key="DashSoftOfflineColor">#1E2630</Color>
 
+    <!-- 控件级语义色（原先散在 Styles/DashboardStyles/页面模板里的字面量，收口到此） -->
+    <Color x:Key="ChromeBorderColor">#333A42</Color>      <!-- 标题栏内控件描边，比 Border 略亮 -->
+    <Color x:Key="ScrollThumbColor">#4A5562</Color>       <!-- 细滚动条滑块 -->
+    <Color x:Key="ScrollThumbHoverColor">#6B7785</Color>  <!-- 滑块悬停 -->
+    <Color x:Key="CalibrationTickColor">#1E6E70</Color>   <!-- 计量刻度母题（签名元素） -->
+    <Color x:Key="RowStripeColor">#0DFFFFFF</Color>       <!-- 表格隔行条纹（半透明白叠加） -->
+
     <SolidColorBrush x:Key="ChromeBrush" Color="{StaticResource ChromeColor}"/>
     <SolidColorBrush x:Key="Chrome2Brush" Color="{StaticResource Chrome2Color}"/>
     <SolidColorBrush x:Key="ChromeFgBrush" Color="{StaticResource ChromeFgColor}"/>
@@ -79,6 +86,11 @@
     <SolidColorBrush x:Key="DashIdleBrush" Color="{StaticResource DashIdleColor}"/>
     <SolidColorBrush x:Key="DashSoftIdleBrush" Color="{StaticResource DashSoftIdleColor}"/>
     <SolidColorBrush x:Key="DashSoftOfflineBrush" Color="{StaticResource DashSoftOfflineColor}"/>
+    <SolidColorBrush x:Key="ChromeBorderBrush" Color="{StaticResource ChromeBorderColor}"/>
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="{StaticResource ScrollThumbColor}"/>
+    <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="{StaticResource ScrollThumbHoverColor}"/>
+    <SolidColorBrush x:Key="CalibrationTickBrush" Color="{StaticResource CalibrationTickColor}"/>
+    <SolidColorBrush x:Key="RowStripeBrush" Color="{StaticResource RowStripeColor}"/>
 
     <!-- ===== 形状/间距 ===== -->
     <CornerRadius x:Key="Radius">6</CornerRadius>

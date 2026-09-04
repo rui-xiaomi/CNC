@@ -45,12 +45,26 @@ public static class CommunicationServiceCollectionExtensions
 
         // Phase 4 RCS 对接：运行时配置 + 出站客户端（4 接口）+ 任务编排
         services.AddSingleton<IRcsRuntimeConfig, RcsRuntimeConfig>();
-        services.AddSingleton<IRcsClient>(sp => new RcsClient(
-            new System.Net.Http.HttpClient(),
-            sp.GetRequiredService<IRcsRuntimeConfig>(),
+        // IRcsClient 刻意不进容器：受管派工门禁在 IRcsTaskService 内，容器里没有裸客户端可拿，
+        // 「注入 IRcsClient 绕过门禁」在 UI/App/Data 里是编译错误（internal），在容器里也解析不到。
+        // 单例 HttpClient 复用连接池；PooledConnectionLifetime 让 BaseUrl 热更新后能重新解析 DNS
+        // （默认无生命周期的 Singleton HttpClient 会把首次解析的 IP 一直用到进程退出）。
+        services.AddSingleton<IRcsTaskService>(sp => new RcsTaskService(
+            new RcsClient(
+                new System.Net.Http.HttpClient(new System.Net.Http.SocketsHttpHandler
+                {
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+                }),
+                sp.GetRequiredService<IRcsRuntimeConfig>(),
+                sp.GetRequiredService<IRcsMessageLog>(),
+                sp.GetRequiredService<ILogger<RcsClient>>()),
+            sp.GetRequiredService<IRcsTaskStore>(),
             sp.GetRequiredService<IRcsMessageLog>(),
-            sp.GetRequiredService<ILogger<RcsClient>>()));
-        services.AddSingleton<IRcsTaskService, RcsTaskService>();
+            sp.GetRequiredService<IRcsCallbackProcessor>(),
+            sp.GetRequiredService<IManagedDispatchRouteResolver>(),
+            sp.GetRequiredService<IRoutingAvailabilityValidator>(),
+            sp.GetRequiredService<ILogger<RcsTaskService>>(),
+            sp.GetRequiredService<ISlotAccountService>()));
 
         // 先从库加载连接配置，再启动回调宿主（保证 BootCallback* 已 Capture）
         services.AddHostedService<RcsConnectionBootstrapper>();
@@ -115,7 +129,6 @@ public static class CommunicationServiceCollectionExtensions
                 sp.GetRequiredService<IPlcPointSource>(),
                 sp.GetRequiredService<PlcConnectionManager>(),
                 sp.GetRequiredService<ISignalStateStore>(),
-                sp.GetRequiredService<IStatusSynthesizer>(),
                 sp.GetRequiredService<ILogger<PlcPollingService>>(),
                 plc.PollingIntervalMs,
                 plc.PollingEnabled);

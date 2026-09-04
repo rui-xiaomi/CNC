@@ -1,4 +1,5 @@
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Config;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
 using CncLoader.Data.Entities;
@@ -16,11 +17,11 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var points = await db.PlcPoints.AsNoTracking()
-            .Where(p => p.PlcId == plcId && p.State == "0")
+            .Where(p => p.PlcId == plcId && p.State == ConfigActivity.Active)
             .OrderBy(p => p.RegisterAddr)
             .ToListAsync(ct);
         var positions = await db.Positions.AsNoTracking()
-            .Where(p => p.State == "0")
+            .Where(p => p.State == ConfigActivity.Active)
             .ToDictionaryAsync(p => p.Id, p => p.PositionName, ct);
 
         return points.Select(p => ToRow(p, positions)).ToList();
@@ -68,11 +69,11 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var equipment = await db.Equipments.AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == equipmentId && e.State == "0", ct)
+            .FirstOrDefaultAsync(e => e.Id == equipmentId && e.State == ConfigActivity.Active, ct)
             ?? throw new InvalidOperationException($"机台#{equipmentId} 不存在");
 
         var positions = await db.Positions.AsNoTracking()
-            .Where(p => p.EquipmentId == equipmentId && p.State == "0")
+            .Where(p => p.EquipmentId == equipmentId && p.State == ConfigActivity.Active)
             .OrderBy(p => p.Id)
             .ToListAsync(ct);
         if (positions.Count < 2)
@@ -83,7 +84,7 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
             throw new InvalidOperationException("批量导入仅支持种子机台 EQ01/EQ02/EQ03（ID 1/2/3）");
 
         var existingKeys = await db.PlcPoints
-            .Where(p => p.EquipmentId == equipmentId && p.State == "0")
+            .Where(p => p.EquipmentId == equipmentId && p.State == ConfigActivity.Active)
             .Select(p => p.SignalKey + "|" + (p.PositionId ?? 0))
             .ToListAsync(ct);
         var existing = existingKeys.ToHashSet();
@@ -125,7 +126,7 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         // 管理页写面板：全部活动点位均可下发，不按 Rw 互斥过滤。
-        var query = db.PlcPoints.AsNoTracking().Where(p => p.State == "0");
+        var query = db.PlcPoints.AsNoTracking().Where(p => p.State == ConfigActivity.Active);
         if (plcId.HasValue) query = query.Where(p => p.PlcId == plcId.Value);
         query = query.OrderBy(p => p.RegisterAddr);
 

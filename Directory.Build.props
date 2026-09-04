@@ -3,7 +3,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- AGENTS.md 把「0 警告 0 错误」列为合并前必过门禁，由构建强制而非靠人工检查。 -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
   </PropertyGroup>
 </Project>

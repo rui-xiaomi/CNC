@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -22,17 +21,22 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     private readonly IWorkLineService _workLineService;
     private readonly IPlcCatalogService _plcCatalog;
     private readonly IAlarmEventService _alarms;
+    private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
     private readonly DispatcherTimer _timer;
     private long _heartbeat;
 
     public ShellViewModel(INavigationService navigation, ISignalStateStore store,
-        IWorkLineService workLineService, IPlcCatalogService plcCatalog, IAlarmEventService alarms)
+        IWorkLineService workLineService, IPlcCatalogService plcCatalog, IAlarmEventService alarms,
+        IUserNotificationService notify, IUiDispatcher ui)
     {
         _navigation = navigation;
         _store = store;
         _workLineService = workLineService;
         _plcCatalog = plcCatalog;
         _alarms = alarms;
+        _notify = notify;
+        _ui = ui;
         _navigation.Navigated += OnNavigated;
         _store.MachineChanged += OnMachineChanged;
         _alarms.AlarmRaised += OnAlarmRaised;
@@ -103,7 +107,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     }
 
     private void OnWorkLinesChanged(object? sender, EventArgs e)
-        => Application.Current?.Dispatcher.BeginInvoke(() => _ = LoadWorkLinesAsync());
+        => _ui.Post(() => _ = LoadWorkLinesAsync());
 
     private async Task LoadWorkLinesAsync()
     {
@@ -164,13 +168,13 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     private void OnAlarmRaised(object? sender, AlarmRow e)
     {
         _ = RefreshAlarmCountAsync();
-        Application.Current?.Dispatcher.BeginInvoke(() => ShowAlarmNotification(e));
+        _ui.Post(() => ShowAlarmNotification(e));
     }
 
     /// <summary>
-    /// 需人工介入的 RCS 任务告警弹模态框；其余严重告警 Growl，普通告警 Growl.Warning。
+    /// 需人工介入的 RCS 任务告警弹模态框；其余严重告警 Error，普通告警 Warning。
     /// </summary>
-    private static void ShowAlarmNotification(AlarmRow e)
+    private void ShowAlarmNotification(AlarmRow e)
     {
         var title = e.AlarmType switch
         {
@@ -184,18 +188,14 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
 
         if (e.AlarmType is "RCS_CANCELED" or "RCS_REDO_LIMIT" or "RCS_NOT_FOUND")
         {
-            HandyControl.Controls.MessageBox.Show(
-                e.Message + "\n\n请到「RCS 任务」或「日志/告警」页跟进处理。",
-                title,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            _notify.Alert(e.Message + "\n\n请到「RCS 任务」或「日志/告警」页跟进处理。", title);
             return;
         }
 
         if (e.Level == "严重")
-            HandyControl.Controls.Growl.Error($"{title}：{e.Message}");
+            _notify.Error($"{title}：{e.Message}");
         else
-            HandyControl.Controls.Growl.Warning($"{title}：{e.Message}");
+            _notify.Warning($"{title}：{e.Message}");
     }
 
     private async Task RefreshAlarmCountAsync()

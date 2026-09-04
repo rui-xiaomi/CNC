@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Identity;
@@ -17,15 +16,18 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
     private readonly IPlcCatalogService _catalog;
     private readonly IPlcPointManagementService _points;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
 
     public PointMappingViewModel(
         IPlcCatalogService catalog,
         IPlcPointManagementService points,
-        ICurrentUser user)
+        ICurrentUser user,
+        IUserNotificationService notify)
     {
         _catalog = catalog;
         _points = points;
         _user = user;
+        _notify = notify;
 
         PlcFilters = new ObservableCollection<PlcFilterOption>();
         EquipmentOptions = new ObservableCollection<EquipmentOption>();
@@ -106,12 +108,12 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
             await LoadPointsAsync(SelectedPlc.PlcId);
             NotifyPointsChanged();
             StatusMessage = added > 0 ? $"已导入 {added} 个点位" : "点位已存在，无需导入";
-            HandyControl.Controls.Growl.Success(StatusMessage);
+            _notify.Success(StatusMessage);
         }
         catch (Exception ex)
         {
             StatusMessage = $"导入失败：{ex.Message}";
-            HandyControl.Controls.Growl.Error(StatusMessage);
+            _notify.Error(StatusMessage);
         }
     }
 
@@ -121,7 +123,7 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
         if (SelectedPoint is null)
         {
             StatusMessage = "请先在列表中选中要保存的行";
-            HandyControl.Controls.Growl.Warning(StatusMessage);
+            _notify.Warning(StatusMessage);
             return;
         }
         try
@@ -130,12 +132,12 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
             if (SelectedPlc is not null) await LoadPointsAsync(SelectedPlc.PlcId);
             NotifyPointsChanged();
             StatusMessage = "点位已保存";
-            HandyControl.Controls.Growl.Success(StatusMessage);
+            _notify.Success(StatusMessage);
         }
         catch (Exception ex)
         {
             StatusMessage = $"保存失败：{ex.Message}";
-            HandyControl.Controls.Growl.Error(StatusMessage);
+            _notify.Error(StatusMessage);
         }
     }
 
@@ -145,7 +147,7 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
         if (PointRows.Count == 0)
         {
             StatusMessage = "当前没有可保存的点位";
-            HandyControl.Controls.Growl.Warning(StatusMessage);
+            _notify.Warning(StatusMessage);
             return;
         }
         try
@@ -156,12 +158,12 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
             if (SelectedPlc is not null) await LoadPointsAsync(SelectedPlc.PlcId);
             NotifyPointsChanged();
             StatusMessage = $"已保存全部 {rows.Count} 个点位";
-            HandyControl.Controls.Growl.Success(StatusMessage);
+            _notify.Success(StatusMessage);
         }
         catch (Exception ex)
         {
             StatusMessage = $"保存失败：{ex.Message}";
-            HandyControl.Controls.Growl.Error(StatusMessage);
+            _notify.Error(StatusMessage);
         }
     }
 
@@ -172,20 +174,19 @@ public sealed partial class PointMappingViewModel : PageViewModelBase
         var label = string.IsNullOrEmpty(SelectedPoint.PositionName)
             ? $"{SelectedPoint.SignalLabel} ({SelectedPoint.RegisterAddress})"
             : $"{SelectedPoint.PositionName} · {SelectedPoint.SignalLabel} ({SelectedPoint.RegisterAddress})";
-        if (HandyControl.Controls.MessageBox.Show($"确认删除点位 {label}？", "确认", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-            return;
+        if (!_notify.Confirm($"确认删除点位 {label}？", "确认")) return;
         try
         {
             await _points.DeletePointAsync(SelectedPoint.Id, _user.Name);
             if (SelectedPlc is not null) await LoadPointsAsync(SelectedPlc.PlcId);
             NotifyPointsChanged();
             StatusMessage = "点位已删除";
-            HandyControl.Controls.Growl.Success(StatusMessage);
+            _notify.Success(StatusMessage);
         }
         catch (Exception ex)
         {
             StatusMessage = $"删除失败：{ex.Message}";
-            HandyControl.Controls.Growl.Error(StatusMessage);
+            _notify.Error(StatusMessage);
         }
     }
 

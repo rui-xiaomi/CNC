@@ -1,4 +1,5 @@
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Config;
 using CncLoader.Core.Signals;
 
 namespace CncLoader.Data.Repositories;
@@ -28,7 +29,7 @@ public sealed class PlcPointSource : IPlcPointSource
         var result = new List<PlcPointDefinition>();
         foreach (var p in rows)
         {
-            if (p.State != "0") continue; // 行为保持：仅活动点位
+            if (!ConfigActivity.IsActive(p.State)) continue; // 行为保持：仅活动点位
             if (!SignalKeys.TryParse(p.SignalKey, out var key))
                 continue; // 未知信号语义跳过
             result.Add(new PlcPointDefinition

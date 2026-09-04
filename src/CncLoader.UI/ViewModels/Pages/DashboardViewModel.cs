@@ -24,6 +24,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private readonly IFrameService _frames;
     private readonly IWorkLineService _workLines;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
     private readonly ReconciliationStatusBinder _reconcileBinder;
 
     private readonly Dictionary<long, MachineCardVm> _machines = new();
@@ -35,7 +37,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private bool _disposed;
 
     public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms,
-        IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user)
+        IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user,
+        IUserNotificationService notify, IUiDispatcher ui)
     {
         _store = store;
         _workRecords = workRecords;
@@ -44,6 +47,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         _frames = frames;
         _workLines = workLines;
         _user = user;
+        _notify = notify;
+        _ui = ui;
         Machines = new ObservableCollection<MachineCardVm>();
         FlowNodes = new ObservableCollection<FlowNodeVm>();
         Alarms = new ObservableCollection<AlarmFeedItem>();
@@ -123,14 +128,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         IsReconcileGateOpen = _reconcileBinder.IsGateOpen;
     }
 
-    private static void MarshalToUi(Action action)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess())
-            action();
-        else
-            dispatcher.BeginInvoke(action);
-    }
+    private void MarshalToUi(Action action) => _ui.Invoke(action);
 
     public void Dispose()
     {
@@ -200,16 +198,15 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private async Task ResetAlarmAsync(PositionCardVm? card)
     {
         if (card is null) return;
-        var confirm = System.Windows.MessageBox.Show(
-            $"确认已现场处理 {card.EquipmentText} {card.PositionText} 的告警并恢复运行？",
-            "恢复告警", System.Windows.MessageBoxButton.OKCancel, System.Windows.MessageBoxImage.Warning);
-        if (confirm != System.Windows.MessageBoxResult.OK) return;
+        if (!_notify.Confirm(
+                $"确认已现场处理 {card.EquipmentText} {card.PositionText} 的告警并恢复运行？", "恢复告警"))
+            return;
         try
         {
             await _scheduler.ResetAlarmAsync(card.EquipmentId, card.PositionId);
-            HandyControl.Controls.Growl.Success($"{card.EquipmentText} {card.PositionText} 已恢复，等待上料。");
+            _notify.Success($"{card.EquipmentText} {card.PositionText} 已恢复，等待上料。");
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"恢复失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"恢复失败：{ex.Message}"); }
     }
 
     [RelayCommand]
@@ -219,10 +216,10 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         try
         {
             await _alarms.MarkHandledAsync(item.Id, _user.Name);
-            HandyControl.Controls.Growl.Success("告警已确认。");
+            _notify.Success("告警已确认。");
             await RefreshAlarmsAsync();
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"确认失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"确认失败：{ex.Message}"); }
     }
 
     [RelayCommand]
@@ -232,13 +229,13 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         {
             // 按库内未处理全量确认（不限当前列表条数）
             var pending = await _alarms.GetAlarmsAsync(unhandledOnly: true, limit: 500);
-            if (pending.Count == 0) { HandyControl.Controls.Growl.Info("没有未处理告警。"); return; }
+            if (pending.Count == 0) { _notify.Info("没有未处理告警。"); return; }
             foreach (var a in pending)
                 await _alarms.MarkHandledAsync(a.Id, _user.Name);
-            HandyControl.Controls.Growl.Success($"已确认 {pending.Count} 条告警。");
+            _notify.Success($"已确认 {pending.Count} 条告警。");
             await RefreshAlarmsAsync();
         }
-        catch (Exception ex) { HandyControl.Controls.Growl.Error($"全部确认失败：{ex.Message}"); }
+        catch (Exception ex) { _notify.Error($"全部确认失败：{ex.Message}"); }
     }
 
     [RelayCommand]
@@ -552,7 +549,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
             AlarmCount = await _alarms.GetUnhandledCountAsync();
             // 看板只盯未处理，避免「角标 30 / 列表全是已处理」错觉
             var rows = await _alarms.GetAlarmsAsync(unhandledOnly: true, limit: 30);
-            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            _ui.Post(() =>
             {
                 Alarms.Clear();
                 foreach (var r in rows) Alarms.Add(AlarmFeedItem.From(r));
@@ -570,7 +567,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         try
         {
             var rows = await _workRecords.GetRecentAsync(30);
-            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            _ui.Post(() =>
             {
                 RecentRecords.Clear();
                 foreach (var r in rows)

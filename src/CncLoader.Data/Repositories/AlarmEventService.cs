@@ -1,4 +1,5 @@
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Config;
 using CncLoader.Core.Plc;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -30,7 +31,7 @@ public sealed class AlarmEventService : IAlarmEventService
 
         await using var db = await _factory.CreateDbContextAsync(ct);
         var eq = await db.Equipments.AsNoTracking()
-            .FirstOrDefaultAsync(e => e.PlcId == plcId && e.State == "0", ct);
+            .FirstOrDefaultAsync(e => e.PlcId == plcId && e.State == ConfigActivity.Active, ct);
 
         var entity = new AlarmEvent
         {

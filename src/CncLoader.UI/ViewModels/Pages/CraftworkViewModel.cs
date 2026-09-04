@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Identity;
@@ -14,12 +13,15 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
     private readonly ICraftworkService _service;
     private readonly IWorkLineService _workLines;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
 
-    public CraftworkViewModel(ICraftworkService service, IWorkLineService workLines, ICurrentUser user)
+    public CraftworkViewModel(ICraftworkService service, IWorkLineService workLines, ICurrentUser user,
+        IUserNotificationService notify)
     {
         _service = service;
         _workLines = workLines;
         _user = user;
+        _notify = notify;
         Crafts = new ObservableCollection<CraftworkListItem>();
         LineFilters = new ObservableCollection<NamedOption>();
         LineOptions = new ObservableCollection<NamedOption>();
@@ -133,7 +135,7 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
     {
         if (SelectedEditLine is null || string.IsNullOrWhiteSpace(EditName))
         {
-            HandyControl.Controls.Growl.Warning("所属线体与工序名称为必填项。");
+            _notify.Warning("所属线体与工序名称为必填项。");
             return;
         }
         var model = new CraftworkEditModel
@@ -151,7 +153,7 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
         try
         {
             var id = await _service.SaveAsync(model, _user.Name);
-            HandyControl.Controls.Growl.Success($"工序 {model.No} 已保存");
+            _notify.Success($"工序 {model.No} 已保存");
             StatusMessage = $"工序 {model.No} 已保存";
             await ReloadAsync();
             SelectedCraft = Crafts.FirstOrDefault(c => c.Id == id);
@@ -159,7 +161,7 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"保存失败：{ex.Message}");
+            _notify.Error($"保存失败：{ex.Message}");
         }
     }
 
@@ -179,23 +181,21 @@ public sealed partial class CraftworkViewModel : PageViewModelBase
             var check = await _service.CheckDeleteAsync(row.Id);
             if (!check.CanDelete)
             {
-                HandyControl.Controls.Growl.Warning(check.Message);
+                _notify.Warning(check.Message);
                 StatusMessage = check.Message;
                 return;
             }
             var msg = $"确认删除工序 {row.Name}（{row.No}）？\n软删后列表不再显示，可在 DB 恢复。";
-            if (HandyControl.Controls.MessageBox.Show(msg, "删除工序二次确认",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
+            if (!_notify.Confirm(msg, "删除工序二次确认")) return;
             await _service.DeleteAsync(row.Id, _user.Name);
-            HandyControl.Controls.Growl.Success($"工序 {row.Name} 已删除。");
+            _notify.Success($"工序 {row.Name} 已删除。");
             StatusMessage = $"工序 {row.Name} 已删除";
             await ReloadAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+            _notify.Error($"删除失败：{ex.Message}");
         }
     }
 }

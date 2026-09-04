@@ -56,6 +56,20 @@ public sealed class RcsSendBoundaryInventoryTests
     }
 
     [Test]
+    public void IRcsClient_IsInternal_SoOtherLayersCannotEvenNameIt()
+    {
+        // 结构性门禁：IRcsClient 为 internal 且仅对 Communication（与本测试程序集）可见，
+        // 因此 UI / App / Data 里「注入 IRcsClient 直接发 RCS」是编译错误，而非事后靠审计发现。
+        Assert.Multiple(() =>
+        {
+            Assert.That(typeof(IRcsClient).IsPublic, Is.False,
+                "IRcsClient 必须保持 internal，否则绕过门禁只剩约定约束");
+            Assert.That(typeof(RcsClient).IsPublic, Is.False,
+                "RcsClient 实现同样不得公开");
+        });
+    }
+
+    [Test]
     public void ProductionAssemblies_Only_RcsTaskService_Injects_IRcsClient()
     {
         var productionAssemblies = new[]
@@ -71,7 +85,9 @@ public sealed class RcsSendBoundaryInventoryTests
         {
             foreach (var type in asm.GetTypes().Where(t => t.IsClass && !t.IsAbstract))
             {
-                foreach (var ctor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+                // 含非公开构造：RcsTaskService 的构造已因 internal 入参降为 internal
+                foreach (var ctor in type.GetConstructors(
+                             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
                 {
                     if (ctor.GetParameters().Any(p => p.ParameterType == typeof(IRcsClient)))
                         injectors.Add(type.FullName ?? type.Name);

@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -7,7 +6,7 @@ using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
 using CncLoader.Core.State;
-using CncLoader.UI.Views.Dialogs;
+using CncLoader.UI.Services;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -21,6 +20,8 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
     private readonly ISignalStateStore _store;
     private readonly IPositionScheduler _scheduler;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
+    private readonly IDialogService _dialogs;
 
     private readonly Dictionary<long, EquipmentPositionRowVm> _positionRows = new();
     private readonly DispatcherTimer _positionThrottle;
@@ -28,12 +29,15 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
     private long _selectedEquipmentId;
 
     public EquipmentViewModel(IEquipmentConfigService service, ISignalStateStore store,
-        IPositionScheduler scheduler, ICurrentUser user)
+        IPositionScheduler scheduler, ICurrentUser user,
+        IUserNotificationService notify, IDialogService dialogs)
     {
         _service = service;
         _store = store;
         _scheduler = scheduler;
         _user = user;
+        _notify = notify;
+        _dialogs = dialogs;
         Equipments = new ObservableCollection<EquipmentListItem>();
         CraftFilters = new ObservableCollection<NamedOption>();
         Positions = new ObservableCollection<EquipmentPositionRowVm>();
@@ -142,28 +146,25 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
             var crafts = await _service.GetCraftworkOptionsAsync();
             if (crafts.Count == 0)
             {
-                HandyControl.Controls.Growl.Warning("请先在工序管理页创建工序，再新增机台。");
+                _notify.Warning("请先在工序管理页创建工序，再新增机台。");
                 return;
             }
             var plcs = await _service.GetPlcOptionsAsync();
             var nextNo = await _service.SuggestNextNoAsync();
 
-            var dlg = new EquipmentEditDialog(crafts, plcs, nextNo, SelectedCraftFilter?.Id)
-            {
-                Owner = Application.Current?.MainWindow
-            };
-            if (dlg.ShowDialog() != true || dlg.CreateResult is null) return;
+            var created = _dialogs.CreateEquipment(crafts, plcs, nextNo, SelectedCraftFilter?.Id);
+            if (created is null) return;
 
-            var id = await _service.CreateEquipmentAsync(dlg.CreateResult, _user.Name);
-            HandyControl.Controls.Growl.Success($"机台 {dlg.CreateResult.No} 已新增，并自动创建 2 个加工位。");
-            StatusMessage = $"机台 {dlg.CreateResult.No} 已新增";
+            var id = await _service.CreateEquipmentAsync(created, _user.Name);
+            _notify.Success($"机台 {created.No} 已新增，并自动创建 2 个加工位。");
+            StatusMessage = $"机台 {created.No} 已新增";
             await ReloadAsync();
             SelectedEquipment = Equipments.FirstOrDefault(e => e.Id == id);
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"新增失败：{ex.Message}");
+            _notify.Error($"新增失败：{ex.Message}");
         }
     }
 
@@ -176,28 +177,25 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
             var edit = await _service.GetByIdAsync(row.Id);
             if (edit is null)
             {
-                HandyControl.Controls.Growl.Warning("该机台不存在或已删除。");
+                _notify.Warning("该机台不存在或已删除。");
                 await ReloadAsync();
                 return;
             }
             var crafts = await _service.GetCraftworkOptionsAsync();
             var plcs = await _service.GetPlcOptionsAsync();
-            var dlg = new EquipmentEditDialog(crafts, plcs, edit)
-            {
-                Owner = Application.Current?.MainWindow
-            };
-            if (dlg.ShowDialog() != true || dlg.EditResult is null) return;
+            var edited = _dialogs.EditEquipment(crafts, plcs, edit);
+            if (edited is null) return;
 
-            await _service.UpdateAsync(dlg.EditResult, _user.Name);
-            HandyControl.Controls.Growl.Success($"机台 {dlg.EditResult.Name} 已更新。");
-            StatusMessage = $"机台 {dlg.EditResult.Name} 已更新";
+            await _service.UpdateAsync(edited, _user.Name);
+            _notify.Success($"机台 {edited.Name} 已更新。");
+            StatusMessage = $"机台 {edited.Name} 已更新";
             await ReloadAsync();
             SelectedEquipment = Equipments.FirstOrDefault(e => e.Id == row.Id);
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"更新失败：{ex.Message}");
+            _notify.Error($"更新失败：{ex.Message}");
         }
     }
 
@@ -206,31 +204,29 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
     {
         if (SelectedEquipment is null)
         {
-            HandyControl.Controls.Growl.Warning("请先选择机台。");
+            _notify.Warning("请先选择机台。");
             return;
         }
         try
         {
             var frames = await _service.GetFrameOptionsAsync();
             var current = await _service.GetFrameBindingIdsAsync(SelectedEquipment.Id);
-            var dlg = new FrameBindDialog(
+            var selection = _dialogs.BindFrames(
                 $"{SelectedEquipment.Name} ({SelectedEquipment.No})", frames,
-                current.UploadFrameId, current.DownloadFrameId)
-            {
-                Owner = Application.Current?.MainWindow
-            };
-            if (dlg.ShowDialog() != true) return;
+                current.UploadFrameId, current.DownloadFrameId);
+            if (selection is null) return;
 
-            await _service.SetFrameBindingAsync(SelectedEquipment.Id, dlg.UploadFrameId, dlg.DownloadFrameId, _user.Name);
+            await _service.SetFrameBindingAsync(
+                SelectedEquipment.Id, selection.UploadFrameId, selection.DownloadFrameId, _user.Name);
             _scheduler.InvalidateFrameBindingCache(SelectedEquipment.Id);
-            HandyControl.Controls.Growl.Success("关联料架已更新。");
+            _notify.Success("关联料架已更新。");
             StatusMessage = "关联料架已更新";
             await LoadDetailAsync(SelectedEquipment.Id);
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"配置失败：{ex.Message}");
+            _notify.Error($"配置失败：{ex.Message}");
         }
     }
 
@@ -243,23 +239,21 @@ public sealed partial class EquipmentViewModel : PageViewModelBase
             var check = await _service.CheckDeleteAsync(row.Id);
             if (!check.CanDelete)
             {
-                HandyControl.Controls.Growl.Warning(check.Message);
+                _notify.Warning(check.Message);
                 StatusMessage = check.Message;
                 return;
             }
             var msg = $"确认删除机台 {row.Name}（{row.No}）？\n将级联软删其 2 个加工位；软删后列表不再显示，可在 DB 恢复。";
-            if (HandyControl.Controls.MessageBox.Show(msg, "删除机台二次确认",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
+            if (!_notify.Confirm(msg, "删除机台二次确认")) return;
             await _service.DeleteAsync(row.Id, _user.Name);
-            HandyControl.Controls.Growl.Success($"机台 {row.Name} 已删除。");
+            _notify.Success($"机台 {row.Name} 已删除。");
             StatusMessage = $"机台 {row.Name} 已删除";
             await ReloadAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+            _notify.Error($"删除失败：{ex.Message}");
         }
     }
 }

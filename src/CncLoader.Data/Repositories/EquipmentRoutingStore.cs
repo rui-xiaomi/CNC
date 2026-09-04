@@ -55,6 +55,26 @@ public sealed class EquipmentRoutingStore : IEquipmentRoutingStore
         return rows.Select(e => new EquipmentRoutingRow(e.Id, e.CraftworkId, e.State)).ToList();
     }
 
+    /// <summary>单次 DbContext 取回 Equipment→Craft→WorkLine 三层（替代逐层各开一个 context）。</summary>
+    public async Task<EquipmentChainRows> FindEquipmentChainAsync(
+        long equipmentId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+
+        var e = await db.Equipments.AsNoTracking().FirstOrDefaultAsync(x => x.Id == equipmentId, ct);
+        if (e is null) return new EquipmentChainRows(null, null, null);
+        var equipment = new EquipmentRoutingRow(e.Id, e.CraftworkId, e.State);
+
+        var c = await db.Craftworks.AsNoTracking().FirstOrDefaultAsync(x => x.Id == e.CraftworkId, ct);
+        if (c is null) return new EquipmentChainRows(equipment, null, null);
+        var craft = new CraftworkRoutingRow(c.Id, c.WorkLineId, c.CraftworkNode, c.State);
+
+        var l = await db.WorkLines.AsNoTracking().FirstOrDefaultAsync(x => x.Id == c.WorkLineId, ct);
+        var line = l is null ? null : new WorkLineRoutingRow(l.Id, l.WorkLineCode, l.State);
+
+        return new EquipmentChainRows(equipment, craft, line);
+    }
+
     public async Task<IReadOnlyList<FrameBindRoutingRow>> FindFrameBindsByEquipmentAsync(
         long equipmentId, CancellationToken ct = default)
     {

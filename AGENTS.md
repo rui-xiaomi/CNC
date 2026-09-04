@@ -53,7 +53,7 @@ alwaysApply: true
 - 表/字段历史拼写：`MAS_AUTO_WORKLINE_EQUIMENT`、`CARFTWORK_ID`、`EQUIMENT_*` 等沿用既有 schema，线上/种子已依赖，**严禁改名「纠正」**
 - RCS 协议方法名 `excuteTask` 拼写错误为契约一部分，勿改
 - Alarm 粘滞、启动对账完成前不开自动派工、缺 LOCATION_MAP 拒发、软删配置拒新派工、HasMat 未知 fail-closed：是安全设计，不是 bug
-- `Plc.MaxReconnectAttempts` 已配置但未实现自动重连循环：已知技术债，评审可跳过，勿假装已实现
+- PLC 自动重连循环仍未实现（已知技术债）。原 `Plc.MaxReconnectAttempts` 配置项从未被代码读取，已移除以免运维误判；如要实现须单独开 issue 并走现场联调验证
 - 演示 SQL / `tools/FrameSeedReset` 会清空槽位（含预记）：仅测试库，**禁止在现场生产库执行**
 
 ## 参考文档

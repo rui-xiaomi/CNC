@@ -25,7 +25,9 @@ public sealed class FrameViewModelInventoryCorrectionTests
             inventory,
             new FakeScheduler(),
             new FakeUser(),
-            notify);
+            notify,
+            new ImmediateUiDispatcher(),
+            new StubDialogService());
         vm.SelectedFrame = new FrameRowVm(new FrameListItem(7, "架A", "F-A", "1×2", 2, 1));
 
         var correction = new InventoryCorrectionResult(
@@ -73,10 +75,12 @@ public sealed class FrameViewModelInventoryCorrectionTests
             inventory,
             new FakeScheduler(),
             new FakeUser(),
-            notify);
+            notify,
+            new ImmediateUiDispatcher(),
+            new StubDialogService());
         vm.SelectedFrame = new FrameRowVm(new FrameListItem(7, "架A", "F-A", "1×2", 2, 1));
 
-        // StartInventory 仍走 Growl.Info；本断言锁定：发起返回不得产生 Success「校正完成」。
+        // StartInventory 仍走 Info 通知；本断言锁定：发起返回不得产生 Success「校正完成」。
         await vm.StartInventoryCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
@@ -100,6 +104,10 @@ public sealed class FrameViewModelInventoryCorrectionTests
         public void Info(string message) => Infos.Add(message);
         public void Warning(string message) => Warnings.Add(message);
         public void Error(string message) => Errors.Add(message);
+
+        public bool ConfirmAnswer { get; set; } = true;
+        public bool Confirm(string message, string title) => ConfirmAnswer;
+        public void Alert(string message, string title) => Warnings.Add(message);
     }
 
     private sealed class FakeInventory : IInventoryService

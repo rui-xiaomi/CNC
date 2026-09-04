@@ -1,0 +1,137 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:p="clr-namespace:CncLoader.UI.ViewModels.Pages"
+                    xmlns:conv="clr-namespace:CncLoader.UI.Converters">
+
+    <!-- surface: view-pointmapping（点位映射，PLC 页内 tab） -->
+    <!-- ============================================================
+         点位映射（MAS_AUTO_PLC_POINT 维护）
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type p:PointMappingViewModel}">
+        <Grid Margin="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- 过滤栏 -->
+            <Border Grid.Row="0" Style="{StaticResource Panel}" Margin="0,0,0,14">
+                <Grid Height="44">
+                    <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+                        <TextBlock Text="PLC" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                        <ComboBox ItemsSource="{Binding PlcFilters}" SelectedItem="{Binding SelectedPlc}"
+                                  DisplayMemberPath="Name" Style="{StaticResource FormCombo}"
+                                  Width="180" Margin="8,0,0,0"/>
+                        <TextBlock Text="机台" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                        <ComboBox ItemsSource="{Binding EquipmentOptions}" SelectedItem="{Binding SelectedEquipment}"
+                                  DisplayMemberPath="DisplayName" Style="{StaticResource FormCombo}"
+                                  Width="200" Margin="8,0,0,0"/>
+                        <Button Content="按信号表批量导入" Style="{StaticResource PrimaryButton}"
+                                Padding="12,0" Margin="16,0,0,0"
+                                Command="{Binding ImportSignalTableCommand}"/>
+                        <Button Content="刷新" Style="{StaticResource GhostButton}"
+                                Padding="12,0" Margin="8,0,0,0"
+                                Command="{Binding ReloadPointsCommand}"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="12,0" VerticalAlignment="Center">
+                        <TextBlock Style="{StaticResource MutedText}" VerticalAlignment="Center">
+                            <Run Text="共 "/><Run Text="{Binding TotalCount}" FontFamily="{StaticResource FontMono}"/><Run Text=" 个点位"/>
+                        </TextBlock>
+                        <Button Content="保存全部" Style="{StaticResource PrimaryButton}"
+                                Padding="12,0" Margin="16,0,0,0"
+                                Command="{Binding SaveAllCommand}"/>
+                        <Button Content="保存所选" Style="{StaticResource GhostButton}"
+                                Padding="12,0" Margin="8,0,0,0"
+                                Command="{Binding SaveSelectedCommand}"/>
+                        <Button Content="删除所选" Style="{StaticResource DangerButton}"
+                                Padding="12,0" Margin="8,0,0,0"
+                                Command="{Binding DeleteSelectedCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 主表 -->
+            <Border Grid.Row="1" Style="{StaticResource Panel}">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
+                        <TextBlock Text="点位列表（双击单元格可编辑；改多行用 保存全部，仅改当前行用 保存所选）"
+                                   Style="{StaticResource PanelTitle}" Margin="12,0" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                    <DataGrid ItemsSource="{Binding PointRows}" SelectedItem="{Binding SelectedPoint}"
+                              Style="{StaticResource DataGridCompact}" RowHeight="30"
+                              IsReadOnly="False" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="50" IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                        <Setter Property="Foreground" Value="{StaticResource FgMutedBrush}"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="信号语义" Binding="{Binding SignalLabel}" Width="90" IsReadOnly="True"/>
+                            <DataGridTextColumn Header="信号 KEY" Binding="{Binding SignalKey, UpdateSourceTrigger=PropertyChanged}" Width="130">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="加工位" Binding="{Binding PositionName}" Width="80" IsReadOnly="True"/>
+                            <DataGridTextColumn Header="寄存器" Binding="{Binding RegisterAddress, UpdateSourceTrigger=PropertyChanged}" Width="90">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="IO 位" Binding="{Binding IoAddress, UpdateSourceTrigger=PropertyChanged}" Width="80">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="ON" Binding="{Binding OnValue, UpdateSourceTrigger=PropertyChanged}" Width="50">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="OFF" Binding="{Binding OffValue, UpdateSourceTrigger=PropertyChanged}" Width="50">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="长度" Binding="{Binding DataLength, UpdateSourceTrigger=PropertyChanged}" Width="50">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Border>
+
+            <!-- 状态条 -->
+            <Border Grid.Row="2" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0" Margin="0,8,0,0" Height="24">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                           VerticalAlignment="Center" Margin="12,0"/>
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+</ResourceDictionary>

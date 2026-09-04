@@ -20,7 +20,32 @@ public interface IEquipmentRoutingStore
     /// <summary>机台全部料架绑定行（含禁用），不做 STATE 过滤。</summary>
     Task<IReadOnlyList<FrameBindRoutingRow>> FindFrameBindsByEquipmentAsync(
         long equipmentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 一次取回 Equipment→Craft→WorkLine 三层原始行（含 STATE），供路由链判定。
+    /// 任一层缺失则对应字段为 null，调用方据此区分「关系缺失」与「已禁用」。
+    /// 默认实现按三次单查拼装；EF 实现覆盖为单次 DbContext 往返
+    /// （该链在一次派工里要走多遍，逐层各开一个 context 是主要的库往返来源）。
+    /// </summary>
+    async Task<EquipmentChainRows> FindEquipmentChainAsync(
+        long equipmentId, CancellationToken ct = default)
+    {
+        var equipment = await FindEquipmentAsync(equipmentId, ct);
+        if (equipment is null) return new EquipmentChainRows(null, null, null);
+
+        var craft = await FindCraftworkAsync(equipment.CraftworkId, ct);
+        if (craft is null) return new EquipmentChainRows(equipment, null, null);
+
+        var line = await FindWorkLineAsync(craft.WorkLineId, ct);
+        return new EquipmentChainRows(equipment, craft, line);
+    }
 }
+
+/// <summary>路由链三层原始行；缺失层为 null（区分关系缺失与禁用）。</summary>
+public sealed record EquipmentChainRows(
+    EquipmentRoutingRow? Equipment,
+    CraftworkRoutingRow? Craftwork,
+    WorkLineRoutingRow? WorkLine);
 
 /// <summary>机台路由快照（STATE 原样，含 null/未知）。</summary>
 public sealed record EquipmentRoutingRow(long Id, long CraftworkId, string? State);

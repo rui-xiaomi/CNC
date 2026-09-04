@@ -94,7 +94,9 @@ public sealed class DashboardViewModelReconciliationTests
             scheduler,
             new FakeFrames(),
             new FakeWorkLines(),
-            new FakeUser());
+            new FakeUser(),
+            new Tests.UI.RecordingNotify(),
+            new Tests.UI.ImmediateUiDispatcher());
 
     private sealed class FakeScheduler : IPositionScheduler
     {

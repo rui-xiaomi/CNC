@@ -106,7 +106,7 @@
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="Padding" Value="9,0"/>
         <Setter Property="Background" Value="{StaticResource Chrome2Brush}"/>
-        <Setter Property="BorderBrush" Value="#333A42"/>
+        <Setter Property="BorderBrush" Value="{StaticResource ChromeBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Foreground" Value="{StaticResource ChromeFgBrush}"/>
     </Style>

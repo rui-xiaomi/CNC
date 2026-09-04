@@ -11,9 +11,10 @@ namespace CncLoader.Data.Repositories;
 
 internal static class ConfigFlags
 {
-    public const string Active = "0";
-    public const string Disabled = "1";
-    public static bool IsEnabled(string state) => state == Active;
+    // 软删语义的唯一定义在 Core 的 ConfigActivity；此处只做转发，避免"0"/"1"在两处各写一遍。
+    public const string Active = ConfigActivity.Active;
+    public const string Disabled = ConfigActivity.Disabled;
+    public static bool IsEnabled(string state) => ConfigActivity.IsActive(state);
     public static string ToState(bool enabled) => enabled ? Active : Disabled;
     public static bool IsTrue(string? flag) => flag == "1";
     public static string ToFlag(bool value) => value ? "1" : "0";
@@ -27,6 +28,26 @@ internal static class ConfigFlags
         "3" => "NG架",
         _ => "未知"
     };
+}
+
+/// <summary>
+/// 配置软删的事务纪律：引用校验、软删、级联软删必须在同一 context + 同一事务内完成。
+/// 拆成两次连接时，校验通过后引用可能刚被新增（TOCTOU），级联也可能只删一半。
+/// 新增配置实体的删除一律走这里，别再各写一遍 BeginTransaction/Commit。
+/// </summary>
+internal static class ConfigSoftDelete
+{
+    public static async Task RunAsync(
+        IDbContextFactory<CncDbContext> factory,
+        Func<CncDbContext, CancellationToken, Task> checkThenMarkDeleted,
+        CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await checkThenMarkDeleted(db, ct);
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
 }
 
 public sealed class WorkLineService : IWorkLineService
@@ -96,6 +117,12 @@ public sealed class WorkLineService : IWorkLineService
     public async Task<DeleteCheckResult> CheckDeleteAsync(long id, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        return await CheckDeleteCoreAsync(db, id, ct);
+    }
+
+    private static async Task<DeleteCheckResult> CheckDeleteCoreAsync(
+        CncDbContext db, long id, CancellationToken ct)
+    {
         var refs = await db.Craftworks.AsNoTracking()
             .CountAsync(c => c.WorkLineId == id && c.State == ConfigFlags.Active, ct);
         return refs == 0
@@ -105,15 +132,18 @@ public sealed class WorkLineService : IWorkLineService
 
     public async Task DeleteAsync(long id, string author, CancellationToken ct = default)
     {
-        var check = await CheckDeleteAsync(id, ct);
-        if (!check.CanDelete) throw new InvalidOperationException(check.Message);
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var entity = await db.WorkLines.FirstOrDefaultAsync(x => x.Id == id && x.State == ConfigFlags.Active, ct)
-            ?? throw new InvalidOperationException("线体不存在或已删除。");
-        entity.State = ConfigFlags.Disabled;
-        entity.Author = author;
-        entity.UpdateTime = DateTime.Now;
-        await db.SaveChangesAsync(ct);
+        await ConfigSoftDelete.RunAsync(_factory, async (db, token) =>
+        {
+            var check = await CheckDeleteCoreAsync(db, id, token);
+            if (!check.CanDelete) throw new InvalidOperationException(check.Message);
+
+            var entity = await db.WorkLines.FirstOrDefaultAsync(x => x.Id == id && x.State == ConfigFlags.Active, token)
+                ?? throw new InvalidOperationException("线体不存在或已删除。");
+            entity.State = ConfigFlags.Disabled;
+            entity.Author = author;
+            entity.UpdateTime = DateTime.Now;
+        }, ct);
+
         WorkLinesChanged?.Invoke(this, EventArgs.Empty);
     }
 }
@@ -204,6 +234,12 @@ public sealed class CraftworkService : ICraftworkService
     public async Task<DeleteCheckResult> CheckDeleteAsync(long id, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        return await CheckDeleteCoreAsync(db, id, ct);
+    }
+
+    private static async Task<DeleteCheckResult> CheckDeleteCoreAsync(
+        CncDbContext db, long id, CancellationToken ct)
+    {
         var refs = await db.Equipments.AsNoTracking()
             .CountAsync(e => e.CraftworkId == id && e.State == ConfigFlags.Active, ct);
         return refs == 0
@@ -211,18 +247,18 @@ public sealed class CraftworkService : ICraftworkService
             : new DeleteCheckResult(false, refs, $"被 {refs} 台机台引用，禁止删除");
     }
 
-    public async Task DeleteAsync(long id, string author, CancellationToken ct = default)
-    {
-        var check = await CheckDeleteAsync(id, ct);
-        if (!check.CanDelete) throw new InvalidOperationException(check.Message);
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var entity = await db.Craftworks.FirstOrDefaultAsync(x => x.Id == id && x.State == ConfigFlags.Active, ct)
-            ?? throw new InvalidOperationException("工序不存在或已删除。");
-        entity.State = ConfigFlags.Disabled;
-        entity.Author = author;
-        entity.UpdateTime = DateTime.Now;
-        await db.SaveChangesAsync(ct);
-    }
+    public Task DeleteAsync(long id, string author, CancellationToken ct = default)
+        => ConfigSoftDelete.RunAsync(_factory, async (db, token) =>
+        {
+            var check = await CheckDeleteCoreAsync(db, id, token);
+            if (!check.CanDelete) throw new InvalidOperationException(check.Message);
+
+            var entity = await db.Craftworks.FirstOrDefaultAsync(x => x.Id == id && x.State == ConfigFlags.Active, token)
+                ?? throw new InvalidOperationException("工序不存在或已删除。");
+            entity.State = ConfigFlags.Disabled;
+            entity.Author = author;
+            entity.UpdateTime = DateTime.Now;
+        }, ct);
 }
 
 public sealed class EquipmentConfigService : IEquipmentConfigService
@@ -276,13 +312,11 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
     public async Task<WorkLineRef?> GetWorkLineByEquipmentAsync(long equipmentId, CancellationToken ct = default)
     {
         // 调度反查：Equipment→Craft→WorkLine 三层均须 STATE=="0"；Service 自身 fail-closed（不信任 store 预过滤）。
-        var eq = await _routing.FindEquipmentAsync(equipmentId, ct);
-        if (eq is null || !ConfigActivity.IsActive(eq.State)) return null;
-        var craft = await _routing.FindCraftworkAsync(eq.CraftworkId, ct);
-        if (craft is null || !ConfigActivity.IsActive(craft.State)) return null;
-        var line = await _routing.FindWorkLineAsync(craft.WorkLineId, ct);
-        if (line is null || !ConfigActivity.IsActive(line.State)) return null;
-        return new WorkLineRef(line.Id, line.WorkLineCode);
+        var chain = await _routing.FindEquipmentChainAsync(equipmentId, ct);
+        if (chain.Equipment is null || !ConfigActivity.IsActive(chain.Equipment.State)) return null;
+        if (chain.Craftwork is null || !ConfigActivity.IsActive(chain.Craftwork.State)) return null;
+        if (chain.WorkLine is null || !ConfigActivity.IsActive(chain.WorkLine.State)) return null;
+        return new WorkLineRef(chain.WorkLine.Id, chain.WorkLine.WorkLineCode);
     }
 
     public async Task<IReadOnlyList<PositionItem>> GetPositionsAsync(long equipmentId, CancellationToken ct = default)
@@ -512,6 +546,12 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
     public async Task<DeleteCheckResult> CheckDeleteAsync(long equipmentId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        return await CheckDeleteCoreAsync(db, equipmentId, ct);
+    }
+
+    private static async Task<DeleteCheckResult> CheckDeleteCoreAsync(
+        CncDbContext db, long equipmentId, CancellationToken ct)
+    {
         var ptRefs = await db.PlcPoints.AsNoTracking()
             .CountAsync(p => p.EquipmentId == equipmentId && p.State == ConfigFlags.Active, ct);
         var fbRefs = await db.FrameBinds.AsNoTracking()
@@ -524,27 +564,29 @@ public sealed class EquipmentConfigService : IEquipmentConfigService
         return new DeleteCheckResult(false, ptRefs + fbRefs, $"被 {string.Join("、", parts)} 引用，禁止删除");
     }
 
-    public async Task DeleteAsync(long equipmentId, string author, CancellationToken ct = default)
-    {
-        var check = await CheckDeleteAsync(equipmentId, ct);
-        if (!check.CanDelete) throw new InvalidOperationException(check.Message);
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var entity = await db.Equipments.FirstOrDefaultAsync(x => x.Id == equipmentId && x.State == ConfigFlags.Active, ct)
-            ?? throw new InvalidOperationException("机台不存在或已删除。");
-        entity.State = ConfigFlags.Disabled;
-        entity.Author = author;
-        entity.UpdateTime = DateTime.Now;
-
-        // 级联软删其加工位
-        var positions = await db.Positions.Where(p => p.EquipmentId == equipmentId && p.State == ConfigFlags.Active).ToListAsync(ct);
-        foreach (var p in positions)
+    public Task DeleteAsync(long equipmentId, string author, CancellationToken ct = default)
+        => ConfigSoftDelete.RunAsync(_factory, async (db, token) =>
         {
-            p.State = ConfigFlags.Disabled;
-            p.Author = author;
-            p.UpdateTime = DateTime.Now;
-        }
-        await db.SaveChangesAsync(ct);
-    }
+            var check = await CheckDeleteCoreAsync(db, equipmentId, token);
+            if (!check.CanDelete) throw new InvalidOperationException(check.Message);
+
+            var entity = await db.Equipments.FirstOrDefaultAsync(x => x.Id == equipmentId && x.State == ConfigFlags.Active, token)
+                ?? throw new InvalidOperationException("机台不存在或已删除。");
+            entity.State = ConfigFlags.Disabled;
+            entity.Author = author;
+            entity.UpdateTime = DateTime.Now;
+
+            // 级联软删其加工位（与机台软删同事务，避免半删）
+            var positions = await db.Positions
+                .Where(p => p.EquipmentId == equipmentId && p.State == ConfigFlags.Active)
+                .ToListAsync(token);
+            foreach (var p in positions)
+            {
+                p.State = ConfigFlags.Disabled;
+                p.Author = author;
+                p.UpdateTime = DateTime.Now;
+            }
+        }, ct);
 }
 
 public sealed class FrameService : IFrameService

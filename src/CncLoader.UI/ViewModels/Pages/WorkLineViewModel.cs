@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CncLoader.Common.Identity;
@@ -14,11 +13,14 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
 {
     private readonly IWorkLineService _service;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
 
-    public WorkLineViewModel(IWorkLineService service, ICurrentUser user)
+    public WorkLineViewModel(IWorkLineService service, ICurrentUser user,
+        IUserNotificationService notify)
     {
         _service = service;
         _user = user;
+        _notify = notify;
         Lines = new ObservableCollection<WorkLineListItem>();
         _ = InitializeAsync();
     }
@@ -94,7 +96,7 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
     {
         if (string.IsNullOrWhiteSpace(EditName) || string.IsNullOrWhiteSpace(EditCode))
         {
-            HandyControl.Controls.Growl.Warning("线体名称与编码为必填项。");
+            _notify.Warning("线体名称与编码为必填项。");
             return;
         }
         var model = new WorkLineEditModel
@@ -111,7 +113,7 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
         try
         {
             var id = await _service.SaveAsync(model, _user.Name);
-            HandyControl.Controls.Growl.Success($"线体 {model.Code} 已保存");
+            _notify.Success($"线体 {model.Code} 已保存");
             StatusMessage = $"线体 {model.Code} 已保存";
             await ReloadAsync();
             SelectedLine = Lines.FirstOrDefault(l => l.Id == id);
@@ -119,7 +121,7 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"保存失败：{ex.Message}");
+            _notify.Error($"保存失败：{ex.Message}");
         }
     }
 
@@ -139,23 +141,21 @@ public sealed partial class WorkLineViewModel : PageViewModelBase
             var check = await _service.CheckDeleteAsync(row.Id);
             if (!check.CanDelete)
             {
-                HandyControl.Controls.Growl.Warning(check.Message);
+                _notify.Warning(check.Message);
                 StatusMessage = check.Message;
                 return;
             }
             var msg = $"确认删除线体 {row.Name}（{row.Code}）？\n软删后列表不再显示，可在 DB 恢复。";
-            if (HandyControl.Controls.MessageBox.Show(msg, "删除线体二次确认",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
+            if (!_notify.Confirm(msg, "删除线体二次确认")) return;
             await _service.DeleteAsync(row.Id, _user.Name);
-            HandyControl.Controls.Growl.Success($"线体 {row.Name} 已删除。");
+            _notify.Success($"线体 {row.Name} 已删除。");
             StatusMessage = $"线体 {row.Name} 已删除";
             await ReloadAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+            _notify.Error($"删除失败：{ex.Message}");
         }
     }
 }

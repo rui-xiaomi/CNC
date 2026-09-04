@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CncLoader.Core.Tests" />
+    <!-- IRcsClient 刻意 internal：只有通信层能命名它，UI/App/Data 无法绕过 IRcsTaskService 门禁。 -->
+    <InternalsVisibleTo Include="CncLoader.Communication" />
   </ItemGroup>
 
 </Project>

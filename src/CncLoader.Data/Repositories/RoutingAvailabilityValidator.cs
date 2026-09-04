@@ -240,7 +240,10 @@ public sealed class RoutingAvailabilityValidator : IRoutingAvailabilityValidator
     private async Task<RoutingAvailabilityResult> ClassifyEquipmentChainAsync(
         long equipmentId, CancellationToken ct)
     {
-        var eq = await _routing.FindEquipmentAsync(equipmentId, ct);
+        // 三层一次取回：该链在一次派工里要走多遍，逐层各开一个 DbContext 是主要的库往返来源
+        var chain = await _routing.FindEquipmentChainAsync(equipmentId, ct);
+
+        var eq = chain.Equipment;
         if (eq is null)
         {
             return RoutingAvailabilityResult.Unavailable(
@@ -254,7 +257,7 @@ public sealed class RoutingAvailabilityValidator : IRoutingAvailabilityValidator
                 $"机台 {equipmentId} 已禁用或状态不可用");
         }
 
-        var craft = await _routing.FindCraftworkAsync(eq.CraftworkId, ct);
+        var craft = chain.Craftwork;
         if (craft is null)
         {
             return RoutingAvailabilityResult.Unavailable(
@@ -268,7 +271,7 @@ public sealed class RoutingAvailabilityValidator : IRoutingAvailabilityValidator
                 $"工序 {craft.Id} 已禁用或状态不可用");
         }
 
-        var line = await _routing.FindWorkLineAsync(craft.WorkLineId, ct);
+        var line = chain.WorkLine;
         if (line is null)
         {
             return RoutingAvailabilityResult.Unavailable(

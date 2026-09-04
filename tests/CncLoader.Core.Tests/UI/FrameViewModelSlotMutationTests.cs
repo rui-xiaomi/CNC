@@ -312,7 +312,9 @@ public sealed class FrameViewModelSlotMutationTests
             new FakeInventory(),
             new FakeScheduler(),
             new FakeUser(),
-            notify);
+            notify,
+            new ImmediateUiDispatcher(),
+            new StubDialogService());
 
     private static void PrepareSelection(FrameViewModel vm, string correctState, string? material)
     {
@@ -347,12 +349,23 @@ public sealed class FrameViewModelSlotMutationTests
         public void Info(string message) => Infos.Add(message);
         public void Warning(string message) => Warnings.Add(message);
         public void Error(string message) => Errors.Add(message);
+
+        public bool ConfirmAnswer { get; set; } = true;
+        public List<string> Confirmations { get; } = [];
+        public bool Confirm(string message, string title)
+        {
+            Confirmations.Add(message);
+            return ConfirmAnswer;
+        }
+        public void Alert(string message, string title) => Warnings.Add(message);
+
         public void Reset()
         {
             Successes.Clear();
             Infos.Clear();
             Warnings.Clear();
             Errors.Clear();
+            Confirmations.Clear();
         }
     }
 

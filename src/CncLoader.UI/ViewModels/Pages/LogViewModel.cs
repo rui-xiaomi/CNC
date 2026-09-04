@@ -17,12 +17,17 @@ public sealed partial class LogViewModel : PageViewModelBase
     private readonly IAlarmEventService _alarms;
     private readonly ILogFileReader _logReader;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
 
-    public LogViewModel(IAlarmEventService alarms, ILogFileReader logReader, ICurrentUser user)
+    public LogViewModel(IAlarmEventService alarms, ILogFileReader logReader, ICurrentUser user,
+        IUserNotificationService notify, IUiDispatcher ui)
     {
         _alarms = alarms;
         _logReader = logReader;
         _user = user;
+        _notify = notify;
+        _ui = ui;
         Alarms = new ObservableCollection<AlarmRow>();
         LogLines = new ObservableCollection<LogLine>();
         _alarms.AlarmRaised += OnAlarmRaised;
@@ -60,7 +65,7 @@ public sealed partial class LogViewModel : PageViewModelBase
 
     private void OnAlarmRaised(object? sender, AlarmRow e)
     {
-        System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+        _ui.Invoke(() =>
         {
             if (UnhandledOnly && e.State != "未处理") return;
             Alarms.Insert(0, e);
@@ -76,7 +81,7 @@ public sealed partial class LogViewModel : PageViewModelBase
         try
         {
             var rows = await _alarms.GetAlarmsAsync(UnhandledOnly, AlarmCount);
-            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            _ui.Invoke(() =>
             {
                 Alarms.Clear();
                 foreach (var r in rows) Alarms.Add(r);
@@ -119,11 +124,7 @@ public sealed partial class LogViewModel : PageViewModelBase
     [RelayCommand]
     private async Task DeleteAllAlarmsAsync()
     {
-        if (HandyControl.Controls.MessageBox.Show(
-                "确定删除全部告警记录？此操作物理删除、不可恢复。",
-                "清空告警二次确认",
-                System.Windows.MessageBoxButton.YesNo,
-                System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
+        if (!_notify.Confirm("确定删除全部告警记录？此操作物理删除、不可恢复。", "清空告警二次确认"))
             return;
         try
         {
@@ -141,7 +142,7 @@ public sealed partial class LogViewModel : PageViewModelBase
         {
             var minLevel = SelectedLevel == "全部" ? null : SelectedLevel;
             var lines = await _logReader.TailAsync(LineCount, minLevel);
-            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            _ui.Invoke(() =>
             {
                 LogLines.Clear();
                 foreach (var l in lines) LogLines.Add(l);

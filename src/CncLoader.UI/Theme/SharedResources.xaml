@@ -1,0 +1,77 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:p="clr-namespace:CncLoader.UI.ViewModels.Pages"
+                    xmlns:conv="clr-namespace:CncLoader.UI.Converters">
+
+    <!-- 跨页共享资源：刻度母题、值转换器、占位模板、启用徽标。必须在页面字典之前合并。 -->
+    <!-- 计量"校准刻度"母题（签名元素，仅监控治具卡使用） -->
+    <DrawingBrush x:Key="CalibrationTicks" TileMode="Tile" Stretch="None"
+                  Viewport="0,0,11,7" ViewportUnits="Absolute">
+        <DrawingBrush.Drawing>
+            <GeometryDrawing Brush="{StaticResource CalibrationTickBrush}">
+                <GeometryDrawing.Geometry>
+                    <RectangleGeometry Rect="0,0,1,7"/>
+                </GeometryDrawing.Geometry>
+            </GeometryDrawing>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
+
+    <!-- PLC 页与点位映射页公用的局部转换器（重复声明，避免 DataTemplate 之间共享冲突） -->
+    <conv:ResourceKeyToBrushConverter x:Key="BrushConv"/>
+    <conv:BoolToOnOffConverter x:Key="PollConv"/>
+    <conv:SemanticColorConverter x:Key="SemConv"/>
+    <conv:BoolToYesNoConverter x:Key="YesNoConv"/>
+    <conv:BoolToEnabledTextConverter x:Key="EnabledConv"/>
+    <conv:BoolToStatusBrushConverter x:Key="StatusBrushConv"/>
+    <conv:UploadRoleBrushConverter x:Key="RoleBrushConv"/>
+    <conv:InverseBoolConverter x:Key="InverseConv"/>
+    <conv:BoolToVisibilityConverter x:Key="BoolVisConv"/>
+    <conv:InverseBoolToVisibilityConverter x:Key="BoolVisInvConv"/>
+    <conv:AlarmLevelToBrushConverter x:Key="AlarmLevelBrushConv"/>
+    <conv:AlarmStateToBrushConverter x:Key="AlarmStateBrushConv"/>
+    <conv:CancelFlagConverter x:Key="CancelFlagConv"/>
+    <conv:RcsKindToZhConverter x:Key="RcsKindZhConv"/>
+    <conv:RcsStateToZhConverter x:Key="RcsStateZhConv"/>
+    <conv:RcsDirectionToZhConverter x:Key="RcsDirZhConv"/>
+    <conv:RcsInterfaceToZhConverter x:Key="RcsIfaceZhConv"/>
+    <conv:RcsResultToZhConverter x:Key="RcsResultZhConv"/>
+    <conv:RcsCostToZhConverter x:Key="RcsCostZhConv"/>
+    <conv:PrettyJsonConverter x:Key="PrettyJsonConv"/>
+    <conv:FrameRoleToZhConverter x:Key="FrameRoleZhConv"/>
+    <conv:ChangeFrameStepToZhConverter x:Key="CfStepZhConv"/>
+    <conv:StateBadgeToBrushConverter x:Key="StateBadgeBrushConv"/>
+    <conv:StateBadgeToSoftBrushConverter x:Key="StateBadgeSoftBrushConv"/>
+    <conv:StateBadgeToIconConverter x:Key="StateBadgeIconConv"/>
+    <conv:DashStateBadgeToBrushConverter x:Key="DashStateBadgeBrushConv"/>
+    <conv:DashStateBadgeToSoftBrushConverter x:Key="DashStateBadgeSoftBrushConv"/>
+
+    <!-- ===== 通用占位模板 ===== -->
+    <DataTemplate x:Key="PlaceholderTemplate">
+        <Grid Margin="2">
+            <Border Style="{StaticResource Panel}" VerticalAlignment="Top">
+                <StackPanel Margin="16">
+                    <TextBlock Text="{Binding Title}" Style="{StaticResource PanelTitle}" FontSize="16"/>
+                    <Border Height="7" Margin="0,8,0,12" Background="{StaticResource CalibrationTicks}"/>
+                    <TextBlock Text="{Binding Description}" Style="{StaticResource MutedText}"
+                               TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left"/>
+                    <TextBlock Text="将在后续阶段实现完整功能。" Style="{StaticResource MutedText}"
+                               Margin="0,12,0,0" Opacity="0.8"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+    <!-- 启用/禁用 状态徽标（线体/工序/机台 列表共用；只读展示，非可点开关） -->
+    <DataTemplate x:Key="EnabledBadge">
+        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
+                Padding="6,1" HorizontalAlignment="Left" Margin="8,0" VerticalAlignment="Center"
+                ToolTip="仅展示库内启用状态；停用请用删除（软删）。本列不可点击切换。">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                         Fill="{Binding Enabled, Converter={StaticResource StatusBrushConv}}"/>
+                <TextBlock Text="{Binding Enabled, Converter={StaticResource EnabledConv}}" FontSize="12"/>
+            </StackPanel>
+        </Border>
+    </DataTemplate>
+
+</ResourceDictionary>

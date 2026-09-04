@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -7,7 +6,7 @@ using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
-using CncLoader.UI.Views.Dialogs;
+using CncLoader.UI.Services;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -24,6 +23,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     private readonly IDeviceLogStore _logStore;
     private readonly IAlarmEventService _alarms;
     private readonly ICurrentUser _user;
+    private readonly IUserNotificationService _notify;
+    private readonly IUiDispatcher _ui;
+    private readonly IDialogService _dialogs;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _heartbeatTimer;
     private long _heartbeat;
@@ -31,7 +33,8 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     public PlcViewModel(IPlcCatalogService catalog, IPlcConnectionService connections,
         IPlcOperationService operations, IPlcPointManagementService points,
         IDeviceLogStore logStore, IAlarmEventService alarms, ICurrentUser user,
-        PointMappingViewModel pointMapping)
+        PointMappingViewModel pointMapping,
+        IUserNotificationService notify, IUiDispatcher ui, IDialogService dialogs)
     {
         _catalog = catalog;
         _connections = connections;
@@ -40,6 +43,9 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         _logStore = logStore;
         _alarms = alarms;
         _user = user;
+        _notify = notify;
+        _ui = ui;
+        _dialogs = dialogs;
         PointMapping = pointMapping;
 
         PlcRows = new ObservableCollection<PlcRowVm>();
@@ -151,14 +157,14 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             await _connections.ConnectAsync(row.PlcId);
             await RefreshPlcRowAsync(row.PlcId);
             StatusMessage = $"{row.Name} 已连接";
-            HandyControl.Controls.Growl.Success($"{row.Name} 已连接");
+            _notify.Success($"{row.Name} 已连接");
             if (SelectedPlc?.PlcId == row.PlcId)
                 await ReadOnceAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Warning($"{row.Name} 连接失败：{ex.Message}");
+            _notify.Warning($"{row.Name} 连接失败：{ex.Message}");
         }
     }
 
@@ -169,7 +175,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         await _connections.DisconnectAsync(row.PlcId);
         await RefreshPlcRowAsync(row.PlcId);
         StatusMessage = $"{row.Name} 已断开";
-        HandyControl.Controls.Growl.Info($"{row.Name} 已断开");
+        _notify.Info($"{row.Name} 已断开");
         if (SelectedPlc?.PlcId == row.PlcId)
             await ShowDisconnectedReadRowsAsync(row.PlcId);
     }
@@ -180,7 +186,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         await _connections.ConnectAllAsync();
         await ReloadAllAsync();
         StatusMessage = "全部连接完成";
-        HandyControl.Controls.Growl.Success("全部 PLC 连接完成");
+        _notify.Success("全部 PLC 连接完成");
         if (SelectedPlc is not null)
             await ReadOnceAsync();
     }
@@ -191,7 +197,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         await _connections.DisconnectAllAsync();
         await ReloadAllAsync();
         StatusMessage = "全部已断开";
-        HandyControl.Controls.Growl.Info("全部 PLC 已断开");
+        _notify.Info("全部 PLC 已断开");
         if (SelectedPlc is not null)
             await ShowDisconnectedReadRowsAsync(SelectedPlc.PlcId);
     }
@@ -204,20 +210,20 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         {
             var suggestedId = await _catalog.SuggestNextPlcIdAsync();
             var equipments = await _catalog.GetEquipmentsAsync();
-            var dlg = new PlcEditDialog(suggestedId, equipments) { Owner = Application.Current?.MainWindow };
-            if (dlg.ShowDialog() != true || dlg.Result is null) return;
+            var created = _dialogs.EditPlc(null, suggestedId, equipments, null);
+            if (created is null) return;
 
-            await _catalog.SaveAsync(dlg.Result, _user.Name);
-            if (dlg.Result.BoundEquipmentId is not null)
-                await _catalog.BindEquipmentAsync(dlg.Result.PlcId, dlg.Result.BoundEquipmentId, _user.Name);
-            HandyControl.Controls.Growl.Success($"PLC {dlg.Result.Name} 已新增。");
-            StatusMessage = $"PLC {dlg.Result.Name} 已新增";
+            await _catalog.SaveAsync(created, _user.Name);
+            if (created.BoundEquipmentId is not null)
+                await _catalog.BindEquipmentAsync(created.PlcId, created.BoundEquipmentId, _user.Name);
+            _notify.Success($"PLC {created.Name} 已新增。");
+            StatusMessage = $"PLC {created.Name} 已新增";
             await ReloadAllAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"新增失败：{ex.Message}");
+            _notify.Error($"新增失败：{ex.Message}");
         }
     }
 
@@ -231,7 +237,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             var edit = await _catalog.GetByIdAsync(row.PlcId);
             if (edit is null)
             {
-                HandyControl.Controls.Growl.Warning("该 PLC 不存在或已删除。");
+                _notify.Warning("该 PLC 不存在或已删除。");
                 await ReloadAllAsync();
                 return;
             }
@@ -239,33 +245,33 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             // 查 PLC 当前被哪台机台引用（一机一 PLC，业务链机台→PLC）；机台下拉含"未绑定"，可在 PLC 侧反向改机台绑定
             var equipments = await _catalog.GetEquipmentsAsync();
             var bound = equipments.FirstOrDefault(e => e.PlcId == row.PlcId);
-            var dlg = new PlcEditDialog(edit, suggestedId, equipments, bound?.Id) { Owner = Application.Current?.MainWindow };
-            if (dlg.ShowDialog() != true || dlg.Result is null) return;
+            var updated = _dialogs.EditPlc(edit, suggestedId, equipments, bound?.Id);
+            if (updated is null) return;
 
             if (_connections.IsConnected(row.PlcId))
             {
                 await _connections.DisconnectAsync(row.PlcId);
                 StatusMessage = "配置已变更，已断开连接，请重新连接。";
             }
-            await _catalog.SaveAsync(dlg.Result, _user.Name);
-            await _catalog.BindEquipmentAsync(row.PlcId, dlg.Result.BoundEquipmentId, _user.Name);
+            await _catalog.SaveAsync(updated, _user.Name);
+            await _catalog.BindEquipmentAsync(row.PlcId, updated.BoundEquipmentId, _user.Name);
             // 编辑会断开连接；保存后自动重连，避免界面显示未连接又触发读点位告警。
             try
             {
                 await _connections.ConnectAsync(row.PlcId);
-                StatusMessage = $"PLC {dlg.Result.Name} 已更新并重连";
+                StatusMessage = $"PLC {updated.Name} 已更新并重连";
             }
             catch (Exception cex)
             {
-                StatusMessage = $"PLC {dlg.Result.Name} 已更新，重连失败：{cex.Message}";
+                StatusMessage = $"PLC {updated.Name} 已更新，重连失败：{cex.Message}";
             }
-            HandyControl.Controls.Growl.Success($"PLC {dlg.Result.Name} 已更新。");
+            _notify.Success($"PLC {updated.Name} 已更新。");
             await ReloadAllAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"更新失败：{ex.Message}");
+            _notify.Error($"更新失败：{ex.Message}");
         }
     }
 
@@ -279,27 +285,25 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
             var check = await _catalog.CheckDeleteAsync(row.PlcId);
             if (!check.CanDelete)
             {
-                HandyControl.Controls.Growl.Warning(check.Message);
+                _notify.Warning(check.Message);
                 StatusMessage = check.Message;
                 return;
             }
             var msg = $"确认删除 PLC {row.Name}（PlcId={row.PlcId}）？\n删除后不可在列表中显示（软删，可在 DB 恢复）。";
-            if (HandyControl.Controls.MessageBox.Show(msg, "删除 PLC 二次确认",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
+            if (!_notify.Confirm(msg, "删除 PLC 二次确认")) return;
 
             if (_connections.IsConnected(row.PlcId))
                 await _connections.DisconnectAsync(row.PlcId);
 
             await _catalog.DeleteAsync(row.PlcId, _user.Name);
-            HandyControl.Controls.Growl.Success($"PLC {row.Name} 已删除。");
+            _notify.Success($"PLC {row.Name} 已删除。");
             StatusMessage = $"PLC {row.Name} 已删除";
             await ReloadAllAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = ex.Message;
-            HandyControl.Controls.Growl.Error($"删除失败：{ex.Message}");
+            _notify.Error($"删除失败：{ex.Message}");
         }
     }
 
@@ -368,8 +372,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         if (SelectedWriteSignal is null || SelectedPlc is null) return;
 
         var msg = $"确认向 {SelectedWriteSignal.DisplayName} 写入值 {WriteValue}？\n此操作将驱动真实机台动作。";
-        if (HandyControl.Controls.MessageBox.Show(msg, "写 PLC 二次确认", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-            return;
+        if (!_notify.Confirm(msg, "写 PLC 二次确认")) return;
 
         var result = await _operations.WriteWithConfirmAsync(
             SelectedPlc.PlcId, SelectedWriteSignal.RegisterAddress, WriteValue, _user.Name);
@@ -377,17 +380,17 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         if (result.Error is not null)
         {
             StatusMessage = result.Error;
-            HandyControl.Controls.Growl.Error(result.Error);
+            _notify.Error(result.Error);
         }
         else if (result.Verified)
         {
             StatusMessage = $"写入成功，回读={result.ReadBackValue}";
-            HandyControl.Controls.Growl.Success($"写入成功，回读={result.ReadBackValue}");
+            _notify.Success($"写入成功，回读={result.ReadBackValue}");
         }
         else
         {
             StatusMessage = $"已写入但回读不一致：{result.ReadBackValue}";
-            HandyControl.Controls.Growl.Warning($"已写入但回读不一致：{result.ReadBackValue}");
+            _notify.Warning($"已写入但回读不一致：{result.ReadBackValue}");
         }
         await LoadLogsAsync(SelectedPlc.PlcId);
     }
@@ -454,9 +457,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         var row = PlcRowVm.From(updated);
 
         // ConnectionChanged 可能来自后台 IO 线程；ObservableCollection 必须在 UI 线程改。
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null) return;
-        await dispatcher.InvokeAsync(() =>
+        _ui.Invoke(() =>
         {
             // 替换列表项会让 DataGrid 把 SelectedItem 置空（连带 SelectedPlc=null），
             // 故在替换前先记住是否选中，替换后无条件恢复，避免选中丢失导致单次读/写无目标。
@@ -480,7 +481,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
 
     private void PrependLog(string line)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        _ui.Invoke(() =>
         {
             LogLines.Insert(0, line);
             while (LogLines.Count > 50) LogLines.RemoveAt(LogLines.Count - 1);
@@ -489,7 +490,7 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
 
     private void PrependAlarm(string line)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        _ui.Invoke(() =>
         {
             AlarmLines.Insert(0, line);
             while (AlarmLines.Count > 20) AlarmLines.RemoveAt(AlarmLines.Count - 1);

@@ -11,7 +11,7 @@
     <DrawingBrush x:Key="DashCalibrationTicks" TileMode="Tile" Stretch="None"
                   Viewport="0,0,11,7" ViewportUnits="Absolute">
         <DrawingBrush.Drawing>
-            <GeometryDrawing Brush="#22D3D8">
+            <GeometryDrawing Brush="{StaticResource DashAccentBrush}">
                 <GeometryDrawing.Geometry>
                     <RectangleGeometry Rect="0,0,1,7"/>
                 </GeometryDrawing.Geometry>
@@ -121,13 +121,16 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
-                    <Border x:Name="track" Background="#4A5562" CornerRadius="3" Margin="1,0"/>
+                    <Border x:Name="track" Background="{StaticResource ScrollThumbBrush}"
+                            CornerRadius="3" Margin="1,0"/>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="track" Property="Background" Value="#6B7785"/>
+                            <Setter TargetName="track" Property="Background"
+                                    Value="{StaticResource ScrollThumbHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                            <Setter TargetName="track" Property="Background" Value="#22D3D8"/>
+                            <Setter TargetName="track" Property="Background"
+                                    Value="{StaticResource DashAccentBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -137,7 +140,7 @@
 
     <ControlTemplate x:Key="DashVerticalScrollBarTemplate" TargetType="ScrollBar">
         <Grid Background="Transparent" Width="8">
-            <Border Background="#161B22" CornerRadius="4" Margin="1,2"/>
+            <Border Background="{StaticResource SurfaceBrush}" CornerRadius="4" Margin="1,2"/>
             <Track x:Name="PART_Track" IsDirectionReversed="True" Margin="0,2">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Height="0"/>
@@ -154,7 +157,7 @@
 
     <ControlTemplate x:Key="DashHorizontalScrollBarTemplate" TargetType="ScrollBar">
         <Grid Background="Transparent" Height="8">
-            <Border Background="#161B22" CornerRadius="4" Margin="2,1"/>
+            <Border Background="{StaticResource SurfaceBrush}" CornerRadius="4" Margin="2,1"/>
             <Track x:Name="PART_Track" Margin="2,0">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Command="ScrollBar.PageLeftCommand" Opacity="0" Width="0"/>
@@ -190,7 +193,7 @@
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="RowBackground" Value="Transparent"/>
-        <Setter Property="AlternatingRowBackground" Value="#0DFFFFFF"/>
+        <Setter Property="AlternatingRowBackground" Value="{StaticResource RowStripeBrush}"/>
         <Setter Property="HorizontalGridLinesBrush" Value="Transparent"/>
         <Setter Property="VerticalGridLinesBrush" Value="Transparent"/>
         <Setter Property="GridLinesVisibility" Value="None"/>

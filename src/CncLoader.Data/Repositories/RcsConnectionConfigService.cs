@@ -1,3 +1,4 @@
+using CncLoader.Core.Config;
 using CncLoader.Core.Rcs;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -21,7 +22,7 @@ public sealed class RcsConnectionConfigService : IRcsConnectionConfigService
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         var row = await db.Agvs.AsNoTracking()
-            .Where(a => a.State == "0")
+            .Where(a => a.State == ConfigActivity.Active)
             .OrderBy(a => a.Id)
             .FirstOrDefaultAsync(ct);
         return row is null ? null : Map(row);
@@ -33,7 +34,7 @@ public sealed class RcsConnectionConfigService : IRcsConnectionConfigService
         {
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
             var row = await db.Agvs.AsNoTracking()
-                .Where(a => a.State == "0" && a.AgvId == agvId)
+                .Where(a => a.State == ConfigActivity.Active && a.AgvId == agvId)
                 .OrderBy(a => a.Id)
                 .FirstOrDefaultAsync(ct);
             if (row is not null) return Map(row);
@@ -62,9 +63,9 @@ public sealed class RcsConnectionConfigService : IRcsConnectionConfigService
         if (config.Id > 0)
             row = await db.Agvs.FirstOrDefaultAsync(a => a.Id == config.Id, ct);
         if (row is null && config.AgvId > 0)
-            row = await db.Agvs.Where(a => a.State == "0" && a.AgvId == config.AgvId).OrderBy(a => a.Id).FirstOrDefaultAsync(ct);
+            row = await db.Agvs.Where(a => a.State == ConfigActivity.Active && a.AgvId == config.AgvId).OrderBy(a => a.Id).FirstOrDefaultAsync(ct);
         if (row is null)
-            row = await db.Agvs.Where(a => a.State == "0").OrderBy(a => a.Id).FirstOrDefaultAsync(ct);
+            row = await db.Agvs.Where(a => a.State == ConfigActivity.Active).OrderBy(a => a.Id).FirstOrDefaultAsync(ct);
 
         var now = DateTime.Now;
         if (row is null)
