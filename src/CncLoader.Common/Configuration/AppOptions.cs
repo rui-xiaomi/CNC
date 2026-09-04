@@ -61,7 +61,7 @@ public sealed class RcsOptions
     /// <summary>RCS 完成后 HasMat fresh 连续读取未知的告警阈值。</summary>
     public int HasMatRecheckFailThreshold { get; set; } = 6;
 
-    /// <summary>是否启用加工位状态机调度器（第四阶段⑤）。关闭时工位态由轮询合成回退。</summary>
+    /// <summary>是否启用加工位状态机调度器。关闭时不对账、不开自动派工，看板显示「调度器未启用」；轮询不再合成工位态。</summary>
     public bool SchedulerEnabled { get; set; } = true;
 
     /// <summary>是否启用料架水位监视器自动换架（第四阶段⑥c）。默认关：料架→机台角色反查（GetBindingByFrameAsync）落地前，

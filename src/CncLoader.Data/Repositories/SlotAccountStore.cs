@@ -7,7 +7,8 @@ namespace CncLoader.Data.Repositories;
 
 /// <summary>
 /// 槽位外部写持久化：条件 <c>ExecuteUpdateAsync</c>（identity + SLOT_STATE != Reserved）。
-/// 批量会话：同一 DbContext + 显式事务。
+/// 批量会话：同一 DbContext + 显式事务；盘点须走 <see cref="ExecuteInTransactionAsync{T}"/>，
+/// 不可只用 <see cref="OpenAsync"/>（Pomelo 重试策略会拒绝事务内后续 EF 操作）。
 /// </summary>
 public sealed class SlotAccountStore : ISlotAccountStore
 {
@@ -35,8 +36,41 @@ public sealed class SlotAccountStore : ISlotAccountStore
     public async Task<ISlotAccountSession> OpenAsync(CancellationToken ct = default)
     {
         var db = await _factory.CreateDbContextAsync(ct);
-        var tx = await db.Database.BeginTransactionAsync(ct);
-        return new EfSlotAccountSession(db, tx);
+        try
+        {
+            var tx = await db.Database.BeginTransactionAsync(ct);
+            return new EfSlotAccountSession(db, tx);
+        }
+        catch
+        {
+            await db.DisposeAsync();
+            throw;
+        }
+    }
+
+    public async Task<T> ExecuteInTransactionAsync<T>(
+        Func<ISlotAccountSession, CancellationToken, Task<T>> work,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var session = new EfSlotAccountSession(db, tx, ownsResources: false);
+            try
+            {
+                return await work(session, ct);
+            }
+            finally
+            {
+                if (!session.IsCompleted)
+                {
+                    try { await session.RollbackAsync(CancellationToken.None); }
+                    catch { /* 已回滚或连接已断 */ }
+                }
+            }
+        });
     }
 
     private const string ReservePut = "RSV_PUT";
@@ -310,12 +344,16 @@ public sealed class SlotAccountStore : ISlotAccountStore
     {
         private readonly CncDbContext _db;
         private readonly IDbContextTransaction _tx;
+        private readonly bool _ownsResources;
         private bool _completed;
 
-        public EfSlotAccountSession(CncDbContext db, IDbContextTransaction tx)
+        public bool IsCompleted => _completed;
+
+        public EfSlotAccountSession(CncDbContext db, IDbContextTransaction tx, bool ownsResources = true)
         {
             _db = db;
             _tx = tx;
+            _ownsResources = ownsResources;
         }
 
         public async Task<SlotRow?> FindByFrameSlotAsync(long frameId, int slotNo, CancellationToken ct = default)
@@ -368,6 +406,8 @@ public sealed class SlotAccountStore : ISlotAccountStore
                 catch { /* dispose 路径尽力回滚 */ }
                 _completed = true;
             }
+
+            if (!_ownsResources) return;
 
             await _tx.DisposeAsync();
             await _db.DisposeAsync();

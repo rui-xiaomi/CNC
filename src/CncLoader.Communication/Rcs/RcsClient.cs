@@ -61,6 +61,16 @@ internal sealed class RcsClient : IRcsClient
     public Task<RcsResult> QueryTaskAsync(QueryTaskRequest req, CancellationToken ct = default)
         => SendAsync("queryTask", QueryPath, req, null, ct);
 
+    public Task<RcsResult> QueryTaskAtAsync(QueryTaskRequest req, RcsConnectionConfig probe, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        var baseUrl = string.IsNullOrWhiteSpace(probe.BaseUrl) ? _runtime.BaseUrl : probe.BaseUrl.Trim();
+        return SendAsync("queryTask", QueryPath, req, null, ct,
+            baseUrlOverride: baseUrl,
+            timeoutMsOverride: probe.RequestTimeoutMs,
+            maxRetriesOverride: probe.MaxRetries);
+    }
+
     private void FillCommon(RcsRequestBase req)
     {
         req.ReqTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -69,12 +79,13 @@ internal sealed class RcsClient : IRcsClient
         if (string.IsNullOrEmpty(req.TokenCode)) req.TokenCode = _runtime.TokenCode;
     }
 
-    private async Task<RcsResult> SendAsync(string iface, string path, object payload, string? taskId, CancellationToken ct)
+    private async Task<RcsResult> SendAsync(string iface, string path, object payload, string? taskId, CancellationToken ct,
+        string? baseUrlOverride = null, int? timeoutMsOverride = null, int? maxRetriesOverride = null)
     {
-        var url = CombineUrl(_runtime.BaseUrl, path);
+        var url = CombineUrl(baseUrlOverride ?? _runtime.BaseUrl, path);
         var body = JsonSerializer.Serialize(payload, payload.GetType(), JsonOpt);
-        var maxAttempts = Math.Max(1, _runtime.MaxRetries);
-        var timeoutMs = Math.Max(1000, _runtime.RequestTimeoutMs);
+        var maxAttempts = Math.Max(1, maxRetriesOverride ?? _runtime.MaxRetries);
+        var timeoutMs = Math.Max(1000, timeoutMsOverride ?? _runtime.RequestTimeoutMs);
         RcsResult last = RcsResult.Fail(body, "未发送");
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)

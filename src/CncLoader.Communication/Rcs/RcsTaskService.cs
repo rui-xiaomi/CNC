@@ -309,6 +309,9 @@ public sealed class RcsTaskService : IRcsTaskService
     public Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default)
         => _client.QueryTaskAsync(req, ct);
 
+    public Task<RcsResult> ProbeQueryAsync(RcsConnectionConfig probe, QueryTaskRequest req, CancellationToken ct = default)
+        => _client.QueryTaskAtAsync(req, probe, ct);
+
     public Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default)
         => _store.GetRecentAsync(limit, ct);
 

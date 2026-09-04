@@ -33,12 +33,12 @@ public sealed class RcsSendBoundaryInventoryTests
         ("Tracker AutoRedo", nameof(RcsTaskTracker), nameof(IRcsTaskService.AutoRedispatchAsync), true),
         ("Cancel", nameof(RcsViewModel) + "/" + nameof(PositionScheduler), nameof(IRcsTaskService.CancelAsync), false),
         ("queryTask/对账", nameof(RcsTaskTracker) + "/" + nameof(PositionScheduler), nameof(IRcsTaskService.QueryAsync), false),
-        ("TestConnection", nameof(RcsViewModel), nameof(IRcsTaskService.QueryAsync), false),
+        ("TestConnection", nameof(RcsViewModel), nameof(IRcsTaskService.ProbeQueryAsync), false),
         ("ConfirmCancel", nameof(RcsViewModel), nameof(IRcsTaskService.ConfirmCancelHandledAsync), false),
     };
 
     [Test]
-    public void IRcsClient_Surface_IsExactly_FourOutboundMethods()
+    public void IRcsClient_Surface_IsExactly_OutboundMethods()
     {
         var methods = typeof(IRcsClient)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
@@ -51,6 +51,7 @@ public sealed class RcsSendBoundaryInventoryTests
             nameof(IRcsClient.CancelTaskAsync),
             nameof(IRcsClient.ExcuteTaskAsync),
             nameof(IRcsClient.QueryTaskAsync),
+            nameof(IRcsClient.QueryTaskAtAsync),
             nameof(IRcsClient.TransitTaskAsync),
         }));
     }
@@ -184,6 +185,8 @@ public sealed class RcsSendBoundaryInventoryTests
         Assert.Multiple(() =>
         {
             Assert.That(EntryMatrix.Where(e => e.ServiceMethod == nameof(IRcsTaskService.QueryAsync))
+                    .All(e => !e.NewExternal), Is.True);
+            Assert.That(EntryMatrix.Where(e => e.ServiceMethod == nameof(IRcsTaskService.ProbeQueryAsync))
                     .All(e => !e.NewExternal), Is.True);
             Assert.That(EntryMatrix.Where(e => e.ServiceMethod == nameof(IRcsTaskService.CancelAsync))
                     .All(e => !e.NewExternal), Is.True);

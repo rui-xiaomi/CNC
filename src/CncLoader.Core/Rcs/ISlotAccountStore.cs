@@ -22,6 +22,19 @@ public interface ISlotAccountStore
     /// <summary>打开带事务的批量会话（盘点同事务多槽条件写）。</summary>
     Task<ISlotAccountSession> OpenAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// 在同一事务内执行批量写。生产 Store 须把整段包进 <c>CreateExecutionStrategy</c>，
+    /// 否则 Pomelo <c>EnableRetryOnFailure</c> 会在事务内下一条 EF 操作抛策略门禁。
+    /// 默认实现仅 <c>OpenAsync</c>，供内存 fake 使用。
+    /// </summary>
+    async Task<T> ExecuteInTransactionAsync<T>(
+        Func<ISlotAccountSession, CancellationToken, Task<T>> work,
+        CancellationToken ct = default)
+    {
+        await using var session = await OpenAsync(ct);
+        return await work(session, ct);
+    }
+
     /// <summary>入库预记（PUT）：候选空槽 + WHERE Empty 原子更新。无空槽/全并发失败返回 null。</summary>
     Task<ReservedSlot?> ReservePutAsync(long frameId, string taskId, string? materialId, CancellationToken ct = default)
         => throw new NotSupportedException("此 Store 未实现预记状态机接缝");

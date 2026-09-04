@@ -43,10 +43,14 @@ internal static class ConfigSoftDelete
         CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await checkThenMarkDeleted(db, ct);
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await checkThenMarkDeleted(db, ct);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        });
     }
 }
 

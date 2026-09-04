@@ -88,6 +88,13 @@ public static class ReconciliationStatusPresentation
                 "SoftOkBrush",
                 null,
                 true),
+            ReconciliationState.Disabled => (
+                "调度器未启用",
+                "自动派工未开启（SchedulerEnabled=false）",
+                "IdleBrush",
+                "SoftIdleBrush",
+                "调度器关闭时不对账、不开闸；手工 RCS / PLC 不受影响",
+                false),
             _ => (
                 "启动对账未开始",
                 "自动派工尚未开启",

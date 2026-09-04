@@ -138,6 +138,21 @@ public sealed class ReconciliationStateNotificationTests
     }
 
     [Test]
+    public void Map_Disabled_应明示调度未启用且不开闸()
+    {
+        var mapped = ReconciliationStatusPresentation.Map(
+            new ReconciliationSnapshot(ReconciliationState.Disabled, null, false));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mapped.Title, Is.EqualTo("调度器未启用"));
+            Assert.That(mapped.SubText, Does.Contain("SchedulerEnabled=false"));
+            Assert.That(mapped.BrushKey, Is.EqualTo("IdleBrush"));
+            Assert.That(mapped.IsGateOpen, Is.False);
+        });
+    }
+
+    [Test]
     public void SanitizeDisplayReason_应去掉异常类型名与敏感连接信息()
     {
         var cleaned = ReconciliationStatusPresentation.SanitizeDisplayReason(

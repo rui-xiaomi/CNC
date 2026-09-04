@@ -38,8 +38,15 @@ public interface IRcsTaskService
     Task<RcsResult> DispatchPalletReturnAsync(long equipmentId, long? positionId, string fromCode, string toCode,
         long workLineId, string lineCode, string author, CancellationToken ct = default);
 
-    /// <summary>条件查询任务（兜底/手动）。</summary>
+    /// <summary>条件查询任务（兜底/手动）。走进程内运行时出站地址。</summary>
     Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default);
+
+    /// <summary>
+    /// 用指定出站探测连通（测试连接）。不得改 <c>IRcsRuntimeConfig</c>。
+    /// 默认实现回退到 <see cref="QueryAsync"/>，仅测试桩使用；生产须走覆盖实现。
+    /// </summary>
+    Task<RcsResult> ProbeQueryAsync(RcsConnectionConfig probe, QueryTaskRequest req, CancellationToken ct = default)
+        => QueryAsync(req, ct);
 
     Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default);
     Task<IReadOnlyList<RcsMsgRow>> GetRecentMessagesAsync(int limit = 100, CancellationToken ct = default);

@@ -96,6 +96,7 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public int ExcuteCount { get; private set; }
     public int CancelCount { get; private set; }
     public int QueryCount { get; private set; }
+    public string? LastQueryAtBaseUrl { get; private set; }
     public int SendCount => TransitCount + ExcuteCount;
     public List<string> TransitTaskIds { get; } = new();
     /// <summary>可选顺序探针（Grab/Identify/Inventory RED）；null 时无副作用。</summary>
@@ -139,6 +140,12 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     {
         QueryCount++;
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "[]", null, 1));
+    }
+
+    public Task<RcsResult> QueryTaskAtAsync(QueryTaskRequest req, RcsConnectionConfig probe, CancellationToken ct = default)
+    {
+        LastQueryAtBaseUrl = probe.BaseUrl;
+        return QueryTaskAsync(req, ct);
     }
 }
 
@@ -725,10 +732,12 @@ internal sealed class ManualReplayHarness
     public required CountingManagedRouteResolver RouteResolver { get; init; }
     public required RcsTaskService TaskService { get; init; }
     public required RcsViewModel ViewModel { get; init; }
+    public required StubRuntime Runtime { get; init; }
     public required TrackingSlotsForClosure Slots { get; init; }
     public required TracingPlcOps Plc { get; init; }
     public required FakeNotifyCounter Notify { get; init; }
     public required CallTrace Trace { get; init; }
+    public required StubChangeFrame ChangeFrame { get; init; }
 
     public static ManualReplayHarness Create(bool seedActiveRoute = true)
         => CreateCore(seedActiveRoute, seedTypedPalletReturn: false, palletReturnArea: "托盘回收区");
@@ -803,6 +812,8 @@ internal sealed class ManualReplayHarness
 
         var plc = new TracingPlcOps(trace);
         var notify = new FakeNotifyCounter();
+        var runtime = new StubRuntime();
+        var changeFrame = new StubChangeFrame();
         var options = Options.Create(new AppOptions
         {
             Rcs = new RcsOptions
@@ -821,9 +832,9 @@ internal sealed class ManualReplayHarness
             equipment,
             new StubFrames(),
             new RcsCallbackNotifier(),
-            new StubChangeFrame(),
+            changeFrame,
             new StubConnConfig(),
-            new StubRuntime(),
+            runtime,
             new StubCallbackListener(),
             new StubScheduler(),
             new StubUser(),
@@ -845,10 +856,12 @@ internal sealed class ManualReplayHarness
             RouteResolver = resolver,
             TaskService = taskService,
             ViewModel = vm,
+            Runtime = runtime,
             Slots = slots,
             Plc = plc,
             Notify = notify,
-            Trace = trace
+            Trace = trace,
+            ChangeFrame = changeFrame
         };
     }
 
@@ -919,13 +932,17 @@ internal sealed class ManualReplayHarness
         public Task DeleteFrameAsync(long id, string author, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StubChangeFrame : IChangeFrameOrchestrator
+    internal sealed class StubChangeFrame : IChangeFrameOrchestrator
     {
 #pragma warning disable CS0067
         public event EventHandler<ChangeFrameProgressEvent>? ProgressChanged;
 #pragma warning restore CS0067
+        public int CallCount { get; private set; }
         public Task<string> ChangeFrameAsync(long equipmentId, FrameRole role, string author, CancellationToken ct = default)
-            => Task.FromResult("txn");
+        {
+            CallCount++;
+            return Task.FromResult("txn");
+        }
         public IReadOnlyList<ChangeFrameProgressEvent> GetActiveTransactions()
             => Array.Empty<ChangeFrameProgressEvent>();
     }
@@ -940,10 +957,10 @@ internal sealed class ManualReplayHarness
             => Task.FromResult(config);
     }
 
-    private sealed class StubRuntime : IRcsRuntimeConfig
+    internal sealed class StubRuntime : IRcsRuntimeConfig
     {
-        public string BaseUrl => "http://127.0.0.1:8090";
-        public string ClientCode => "CNC";
+        public string BaseUrl { get; private set; } = "http://127.0.0.1:8090";
+        public string ClientCode { get; private set; } = "CNC";
         public string Version => "1";
         public string TokenCode => "t";
         public int RequestTimeoutMs => 10000;
@@ -953,7 +970,15 @@ internal sealed class ManualReplayHarness
         public int PollIntervalMs => 3000;
         public string BootCallbackHost => CallbackHost;
         public int BootCallbackPort => CallbackPort;
-        public void Apply(RcsConnectionConfig config) { }
+        public int ApplyCount { get; private set; }
+
+        public void Apply(RcsConnectionConfig config)
+        {
+            ApplyCount++;
+            BaseUrl = config.BaseUrl;
+            ClientCode = config.ClientCode;
+        }
+
         public void CaptureBootCallback() { }
         public RcsConnectionConfig Snapshot() => new()
         {

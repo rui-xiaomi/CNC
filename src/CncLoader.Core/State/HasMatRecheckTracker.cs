@@ -3,9 +3,17 @@ namespace CncLoader.Core.State;
 /// <summary>HasMat 完成复核的三态读取转换。</summary>
 public static class HasMatReading
 {
-    /// <summary>PLC 返回错误时原始值不可信，必须按未知处理。</summary>
-    public static bool? From(int rawValue, int onValue, string? error) =>
-        error is null ? rawValue == onValue : null;
+    /// <summary>
+    /// 与 <see cref="CncLoader.Core.Signals.SignalConventions.Interpret"/> 对齐：
+    /// 有通信错误 → 未知；On → 有料；Off → 无料；其余寄存器值 → 未知（不得当无料）。
+    /// </summary>
+    public static bool? From(int rawValue, int onValue, int offValue, string? error)
+    {
+        if (error is not null) return null;
+        if (rawValue == onValue) return true;
+        if (rawValue == offValue) return false;
+        return null;
+    }
 }
 
 public enum HasMatRecheckDecision

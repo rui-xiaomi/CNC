@@ -17,6 +17,33 @@ namespace CncLoader.Core.Tests.State;
 public sealed class PositionSchedulerReconciliationStartupTests
 {
     [Test]
+    public async Task StartAsync_调度器关闭时_不对账成功且不开闸()
+    {
+        var fakes = SchedulerFakes.Create();
+        var scheduler = fakes.CreateScheduler(schedulerEnabled: false);
+        var reconciled = 0;
+        scheduler.Reconciled += (_, _) => reconciled++;
+
+        await scheduler.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(scheduler.IsReconciled, Is.False);
+                Assert.That(scheduler.ReconciliationState, Is.EqualTo(ReconciliationState.Disabled));
+                Assert.That(scheduler.StateLoopStartCount, Is.Zero);
+                Assert.That(scheduler.DispatchLoopStartCount, Is.Zero);
+                Assert.That(scheduler.ReconciledRaiseCount, Is.Zero);
+                Assert.That(reconciled, Is.Zero);
+            });
+        }
+        finally
+        {
+            await scheduler.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
     public async Task StartAsync_对账失败时_IsReconciled为false且双循环不启动()
     {
         var fakes = SchedulerFakes.Create();
@@ -608,13 +635,13 @@ public sealed class PositionSchedulerReconciliationStartupTests
 
         public static SchedulerFakes Create() => new();
 
-        public PositionScheduler CreateScheduler(int retryIntervalMs = 5000)
+        public PositionScheduler CreateScheduler(int retryIntervalMs = 5000, bool schedulerEnabled = true)
         {
             var options = Options.Create(new AppOptions
             {
                 Rcs = new RcsOptions
                 {
-                    SchedulerEnabled = true,
+                    SchedulerEnabled = schedulerEnabled,
                     SchedulerIntervalMs = 10_000,
                     ReconcileRetryIntervalMs = retryIntervalMs
                 }

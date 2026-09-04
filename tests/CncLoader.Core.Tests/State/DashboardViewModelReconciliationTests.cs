@@ -65,6 +65,26 @@ public sealed class DashboardViewModelReconciliationTests
     }
 
     [Test]
+    public void 构造时_Disabled映射到调度未启用且不开闸()
+    {
+        var scheduler = new FakeScheduler
+        {
+            State = ReconciliationState.Disabled,
+            IsReconciled = false
+        };
+
+        using var vm = CreateVm(scheduler);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.ReconcileTitle, Is.EqualTo("调度器未启用"));
+            Assert.That(vm.ReconcileSubText, Does.Contain("SchedulerEnabled=false"));
+            Assert.That(vm.IsReconcileGateOpen, Is.False);
+            Assert.That(vm.ReconcileBrushKey, Is.EqualTo("IdleBrush"));
+        });
+    }
+
+    [Test]
     public void Dispose后_不再响应状态事件()
     {
         var scheduler = new FakeScheduler

@@ -331,13 +331,30 @@ public sealed class SlotAccountService : ISlotAccountService
         long frameId, int posStart, IReadOnlyList<string> products, CancellationToken ct = default)
     {
         const int conflictSlotsCap = 10;
-        await using var session = await _slotStore.OpenAsync(ct);
         try
         {
-            var slots = (await session.FindByFrameOrderedAsync(frameId, ct)).ToList();
+            return await _slotStore.ExecuteInTransactionAsync(ApplyAsync, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return new InventoryCorrectionResult(
+                InventoryCorrectionStatus.Cancelled, products.Count, 0, 0, 0, 0,
+                Array.Empty<SlotMutationSnapshot>(), "操作已取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "盘点校正料架 {Frame} 数据库异常，已整批回滚", frameId);
+            return new InventoryCorrectionResult(
+                InventoryCorrectionStatus.DatabaseError, products.Count, 0, 0, 0, 0,
+                Array.Empty<SlotMutationSnapshot>(), "槽位操作失败，请查看日志");
+        }
+
+        async Task<InventoryCorrectionResult> ApplyAsync(ISlotAccountSession session, CancellationToken token)
+        {
+            var slots = (await session.FindByFrameOrderedAsync(frameId, token)).ToList();
             if (slots.Count == 0 || products.Count == 0)
             {
-                await session.RollbackAsync(ct);
+                await session.RollbackAsync(token);
                 return InventoryCorrectionResult.Empty();
             }
 
@@ -347,7 +364,7 @@ public sealed class SlotAccountService : ISlotAccountService
             {
                 _logger.LogWarning("盘点校正料架 {Frame} 起始孔位 {Hole}（层{L}位{P}）无对应槽位，跳过",
                     frameId, posStart, startLayer, startPos);
-                await session.RollbackAsync(ct);
+                await session.RollbackAsync(token);
                 return InventoryCorrectionResult.Empty();
             }
 
@@ -362,7 +379,7 @@ public sealed class SlotAccountService : ISlotAccountService
 
             for (var i = 0; i < products.Count; i++)
             {
-                ct.ThrowIfCancellationRequested();
+                token.ThrowIfCancellationRequested();
                 var idx = startIdx + i;
                 if (idx >= slots.Count)
                 {
@@ -397,7 +414,7 @@ public sealed class SlotAccountService : ISlotAccountService
 
                 var attempt = await session.TrySetExternalSlotAsync(
                     frameId, slot.SlotNo, targetState, targetMaterial,
-                    clearRemarkAndBindTime: false, now, ct, extras);
+                    clearRemarkAndBindTime: false, now, token, extras);
 
                 if (attempt.AffectedRows == 1)
                 {
@@ -431,21 +448,16 @@ public sealed class SlotAccountService : ISlotAccountService
                 concurrency++;
             }
 
-            InventoryCorrectionResult result;
             if (updated > 0)
-            {
-                await session.CommitAsync(ct);
-            }
+                await session.CommitAsync(token);
             else
-            {
-                await session.RollbackAsync(ct);
-            }
+                await session.RollbackAsync(token);
 
             var status = (conflicts > 0 || notFound > 0 || concurrency > 0)
                 ? InventoryCorrectionStatus.CompletedWithWarnings
                 : InventoryCorrectionStatus.Completed;
 
-            result = new InventoryCorrectionResult(
+            var result = new InventoryCorrectionResult(
                 status,
                 RequestedCount: products.Count,
                 UpdatedCount: updated,
@@ -477,21 +489,6 @@ public sealed class SlotAccountService : ISlotAccountService
                 result.NotFoundCount, result.ConcurrencyConflictCount);
 
             return result;
-        }
-        catch (OperationCanceledException)
-        {
-            try { await session.RollbackAsync(CancellationToken.None); } catch { /* ignore */ }
-            return new InventoryCorrectionResult(
-                InventoryCorrectionStatus.Cancelled, products.Count, 0, 0, 0, 0,
-                Array.Empty<SlotMutationSnapshot>(), "操作已取消");
-        }
-        catch (Exception ex)
-        {
-            try { await session.RollbackAsync(CancellationToken.None); } catch { /* ignore */ }
-            _logger.LogError(ex, "盘点校正料架 {Frame} 数据库异常，已整批回滚", frameId);
-            return new InventoryCorrectionResult(
-                InventoryCorrectionStatus.DatabaseError, products.Count, 0, 0, 0, 0,
-                Array.Empty<SlotMutationSnapshot>(), "槽位操作失败，请查看日志");
         }
     }
 

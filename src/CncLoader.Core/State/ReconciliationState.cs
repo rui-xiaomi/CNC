@@ -13,5 +13,8 @@ public enum ReconciliationState
     WaitingForRetry = 2,
 
     /// <summary>对账成功，已开闸。</summary>
-    Succeeded = 3
+    Succeeded = 3,
+
+    /// <summary>调度器未启用，未对账、未开闸。</summary>
+    Disabled = 4
 }

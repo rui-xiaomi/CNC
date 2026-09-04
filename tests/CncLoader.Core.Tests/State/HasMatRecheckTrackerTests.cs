@@ -12,7 +12,7 @@ public sealed class HasMatRecheckTrackerTests
         var tracker = new HasMatRecheckTracker();
 
         var result = tracker.Evaluate("task-1", phase,
-            HasMatReading.From(rawValue, onValue: 1, error: "PLC 读取失败"), threshold: 6);
+            HasMatReading.From(rawValue, onValue: 1, offValue: 2, error: "PLC 读取失败"), threshold: 6);
 
         Assert.That(result.Decision, Is.EqualTo(HasMatRecheckDecision.Hold));
         Assert.That(result.NextState, Is.EqualTo(PositionState.Transporting));
@@ -150,4 +150,18 @@ public sealed class HasMatRecheckTrackerTests
         Assert.That(result.Decision, Is.EqualTo(HasMatRecheckDecision.Alarm));
         Assert.That(result.NextState, Is.EqualTo(PositionState.Alarm));
     }
+
+    [Test]
+    public void 无错误且等于On应判有料()
+        => Assert.That(HasMatReading.From(1, onValue: 1, offValue: 2, error: null), Is.True);
+
+    [Test]
+    public void 无错误且等于Off应判无料()
+        => Assert.That(HasMatReading.From(2, onValue: 1, offValue: 2, error: null), Is.False);
+
+    [TestCase(0)]
+    [TestCase(3)]
+    [TestCase(99)]
+    public void 无错误但非法寄存器值应判未知(int raw)
+        => Assert.That(HasMatReading.From(raw, onValue: 1, offValue: 2, error: null), Is.Null);
 }

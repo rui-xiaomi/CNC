@@ -354,10 +354,10 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
         if (!_options.SchedulerEnabled)
         {
-            _logger.LogInformation("加工位状态机调度器未启用（SchedulerEnabled=false）。");
+            _logger.LogInformation("加工位状态机调度器未启用（SchedulerEnabled=false）：不对账、不开闸。");
             await SeedDashboardPositionsAsync(cancellationToken);
-            _isReconciled = true;
-            _reconciliationState = (int)ReconciliationState.Succeeded;
+            _isReconciled = false;
+            _reconciliationState = (int)ReconciliationState.Disabled;
             _reconciliationFailureReason = null;
             PublishReconcileState();
             return;
@@ -1604,8 +1604,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 _logger.LogWarning("EQ{Eq} POS{Pos} 复核读 HasMat 失败：{Error}",
                     ctx.EquipmentId, ctx.PositionId, r.Error);
             }
-            // Error 存在时 RawValue 不可信；无错误时 OnValue=有料，其余明确值按无料处理。
-            return HasMatReading.From(r.RawValue, hp.OnValue, r.Error);
+            // Error 存在时 RawValue 不可信；仅 On/Off 为确认态，其余寄存器值按未知。
+            return HasMatReading.From(r.RawValue, hp.OnValue, hp.OffValue, r.Error);
         }
         catch (Exception ex)
         {

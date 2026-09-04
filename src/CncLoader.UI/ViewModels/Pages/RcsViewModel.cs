@@ -671,6 +671,16 @@ public sealed partial class RcsViewModel : PageViewModelBase
         catch (Exception ex) { StatusMessage = $"工位下拉加载失败：{ex.Message}"; }
     }
 
+    private bool ConfirmDangerousRcs(string title, string detail)
+    {
+        var msg =
+            $"当前 RCS BaseUrl：{_runtime.BaseUrl}\n{detail}\n\n请确认现场人员、设备和路径已经清场";
+        if (_notify.Confirm(msg, title))
+            return true;
+        Append($"> 用户取消{title}（未发 RCS）");
+        return false;
+    }
+
     [RelayCommand]
     private async Task DispatchAsync()
     {
@@ -858,11 +868,14 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private async Task CancelAsync()
     {
         if (string.IsNullOrWhiteSpace(OperateTaskId)) { _notify.Warning("请填任务号。"); return; }
+        var taskId = OperateTaskId.Trim();
+        if (!ConfirmDangerousRcs("取消 RCS 任务", $"任务号：{taskId}"))
+            return;
         IsBusy = true;
         try
         {
-            Append($"> cancelTask {OperateTaskId}");
-            ReportResult(await _rcs.CancelAsync(OperateTaskId.Trim()));
+            Append($"> cancelTask {taskId}");
+            ReportResult(await _rcs.CancelAsync(taskId));
         }
         finally { IsBusy = false; await RefreshTasksAsync(); await RefreshMessagesAsync(); }
     }
@@ -871,11 +884,14 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private async Task RedoAsync()
     {
         if (string.IsNullOrWhiteSpace(OperateTaskId)) { _notify.Warning("请填任务号。"); return; }
+        var taskId = OperateTaskId.Trim();
+        if (!ConfirmDangerousRcs("重做 RCS 任务", $"任务号：{taskId}"))
+            return;
         IsBusy = true;
         try
         {
-            Append($"> 重试 {OperateTaskId}");
-            ReportResult(await _rcs.RedoAsync(OperateTaskId.Trim()));
+            Append($"> 重试 {taskId}");
+            ReportResult(await _rcs.RedoAsync(taskId));
         }
         finally { IsBusy = false; await RefreshTasksAsync(); await RefreshMessagesAsync(); }
     }
@@ -902,6 +918,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
             return;
         }
         var role = ChangeFrameRole == "下料架" ? FrameRole.Unload : FrameRole.Upload;
+        if (!ConfirmDangerousRcs("换架", $"机台：{eqId}\n角色：{ChangeFrameRole}"))
+            return;
         try
         {
             var txnId = await _changeFrame.ChangeFrameAsync(eqId, role, "operator");
@@ -919,6 +937,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
         {
             var dest = (await _locationMap.ResolveAreaAsync(_options.PalletReturnArea))?.RcsCode;
             if (string.IsNullOrWhiteSpace(dest)) { _notify.Warning($"托盘回收区 {_options.PalletReturnArea} 未在 LOCATION_MAP 录入"); return; }
+            if (!ConfirmDangerousRcs("空托盘回收", $"起点：{PalletReturnFromCode.Trim()}\n终点：{dest}"))
+                return;
             Append($"> 空托盘回收 {PalletReturnFromCode} → {dest}");
             var r = await _rcs.DispatchPalletReturnAsync(0, null, PalletReturnFromCode.Trim(), dest, _workLineId, _lineCode, "operator");
             ReportResult(r);
@@ -966,8 +986,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
         ConnectionHealthBrushKey = "WarnBrush";
         try
         {
-            // 用表单当前值测出站（未保存也可测）；不改回调启动快照。
-            _runtime.Apply(new RcsConnectionConfig
+            // 用表单当前值探测；不 Apply 运行时，避免自动派工打到测试地址。
+            var probe = new RcsConnectionConfig
             {
                 Id = _connectionConfigId,
                 AgvId = _agvId,
@@ -978,11 +998,10 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 RequestTimeoutMs = RequestTimeoutMs,
                 MaxRetries = MaxRetries,
                 PollIntervalMs = PollIntervalMs
-            });
+            };
 
-            EffectiveBaseUrl = _runtime.BaseUrl;
-            Append($"> 测试连接 queryTask → {_runtime.BaseUrl}");
-            var r = await _rcs.QueryAsync(new QueryTaskRequest { PageIndex = 1, PageSize = 1 });
+            Append($"> 测试连接 queryTask → {probe.BaseUrl}");
+            var r = await _rcs.ProbeQueryAsync(probe, new QueryTaskRequest { PageIndex = 1, PageSize = 1 });
             if (RcsAckParser.IsHttpReachable(r))
             {
                 ConnectionHealthText = $"连通 {r.ElapsedMs}ms";
