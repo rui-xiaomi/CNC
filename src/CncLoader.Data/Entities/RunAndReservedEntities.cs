@@ -88,7 +88,7 @@ public class LocationMap
     [Column("FRAME_ID")] public long? FrameId { get; set; }
     /// <summary>逻辑位置名称（缓存区/备料区/托盘回收区等命名点）。</summary>
     [Column("LOC_NAME")] public string? LocName { get; set; }
-    /// <summary>RCS 点位编码 如 101(station) / 601203(cell)。</summary>
+    /// <summary>RCS 点位编码 如 101(shelf) / 101101(cell)。</summary>
     [Column("RCS_CODE")] public string RcsCode { get; set; } = "";
     /// <summary>点位类型 shelf/cell/station。</summary>
     [Column("RCS_TYPE")] public string RcsType { get; set; } = "station";

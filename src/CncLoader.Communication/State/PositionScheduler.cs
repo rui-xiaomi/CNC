@@ -1372,11 +1372,11 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// <summary>上料料源+路由解析结果。Decision=Queued 时 From/To 必有值、SourceFrameId 为取料料架。</summary>
     private readonly record struct UploadPlan(UploadDecision Decision, long? SourceFrameId, string? From, string? To);
 
-    /// <summary>解析上料料源与起终点 cell（不下发、不预记）：本机中转架(role2)有件 → 回流取；否则上料架/LOAD_AREA。
-    /// 无料源占用 → WaitMaterial；路由未配置 → Failed（已告警）。占用校验即"料源确认有料"的前置门（配合单消费者串行，杜绝两位并发抢同一件）。</summary>
+    /// <summary>解析上料料源与起终点（不下发、不预记）：本机中转架(role2)有件 → 回流取；否则上料架。
+    /// From 先用料架 shelf 做预校验，预记成功后再换成槽位 cell。无料源占用 → WaitMaterial；路由未配置 → Failed（已告警）。</summary>
     private async Task<UploadPlan> ResolveUploadPlanAsync(PositionContext ctx, CancellationToken ct)
     {
-        // 上料源优先级：本机中转架(role2)有件 → 从中转架取（工序间流转回流）；否则从上料架/LOAD_AREA 取。
+        // 上料源优先级：本机中转架(role2)有件 → 从中转架取（工序间流转回流）；否则从上料架取。
         var binds = await ResolveBindingsAsync(ctx.EquipmentId, ct);
         var transitFrameId = await _equipment.GetFrameBindingByRoleAsync(ctx.EquipmentId, FrameRole.Transit, ct);
         long? sourceFrameId = null;
@@ -1384,25 +1384,23 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
         if (transitFrameId is long tf && (await _slots.GetOccupancyAsync(tf, ct)).Occupied > 0)
         {
-            // 中转架回流：from=中转架 cell，to=本加工位 cell
-            var transitCell = await _routes.ResolveFrameCellAsync(tf, ct);
+            var transitShelf = await _routes.ResolveFrameShelfAsync(tf, ct);
             var posCell = await _routes.ResolvePositionCellAsync(ctx.EquipmentId, ctx.PositionId, ct);
-            if (transitCell is not null && posCell is not null)
+            if (transitShelf is not null && posCell is not null)
             {
-                sourceFrameId = tf; from = transitCell; to = posCell;
+                sourceFrameId = tf; from = transitShelf; to = posCell;
                 _logger.LogInformation("EQ{Eq} POS{Pos} 从中转架 {Frame} 回流取件", ctx.EquipmentId, ctx.PositionId, tf);
             }
         }
 
         if (from is null)
         {
-            // 无上料架(role0)绑定 = 纯下游机台：只接收上游工序间交接 / 中转架回流，不从 LOAD_AREA 自取原料。
+            // 无上料架(role0)绑定 = 纯下游机台：只接收上游工序间交接 / 中转架回流，不从命名区自取原料。
             if (binds.UploadFrameId is not long upFrame)
             {
                 _logger.LogDebug("EQ{Eq} POS{Pos} 无上料架绑定（纯下游机台），等待上游交接/中转回流", ctx.EquipmentId, ctx.PositionId);
                 return new UploadPlan(UploadDecision.WaitMaterial, null, null, null);
             }
-            // 上料架有料校验：账面无占用 → 等料（非告警，由水位/人工补料）
             var occ = await _slots.GetOccupancyAsync(upFrame, ct);
             if (occ.Occupied == 0)
             {
@@ -1410,15 +1408,17 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 return new UploadPlan(UploadDecision.WaitMaterial, null, null, null);
             }
             sourceFrameId = upFrame;
-            var route = await _routes.ResolveUploadAsync(ctx.EquipmentId, ctx.PositionId, ct);
-            if (route is null)
+            var posCell = await _routes.ResolvePositionCellAsync(ctx.EquipmentId, ctx.PositionId, ct);
+            var shelf = await _routes.ResolveFrameShelfAsync(upFrame, ct);
+            if (posCell is null || shelf is null)
             {
                 await _alarms.RaiseRcsTaskNotFoundAsync($"UPLOAD-EQ{ctx.EquipmentId}-POS{ctx.PositionId}",
-                    $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料路由未配置（LOCATION_MAP 缺 LOAD_AREA 或加工位 cell）", ct);
-                _logger.LogWarning("EQ{Eq} POS{Pos} 上料路由未配置（LOCATION_MAP 缺 LOAD_AREA/加工位 cell）", ctx.EquipmentId, ctx.PositionId);
+                    $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 上料路由未配置（LOCATION_MAP 缺上料架 shelf 或加工位 cell）", ct);
+                _logger.LogWarning("EQ{Eq} POS{Pos} 上料路由未配置（LOCATION_MAP 缺上料架 shelf/加工位 cell）", ctx.EquipmentId, ctx.PositionId);
                 return new UploadPlan(UploadDecision.Failed, null, null, null);
             }
-            (from, to) = route.Value;
+            from = shelf;
+            to = posCell;
         }
 
         return new UploadPlan(UploadDecision.Queued, sourceFrameId, from, to);
@@ -1466,8 +1466,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             var ngFrame = await _equipment.GetFrameBindingByRoleAsync(ctx.EquipmentId, FrameRole.NgFrame, ct);
             if (ngFrame is long ng)
             {
-                var cell = await _routes.ResolveFrameCellAsync(ng, ct);
-                if (cell is not null) return new UnloadDecision(cell, UnloadTarget.NgFrame, ng, null, null);
+                var shelf = await _routes.ResolveFrameShelfAsync(ng, ct);
+                if (shelf is not null) return new UnloadDecision(shelf, UnloadTarget.NgFrame, ng, null, null);
             }
             _logger.LogWarning("EQ{Eq} POS{Pos} NG 但未绑定 NG 架（role3），回退下料架", ctx.EquipmentId, ctx.PositionId);
             return await ResolveDownloadFrameFallbackAsync(ctx, ct);
@@ -1502,8 +1502,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             var transit = await _equipment.GetFrameBindingByRoleAsync(nextEq, FrameRole.Transit, ct);
             if (transit is long tf)
             {
-                var cell = await _routes.ResolveFrameCellAsync(tf, ct);
-                if (cell is not null) return new UnloadDecision(cell, UnloadTarget.TransitFrame, tf, nextEq, null);
+                var shelf = await _routes.ResolveFrameShelfAsync(tf, ct);
+                if (shelf is not null) return new UnloadDecision(shelf, UnloadTarget.TransitFrame, tf, nextEq, null);
             }
         }
 
@@ -1519,8 +1519,8 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         var binds = await ResolveBindingsAsync(ctx.EquipmentId, ct);
         if (binds.DownloadFrameId is long df)
         {
-            var cell = await _routes.ResolveFrameCellAsync(df, ct);
-            if (cell is not null) return new UnloadDecision(cell, UnloadTarget.DownloadFrame, df, null, null);
+            var shelf = await _routes.ResolveFrameShelfAsync(df, ct);
+            if (shelf is not null) return new UnloadDecision(shelf, UnloadTarget.DownloadFrame, df, null, null);
         }
         var route = await _routes.ResolveUnloadAsync(ctx.EquipmentId, ctx.PositionId, ct);
         if (route is not null) return new UnloadDecision(route.Value.to, UnloadTarget.DownloadFrame, null, null, null);
@@ -1771,18 +1771,38 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
         var taskId = RcsTaskId.Next(line.LineCode, RcsTaskKind.Transit);
         ReservedSlot? reservedTake = null;
+        var fromCode = plan.From;
         RcsResult result;
         if (plan.SourceFrameId is long sourceFrameId)
         {
             var prepared = await _reservationFirstDispatcher.ExecuteAsync(
                 taskId,
-                (id, token) => _slots.ReserveTakeAsync(sourceFrameId, id, token),
-                (id, token) => _routingValidator.ValidateAsync(routeCtx, token),
+                async (id, token) =>
+                {
+                    reservedTake = await _slots.ReserveTakeAsync(sourceFrameId, id, token);
+                    return reservedTake;
+                },
+                async (_, token) =>
+                {
+                    if (reservedTake is { } slot)
+                    {
+                        var slotCell = await _routes.ResolveFrameSlotCellAsync(
+                            slot.FrameId, slot.LayerNo, slot.PosInLayer, token);
+                        if (slotCell is null)
+                        {
+                            return RoutingAvailabilityResult.Unavailable(
+                                RoutingUnavailableReason.NotFound, "LocationMap", sourceFrameId,
+                                $"上料槽位 cell 未录入 LOCATION_MAP（架 {slot.FrameId} 层{slot.LayerNo}位{slot.PosInLayer}）");
+                        }
+                        fromCode = slotCell;
+                    }
+                    return await _routingValidator.ValidateAsync(routeCtx with { FromCode = fromCode }, token);
+                },
                 (id, token) => _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
                 {
                     TaskId = id,
                     WorkLineId = line.WorkLineId, LineCode = line.LineCode, TaskType = "0",
-                    Priority = 5, FromCode = plan.From!, ToCode = plan.To!,
+                    Priority = 5, FromCode = fromCode!, ToCode = plan.To!,
                     EquipmentId = ctx.EquipmentId, PositionId = ctx.PositionId,
                     Kind = RcsTaskKind.Transit, Author = "scheduler"
                 }, token),
@@ -1828,6 +1848,20 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                         SetState(ctx, PositionState.Alarm);
                         await _alarms.RaiseRcsTaskNotFoundAsync(taskId,
                             $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 路由拒发后预记回滚失败，需人工核账", ct);
+                    }
+                    finally { g.Release(); }
+                    return UploadDecision.Failed;
+                }
+                if (prepared.RouteResult?.EntityKind == "LocationMap")
+                {
+                    var g = GateFor((ctx.EquipmentId, ctx.PositionId));
+                    await g.WaitAsync(ct);
+                    try
+                    {
+                        ctx.AlarmRaised = true;
+                        SetState(ctx, PositionState.Alarm);
+                        await _alarms.RaiseRcsTaskNotFoundAsync(taskId,
+                            $"EQ{ctx.EquipmentId} POS{ctx.PositionId} {prepared.RouteResult.SafeMessage}", ct);
                     }
                     finally { g.Release(); }
                     return UploadDecision.Failed;
@@ -1925,7 +1959,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             // 预记已在下发前完成；这里只把被锁定槽位的物料码绑定到工位上下文。
             if (reservedTake is not null) ctx.MaterialId = reservedTake.MaterialId;
             SetState(ctx, PositionState.Dispatching);
-            _logger.LogInformation("EQ{Eq} POS{Pos} 下发上料任务 {TaskId} {From}→{To}", ctx.EquipmentId, ctx.PositionId, result.TaskId, plan.From, plan.To);
+            _logger.LogInformation("EQ{Eq} POS{Pos} 下发上料任务 {TaskId} {From}→{To}", ctx.EquipmentId, ctx.PositionId, result.TaskId, fromCode, plan.To);
             return UploadDecision.Queued;
         }
         finally { gate.Release(); }
@@ -1975,6 +2009,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return;
         }
         var d = decision.Value;
+        var toCell = d.ToCell;
 
         var routeCtx = BuildUnloadRouteContext(item, d);
         var pre = await _routingValidator.ValidateAsync(routeCtx, ct);
@@ -1995,13 +2030,21 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         {
             var prepared = await _reservationFirstDispatcher.ExecuteAsync(
                 taskId,
-                (id, token) => ReserveUnloadAsync(item, d, id, token),
-                (id, token) => _routingValidator.ValidateAsync(routeCtx, token),
+                async (id, token) =>
+                {
+                    var reserved = await ReserveUnloadAsync(item, d, id, token);
+                    if (reserved?.SlotCell is string slotCell)
+                        toCell = slotCell;
+                    else if (d.DestFrameId is not null)
+                        return null;
+                    return reserved;
+                },
+                (_, token) => _routingValidator.ValidateAsync(routeCtx with { ToCode = toCell }, token),
                 (id, token) => _taskSvc.DispatchTransitAsync(new TransitDispatchArgs
                 {
                     TaskId = id,
                     WorkLineId = workLineId, LineCode = lineCode, TaskType = "1",
-                    Priority = item.Priority, FromCode = item.FromCode, ToCode = d.ToCell,
+                    Priority = item.Priority, FromCode = item.FromCode, ToCode = toCell,
                     EquipmentId = item.EquipmentId, PositionId = item.PositionId,
                     Kind = RcsTaskKind.Transit, Author = item.Author
                 }, token),
@@ -2072,7 +2115,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                 {
                     TaskId = id,
                     WorkLineId = workLineId, LineCode = lineCode, TaskType = "1",
-                    Priority = item.Priority, FromCode = item.FromCode, ToCode = d.ToCell,
+                    Priority = item.Priority, FromCode = item.FromCode, ToCode = toCell,
                     EquipmentId = item.EquipmentId, PositionId = item.PositionId,
                     Kind = RcsTaskKind.Transit, Author = item.Author
                 }, token),
@@ -2116,7 +2159,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             {
                 ctx.CurrentTaskId = result.TaskId;
                 ctx.Phase = PositionPhase.Unload;
-                _logger.LogInformation("EQ{Eq} POS{Pos} 下发下料任务 {TaskId} {From}→{To}（{Target}）", item.EquipmentId, item.PositionId, result.TaskId, item.FromCode, d.ToCell, d.Target);
+                _logger.LogInformation("EQ{Eq} POS{Pos} 下发下料任务 {TaskId} {From}→{To}（{Target}）", item.EquipmentId, item.PositionId, result.TaskId, item.FromCode, toCell, d.Target);
             }
             else
             {
@@ -2218,7 +2261,15 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
                     $"料架 {destFrame} 已满，件 {taskId}（物料 {item.MaterialId ?? "—"}）无法入库，请人工换架/清架", taskId, ct);
                 return null;
             }
-            return new UnloadReservation();
+            var slotCell = await _routes.ResolveFrameSlotCellAsync(destFrame, put.LayerNo, put.PosInLayer, ct);
+            if (slotCell is null)
+            {
+                await _slots.RollbackAsync(taskId, ct);
+                _logger.LogWarning("EQ{Eq} POS{Pos} 料架 {Frame} 槽 层{L}位{P} 未录入 LOCATION_MAP cell，已回滚预记",
+                    item.EquipmentId, item.PositionId, destFrame, put.LayerNo, put.PosInLayer);
+                return null;
+            }
+            return new UnloadReservation(put, slotCell);
         }
 
         return null;
@@ -2297,7 +2348,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     /// <summary>下料终点决策：终点 cell + 终点类型 + 目标料架/机台工位。</summary>
     private readonly record struct UnloadDecision(string ToCell, UnloadTarget Target, long? DestFrameId, long? DestEquipmentId, long? DestPositionId);
 
-    private sealed record UnloadReservation;
+    private sealed record UnloadReservation(ReservedSlot? Slot = null, string? SlotCell = null);
 
     /// <summary>工序间直接交接登记：上游把 OK 件送入下游 cell 后，下游见料即接。</summary>
     private sealed record InboundHandoff(

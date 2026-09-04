@@ -66,15 +66,15 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             return txnId;
         }
 
-        // 2. 解析料架站点（cell 优先，否则 shelf）+ 缓存区；缺 LOCATION_MAP 拒发，禁止假码。
-        var frameLoc = await _locationMap.ResolveFrameAsync(frameId.Value, "cell", ct)
-                       ?? await _locationMap.ResolveFrameAsync(frameId.Value, "shelf", ct);
+        // 2. 整架搬运用 shelf/station（一架多 cell 时取第一条 cell 会错位）；缺 LOCATION_MAP 拒发，禁止假码。
+        var frameLoc = await _locationMap.ResolveFrameAsync(frameId.Value, "shelf", ct)
+                       ?? await _locationMap.ResolveFrameAsync(frameId.Value, "station", ct);
         var bufferArea = role == FrameRole.Unload ? _options.FullBufferArea : _options.EmptyBufferArea;
         var buffer = await _locationMap.ResolveAreaAsync(bufferArea, ct);
         if (frameLoc is null || buffer is null || string.IsNullOrWhiteSpace(buffer.RcsCode))
         {
             var msg = frameLoc is null
-                ? $"料架 {frameId.Value} 未录入 LOCATION_MAP（cell/shelf）"
+                ? $"料架 {frameId.Value} 未录入 LOCATION_MAP（shelf/station）"
                 : $"缓存区 {bufferArea} 未录入 LOCATION_MAP";
             // D8：路由配置不可用 → Warning，不 Raise 业务 Alarm
             _logger.LogWarning("换架路由不可用：机台 {Eq} 角色 {Role} Frame={Frame}：{Msg}",

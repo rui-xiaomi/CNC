@@ -23,13 +23,14 @@ public sealed class RcsRuntimeConfig : IRcsRuntimeConfig
     public RcsRuntimeConfig(IOptions<AppOptions> options)
     {
         var r = options.Value.Rcs;
-        _baseUrl = r.BaseUrl;
-        _clientCode = r.ClientCode;
+        // 与 Apply 对齐：BaseUrl/ClientCode/CallbackHost 均 Trim 并兜底，避免 Field 模板尾随空格/空值构造非法 URI。
+        _baseUrl = r.BaseUrl?.Trim() ?? "";
+        _clientCode = r.ClientCode?.Trim() ?? "";
         _version = r.Version;
         _tokenCode = r.TokenCode;
         _requestTimeoutMs = Math.Max(1000, r.RequestTimeoutMs);
         _maxRetries = Math.Max(1, r.MaxRetries);
-        _callbackHost = r.CallbackHost;
+        _callbackHost = string.IsNullOrWhiteSpace(r.CallbackHost) ? "0.0.0.0" : r.CallbackHost.Trim();
         _callbackPort = r.CallbackPort;
         _pollIntervalMs = Math.Max(500, r.PollIntervalMs);
         _bootCallbackHost = _callbackHost;

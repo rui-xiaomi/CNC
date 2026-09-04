@@ -48,6 +48,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
     private string? _verifiedConnectionKey;
     private bool _suppressConnectionVerifyInvalidation;
     private bool _suppressPauseSideEffects;
+    private bool _suppressCellNameFill;
+    private readonly Dictionary<long, string> _frameCodes = new();
 
     public RcsViewModel(IRcsTaskService rcs, ILocationMapService locationMap,
         IWorkLineService workLineService, IEquipmentConfigService equipment, IFrameService frames,
@@ -293,8 +295,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
     // 手动下发表单
     [ObservableProperty] private string _selectedKind = "搬运";
-    [ObservableProperty] private string _fromCode = "201101";
-    [ObservableProperty] private string _toCode = "201102";
+    [ObservableProperty] private string _fromCode = "101101";
+    [ObservableProperty] private string _toCode = "201101";
     [ObservableProperty] private int _priority = 5;
 
     /// <summary>搬运：起终点都要。</summary>
@@ -616,6 +618,30 @@ public sealed partial class RcsViewModel : PageViewModelBase
         var list = new List<NamedOption>(items.Count + 1) { NoneOption };
         list.AddRange(items);
         return list;
+    }
+
+    partial void OnLocRcsCodeChanged(string value)
+    {
+        if (!_suppressCellNameFill) TryAutoFillCellLocName();
+    }
+
+    partial void OnLocRcsTypeChanged(string value)
+    {
+        if (!_suppressCellNameFill) TryAutoFillCellLocName();
+    }
+
+    partial void OnSelectedLocFrameChanged(NamedOption? value)
+    {
+        if (!_suppressCellNameFill) TryAutoFillCellLocName();
+    }
+
+    private void TryAutoFillCellLocName()
+    {
+        if (LocType is not "料架" || LocRcsType is not "仓位") return;
+        var frameId = SelectedLocFrame?.Id ?? 0;
+        if (frameId <= 0 || !_frameCodes.TryGetValue(frameId, out var shelf)) return;
+        if (!RcsCellCode.TryParse(LocRcsCode, shelf, out var layer, out var pos)) return;
+        LocName = RcsCellCode.FormatSlotLabel(layer, pos);
     }
 
     partial void OnSelectedLocEquipmentChanged(NamedOption? value)
@@ -1114,6 +1140,12 @@ public sealed partial class RcsViewModel : PageViewModelBase
         {
             var keepId = SelectedLocation?.Id ?? EditingLocId;
             var rows = await _locationMap.GetAllAsync();
+            _frameCodes.Clear();
+            foreach (var row in rows)
+            {
+                if (row.FrameId is long fid && !string.IsNullOrWhiteSpace(row.FrameCode))
+                    _frameCodes[fid] = row.FrameCode;
+            }
             ReplaceOnUi(Locations, rows);
             ApplyLocationFilter();
             if (keepId > 0)
@@ -1150,7 +1182,11 @@ public sealed partial class RcsViewModel : PageViewModelBase
     {
         if (value is null) return;
         EditingLocId = value.Id;
+        if (value.FrameId is long fid && !string.IsNullOrWhiteSpace(value.FrameCode))
+            _frameCodes[fid] = value.FrameCode;
+
         _suppressLocTypeSideEffects = true;
+        _suppressCellNameFill = true;
         try
         {
             LocType = LocationDisplayLabels.LocTypeToZh(value.LocType);
@@ -1160,7 +1196,11 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 ? LocationDisplayLabels.AreaNameToZh(value.LocName)
                 : (value.LocName ?? "");
         }
-        finally { _suppressLocTypeSideEffects = false; }
+        finally
+        {
+            _suppressLocTypeSideEffects = false;
+            _suppressCellNameFill = false;
+        }
 
         _suppressPositionReload = true;
         try
@@ -1169,6 +1209,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
             SelectedLocFrame = LocFrameOptions.FirstOrDefault(x => x.Id == (value.FrameId ?? 0)) ?? NoneOption;
         }
         finally { _suppressPositionReload = false; }
+        TryAutoFillCellLocName();
         _ = ReloadPositionsForEquipmentAsync(value.EquipmentId ?? 0, value.PositionId);
     }
 
@@ -1209,7 +1250,21 @@ public sealed partial class RcsViewModel : PageViewModelBase
         try
         {
             var locTypeCode = LocationDisplayLabels.LocTypeFromZh(LocType);
+            var rcsTypeCode = LocationDisplayLabels.RcsTypeFromZh(LocRcsType);
             var locNameRaw = string.IsNullOrWhiteSpace(LocName) ? null : LocName.Trim();
+            if (locTypeCode == "FRAME" && rcsTypeCode == "cell" && SelectedLocFrame is { Id: > 0 } frame)
+            {
+                if (!_frameCodes.TryGetValue(frame.Id, out var shelf))
+                {
+                    var edit = await _frames.GetFrameForEditAsync(frame.Id);
+                    shelf = edit?.Code;
+                    if (!string.IsNullOrWhiteSpace(shelf))
+                        _frameCodes[frame.Id] = shelf;
+                }
+                if (!string.IsNullOrWhiteSpace(shelf)
+                    && RcsCellCode.TryParse(LocRcsCode.Trim(), shelf, out var layer, out var pos))
+                    locNameRaw = RcsCellCode.FormatSlotLabel(layer, pos);
+            }
             // 按类型只保留相关关联，避免隐藏字段脏值落库。
             long? eqId = ShowLocEquipment && SelectedLocEquipment is { Id: > 0 } e ? e.Id : null;
             long? posId = ShowLocPosition && SelectedLocPosition is { Id: > 0 } p ? p.Id : null;
@@ -1240,7 +1295,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 Id = EditingLocId,
                 LocType = locTypeCode,
                 RcsCode = LocRcsCode.Trim(),
-                RcsType = LocationDisplayLabels.RcsTypeFromZh(LocRcsType),
+                RcsType = rcsTypeCode,
                 LocName = locTypeCode == "AREA"
                     ? LocationDisplayLabels.AreaNameFromZh(locNameRaw)
                     : locNameRaw,

@@ -23,7 +23,6 @@ public sealed class LocationMapService : ILocationMapService
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rows = await db.LocationMaps.AsNoTracking()
             .Where(x => x.State == ConfigActivity.Active)
-            .OrderBy(x => x.LocType).ThenBy(x => x.RcsCode)
             .ToListAsync(ct);
 
         // 列表中文：机台/工位/料架名（Save 不写这些字段）
@@ -41,16 +40,35 @@ public sealed class LocationMapService : ILocationMapService
             : await db.Positions.AsNoTracking()
                 .Where(x => posIds.Contains(x.Id) && x.State == ConfigActivity.Active)
                 .ToDictionaryAsync(x => x.Id, x => x.PositionName, ct);
-        var frameNames = frameIds.Count == 0
-            ? new Dictionary<long, string>()
+        var frames = frameIds.Count == 0
+            ? new Dictionary<long, (string Name, string Code)>()
             : await db.Frames.AsNoTracking()
                 .Where(x => frameIds.Contains(x.Id) && x.State == ConfigActivity.Active)
-                .ToDictionaryAsync(x => x.Id, x => x.FrameName, ct);
+                .ToDictionaryAsync(x => x.Id, x => (x.FrameName, x.FrameCode), ct);
 
-        return rows.Select(e => Map(e,
-            e.EquipmentId is > 0 && eqNames.TryGetValue(e.EquipmentId.Value, out var en) ? en : null,
-            e.PositionId is > 0 && posNames.TryGetValue(e.PositionId.Value, out var pn) ? pn : null,
-            e.FrameId is > 0 && frameNames.TryGetValue(e.FrameId.Value, out var fn) ? fn : null)).ToList();
+        var mapped = rows.Select(e =>
+        {
+            string? frameName = null;
+            string? frameCode = null;
+            if (e.FrameId is > 0 && frames.TryGetValue(e.FrameId.Value, out var fr))
+            {
+                frameName = fr.Item1;
+                frameCode = fr.Item2;
+            }
+            return Map(e,
+                e.EquipmentId is > 0 && eqNames.TryGetValue(e.EquipmentId.Value, out var en) ? en : null,
+                e.PositionId is > 0 && posNames.TryGetValue(e.PositionId.Value, out var pn) ? pn : null,
+                frameName, frameCode);
+        }).ToList();
+
+        return mapped
+            .OrderBy(x => x.LocType)
+            .ThenBy(x => x.FrameId ?? long.MaxValue)
+            .ThenBy(x => RcsTypeSort(x.RcsType))
+            .ThenBy(x => ParseLayer(x) ?? int.MaxValue)
+            .ThenBy(x => ParsePos(x) ?? int.MaxValue)
+            .ThenBy(x => x.RcsCode, StringComparer.Ordinal)
+            .ToList();
     }
 
     public async Task<long> SaveAsync(LocationMapItem item, string? author = null, CancellationToken ct = default)
@@ -122,7 +140,27 @@ public sealed class LocationMapService : ILocationMapService
         return e is null ? null : Map(e);
     }
 
-    private static LocationMapItem Map(LocationMap e, string? equipmentName = null, string? positionName = null, string? frameName = null) => new()
+    private static int RcsTypeSort(string? rcsType) => rcsType switch
+    {
+        "shelf" => 0,
+        "cell" => 1,
+        _ => 2
+    };
+
+    private static int? ParseLayer(LocationMapItem x)
+        => x.LocType == "FRAME" && x.RcsType == "cell"
+           && RcsCellCode.TryParse(x.RcsCode, x.FrameCode, out var layer, out _)
+            ? layer
+            : null;
+
+    private static int? ParsePos(LocationMapItem x)
+        => x.LocType == "FRAME" && x.RcsType == "cell"
+           && RcsCellCode.TryParse(x.RcsCode, x.FrameCode, out _, out var pos)
+            ? pos
+            : null;
+
+    private static LocationMapItem Map(LocationMap e, string? equipmentName = null, string? positionName = null,
+        string? frameName = null, string? frameCode = null) => new()
     {
         Id = e.Id,
         LocType = e.LocType,
@@ -135,7 +173,8 @@ public sealed class LocationMapService : ILocationMapService
         Remark = e.Remark,
         EquipmentName = equipmentName,
         PositionName = positionName,
-        FrameName = frameName
+        FrameName = frameName,
+        FrameCode = frameCode
     };
 
     private static LocationMapItem MapRow(LocationMapRoutingRow e) => new()

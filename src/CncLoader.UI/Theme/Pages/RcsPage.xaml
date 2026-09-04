@@ -503,7 +503,24 @@
                                 <DataGrid ItemsSource="{Binding FilteredLocations}" SelectedItem="{Binding SelectedLocation}"
                                           Style="{StaticResource DataGridCompact}" RowHeight="28" IsReadOnly="True">
                                     <DataGrid.Columns>
-                                        <DataGridTextColumn Header="类型" Binding="{Binding LocTypeText}" Width="64" MinWidth="56"/>
+                                        <DataGridTextColumn Header="类型" Binding="{Binding LocTypeText}" Width="56" MinWidth="48"/>
+                                        <DataGridTextColumn Header="料架" Binding="{Binding FrameText}" Width="110" MinWidth="72"/>
+                                        <DataGridTextColumn Header="层" Binding="{Binding LayerText}" Width="40" MinWidth="32">
+                                            <DataGridTextColumn.ElementStyle>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                                    <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                </Style>
+                                            </DataGridTextColumn.ElementStyle>
+                                        </DataGridTextColumn>
+                                        <DataGridTextColumn Header="位" Binding="{Binding PosText}" Width="40" MinWidth="32">
+                                            <DataGridTextColumn.ElementStyle>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                                    <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                </Style>
+                                            </DataGridTextColumn.ElementStyle>
+                                        </DataGridTextColumn>
                                         <DataGridTextColumn Header="RCS编码" Binding="{Binding RcsCode}" Width="110" MinWidth="90">
                                             <DataGridTextColumn.ElementStyle>
                                                 <Style TargetType="TextBlock">
@@ -513,10 +530,9 @@
                                             </DataGridTextColumn.ElementStyle>
                                         </DataGridTextColumn>
                                         <DataGridTextColumn Header="点位类型" Binding="{Binding RcsTypeText}" Width="72" MinWidth="64"/>
-                                        <DataGridTextColumn Header="名称" Binding="{Binding LocNameText}" Width="*" MinWidth="80"/>
-                                        <DataGridTextColumn Header="机台" Binding="{Binding EquipmentText}" Width="100" MinWidth="72"/>
-                                        <DataGridTextColumn Header="工位" Binding="{Binding PositionText}" Width="90" MinWidth="64"/>
-                                        <DataGridTextColumn Header="料架" Binding="{Binding FrameText}" Width="110" MinWidth="72"/>
+                                        <DataGridTextColumn Header="名称" Binding="{Binding LocNameText}" Width="*" MinWidth="72"/>
+                                        <DataGridTextColumn Header="机台" Binding="{Binding EquipmentText}" Width="90" MinWidth="64"/>
+                                        <DataGridTextColumn Header="工位" Binding="{Binding PositionText}" Width="80" MinWidth="56"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </DockPanel>
@@ -537,7 +553,7 @@
                                         <TextBlock Text="RCS 编码" Style="{StaticResource MutedText}"/>
                                         <TextBox Text="{Binding LocRcsCode, UpdateSourceTrigger=PropertyChanged}"
                                                  Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
-                                                 Margin="0,2,0,8" ToolTip="现场 RCS 点位号，如 601001"/>
+                                                 Margin="0,2,0,8" ToolTip="现场 cell：101101=1层左，1011002=10层右"/>
 
                                         <TextBlock Text="点位类型" Style="{StaticResource MutedText}"/>
                                         <ComboBox ItemsSource="{Binding RcsTypeOptions}" SelectedItem="{Binding LocRcsType}"

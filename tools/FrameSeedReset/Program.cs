@@ -20,7 +20,9 @@ await using var sp = services.BuildServiceProvider();
 await using var db = await sp.GetRequiredService<IDbContextFactory<CncDbContext>>().CreateDbContextAsync();
 
 const long loadFrameId = 1;
-var materials = Enumerable.Range(1, 10).Select(i => $"EL-{i:D3}").ToArray();
+var materials = Enumerable.Range(1, 10)
+    .SelectMany(layer => new[] { $"101{layer}01", $"101{layer}02" })
+    .ToArray();
 
 await using var tx = await db.Database.BeginTransactionAsync();
 
@@ -54,7 +56,7 @@ var summary = await db.FrameSlots
     .OrderBy(x => x.FrameId)
     .ToListAsync();
 
-Console.WriteLine("料架槽位已清空，上料总架(ID=1)已写入 EL-001..010：");
+Console.WriteLine("料架槽位已清空，上料架101(ID=1)已写入 101101/101102…1011001/1011002：");
 foreach (var row in summary)
     Console.WriteLine($"  frame {row.FrameId}: 占用 {row.Occupied}/{row.Total}");
 
@@ -63,6 +65,6 @@ var load = await db.FrameSlots.AsNoTracking()
     .OrderBy(s => s.SlotNo)
     .Select(s => new { s.SlotNo, s.MaterialId, s.SlotState })
     .ToListAsync();
-Console.WriteLine("上料总架明细：");
+Console.WriteLine("上料架101明细：");
 foreach (var s in load)
     Console.WriteLine($"  槽{s.SlotNo}: state={s.SlotState} material={s.MaterialId ?? "(空)"}");

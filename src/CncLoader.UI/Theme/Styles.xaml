@@ -86,6 +86,7 @@
     <Style x:Key="DataGridCompact" TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
         <Setter Property="AutoGenerateColumns" Value="False"/>
         <Setter Property="CanUserAddRows" Value="False"/>
+        <Setter Property="IsReadOnly" Value="True"/>
         <Setter Property="SelectionMode" Value="Single"/>
         <Setter Property="HeadersVisibility" Value="Column"/>
         <Setter Property="FontFamily" Value="{StaticResource FontSans}"/>

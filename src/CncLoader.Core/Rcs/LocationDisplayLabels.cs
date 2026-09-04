@@ -65,7 +65,6 @@ public static class LocationDisplayLabels
 
     public static string FormatRef(string? name, long? id)
     {
-        if (!string.IsNullOrWhiteSpace(name) && id is > 0) return $"{name}({id})";
         if (!string.IsNullOrWhiteSpace(name)) return name!;
         return id is > 0 ? id.Value.ToString() : "";
     }

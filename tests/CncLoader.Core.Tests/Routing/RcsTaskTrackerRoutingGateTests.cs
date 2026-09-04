@@ -484,6 +484,29 @@ public sealed class RcsTaskTrackerRoutingGateTests
         });
     }
 
+    [Test]
+    public async Task NotFound_Task_FallsToFailed_AndLeavesUnfinishedList()
+    {
+        // P0-3：RCS 查无任务 → 落 FAILED 终态，移出未完结列表，防止 queryTask IN 列表只增不减。
+        const string orphanId = "LINE01-MV-ORPHAN-0001";
+        _tasks.Seed(new RcsTaskRow(
+            2, orphanId, "transit", "0", RcsTaskState.Executing, null, 5,
+            LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
+            0, "0", DateTime.Now.AddMinutes(-5), DateTime.Now.AddMinutes(-4), null, null));
+
+        await _tracker.ProbePollOnceAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_tasks.Snapshot(orphanId)!.TaskState, Is.EqualTo(RcsTaskState.Failed),
+                "查无任务必须落 FAILED 终态");
+            Assert.That(_tasks.Snapshot(orphanId)!.ErrorMsg, Does.Contain("查无"), "留失败原因");
+            Assert.That(_alarms.NotFoundCount, Is.GreaterThanOrEqualTo(1), "查无告警一次");
+        });
+        var unfinished = await _tasks.GetUnfinishedTaskIdsAsync();
+        Assert.That(unfinished, Does.Not.Contain(orphanId), "FAILED 后不得再进未完结轮询列表");
+    }
+
     // ─── helpers ─────────────────────────────────────────────────
 
     private void AssertDisabledNoConsume(RcsTaskRow before, RcsTaskRow after, string label)

@@ -245,8 +245,8 @@ CREATE TABLE MAS_AUTO_FRAME (
   FRAME_NAME          VARCHAR(50)  NOT NULL COMMENT '料架名称 如 3号料架',
   FRAME_CODE          VARCHAR(50)  NOT NULL COMMENT '料架机器码',
   FRAME_IDENTIFY_CODE VARCHAR(50)  NOT NULL COMMENT '唯一识别码（AGV/扫码用）',
-  LAYER_TOTAL         INT          NOT NULL DEFAULT 1 COMMENT '层数，如 2 层',
-  SLOTS_PER_LAYER     INT          NOT NULL DEFAULT 0 COMMENT '每层槽位数，如 5',
+  LAYER_TOTAL         INT          NOT NULL DEFAULT 1 COMMENT '层数，如 10 层',
+  SLOTS_PER_LAYER     INT          NOT NULL DEFAULT 0 COMMENT '每层槽位数，如左右 2 位',
   SLOT_TOTAL          INT          NOT NULL DEFAULT 0 COMMENT '槽位总数 = 层数×每层数',
   FRAME_SET_INFO      VARCHAR(50)  NULL COMMENT '位置坐标等',
   STATE               CHAR(1)      NOT NULL DEFAULT '0' COMMENT '0=启用 1=禁用',
@@ -278,7 +278,7 @@ CREATE TABLE MAS_AUTO_FRAME_SLOT (
   FRAME_ID     BIGINT      NOT NULL COMMENT '关联料架 ID1',
   SLOT_NO      INT         NOT NULL COMMENT '料架内全局槽号 1..N（稳定主显号）',
   LAYER_NO     INT         NOT NULL DEFAULT 1 COMMENT '层号，从1起',
-  POS_IN_LAYER INT         NOT NULL DEFAULT 1 COMMENT '层内位号，从1起（如 2层3位）',
+  POS_IN_LAYER INT         NOT NULL DEFAULT 1 COMMENT '层内位号，从1起（1=左 2=右）',
   SLOT_STATE   CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=空 1=占用 2=锁定/不可用',
   ELECTRODE_ID VARCHAR(50) NULL COMMENT '物料ID 如 A；空表示无物料（初始可不放满）',
   BIND_TIME    DATETIME    NULL COMMENT '物料存入时间',
@@ -402,7 +402,7 @@ CREATE TABLE MAS_AUTO_LOCATION_MAP (
   POSITION_ID BIGINT      NULL COMMENT '关联加工位（LOC_TYPE=POSITION）',
   FRAME_ID    BIGINT      NULL COMMENT '关联料架（LOC_TYPE=FRAME）',
   LOC_NAME    VARCHAR(50) NULL COMMENT '逻辑位置名称（缓存区/备料区/托盘回收区等命名点）',
-  RCS_CODE    VARCHAR(50) NOT NULL COMMENT 'RCS 点位编码 如 101(station) / 601203(cell)',
+  RCS_CODE    VARCHAR(50) NOT NULL COMMENT 'RCS 点位编码 如 101(shelf) / 101101(cell)',
   RCS_TYPE    VARCHAR(10) NOT NULL COMMENT '点位类型 shelf/cell/station',
   REMARK      VARCHAR(200) NULL,
   STATE       CHAR(1)     NOT NULL DEFAULT '0' COMMENT '0=启用 1=禁用',
@@ -475,7 +475,7 @@ CREATE TABLE MAS_AUTO_EQUIMENT_WORKDATA (
 -- =============================================================
 -- 六、初始化数据（1线体 → 三道串行工序：内长宽→平面度→A基准 → 3机台）
 --     业务链：物料依次经三台机台，每道 OK 看下游有空位则直接交接/无则进该台中转架等位，NG→NG架人工处理，末道→下料架。
---     点位地址取自 docs/测试机信号表.md；LOCATION_MAP 的 RCS_CODE 为演示编码（接真机按现场替换）。
+--     点位地址取自 docs/测试机信号表.md；LOCATION_MAP 按现场搬运规则（101/201/301/302/401）。
 -- =============================================================
 
 -- 线体（PLC_ID 仅作"启用PLC"标记；实际连接为一机一PLC，见机台 PLC_ID）
@@ -571,15 +571,15 @@ INSERT INTO MAS_AUTO_PLC_POINT
   (3, 3,5,    'POS_TEST_START', '1', 'D1500', 'Q0.2'),
   (3, 3,6,    'POS_TEST_START', '1', 'D1502', 'Q0.3');
 
--- 料架：5个（上料总架 / EQ2中转架 / 下料总架 / NG专用架 / EQ3中转架），槽位统一 2层×6=12
---   容量 12 保证一轮演示各料架不溢出（满架时系统告警「料架满,请人工换架/清架」，不静默丢件）。
+-- 料架：5个（上料架101 / 中转架301 / 下料总架303 / NG架401 / 中转架302）
+--   全部 10 层 × 左右 2 位 = 20 槽。
 INSERT INTO MAS_AUTO_FRAME
   (ID1, FRAME_NAME, FRAME_CODE, FRAME_IDENTIFY_CODE, LAYER_TOTAL, SLOTS_PER_LAYER, SLOT_TOTAL, STATE, AUTHOR) VALUES
-  (1,  '上料总架',   'FR-IN',  'FR-IN-01',  2, 5, 10, '0', 'system'),
-  (2,  'EQ2中转架',  'FR-TR2', 'FR-TR2-01', 2, 6, 12, '0', 'system'),
-  (3,  '下料总架',   'FR-OUT', 'FR-OUT-01', 2, 6, 12, '0', 'system'),
-  (91, 'NG专用架',   'FR-NG',  'FR-NG-01',  2, 6, 12, '0', 'system'),
-  (92, 'EQ3中转架',  'FR-TR3', 'FR-TR3-01', 2, 6, 12, '0', 'system');
+  (1,  '上料架101',   '101', '101', 10, 2, 20, '0', 'system'),
+  (2,  '中转架301',   '301', '301', 10, 2, 20, '0', 'system'),
+  (3,  '下料总架303', '303', '303', 10, 2, 20, '0', 'system'),
+  (91, 'NG架401',    '401', '401', 10, 2, 20, '0', 'system'),
+  (92, '中转架302',   '302', '302', 10, 2, 20, '0', 'system');
 
 -- 料架绑定（角色 0上料/1下料/2中转/3NG）：三道串行产线布局
 --   EQ01 内长宽(首道)：上料架 frame1 + NG架 frame91
@@ -587,74 +587,71 @@ INSERT INTO MAS_AUTO_FRAME
 --   EQ03 A基准 (末道)：中转架 frame92 + 下料架 frame3 + NG架 frame91
 INSERT INTO MAS_AUTO_FRAME_BIND
   (FRAME_ID, EQUIMENT_ID, FRAME_ROLE, STATE, AUTHOR) VALUES
-  (1,  1, '0', '0', 'system'),   -- 上料总架 → 内长宽 上料架
-  (91, 1, '3', '0', 'system'),   -- NG专用架 → 内长宽 NG架
-  (2,  2, '2', '0', 'system'),   -- EQ2中转架 → 平面度 中转架
-  (91, 2, '3', '0', 'system'),   -- NG专用架 → 平面度 NG架
-  (92, 3, '2', '0', 'system'),   -- EQ3中转架 → A基准 中转架
-  (3,  3, '1', '0', 'system'),   -- 下料总架 → A基准 下料架
-  (91, 3, '3', '0', 'system');   -- NG专用架 → A基准 NG架
+  (1,  1, '0', '0', 'system'),   -- 上料架101 → 内长宽 上料架
+  (91, 1, '3', '0', 'system'),   -- NG架401 → 内长宽 NG架
+  (2,  2, '2', '0', 'system'),   -- 中转架301 → 平面度 中转架
+  (91, 2, '3', '0', 'system'),   -- NG架401 → 平面度 NG架
+  (92, 3, '2', '0', 'system'),   -- 中转架302 → A基准 中转架
+  (3,  3, '1', '0', 'system'),   -- 下料总架303 → A基准 下料架
+  (91, 3, '3', '0', 'system');   -- NG架401 → A基准 NG架
 
--- 槽位预建（按 层×每层数 全部预建空槽 SLOT_STATE='0'）。
--- 上料总架(ID=1)：10 槽全部入库原料物料 EL-001..EL-010（演示可连跑 ~10 件；见底后重跑本脚本补满）。
+-- 槽位预建。上料/中转/下料：10 层 × 左右 2 位。上料架物料码=该槽 cell（101 + 层不补零 + 位2位）。
 INSERT INTO MAS_AUTO_FRAME_SLOT
-  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_SOURCE, BIND_TIME) VALUES
-  (1, 1, 1, 1, '1', 'EL-001', 'MANUAL', NOW()),
-  (1, 2, 1, 2, '1', 'EL-002', 'MANUAL', NOW()),
-  (1, 3, 1, 3, '1', 'EL-003', 'MANUAL', NOW()),
-  (1, 4, 1, 4, '1', 'EL-004', 'MANUAL', NOW()),
-  (1, 5, 1, 5, '1', 'EL-005', 'MANUAL', NOW()),
-  (1, 6, 2, 1, '1', 'EL-006', 'MANUAL', NOW()),
-  (1, 7, 2, 2, '1', 'EL-007', 'MANUAL', NOW()),
-  (1, 8, 2, 3, '1', 'EL-008', 'MANUAL', NOW()),
-  (1, 9, 2, 4, '1', 'EL-009', 'MANUAL', NOW()),
-  (1, 10,2, 5, '1', 'EL-010', 'MANUAL', NOW());
+  (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_SOURCE, BIND_TIME)
+SELECT 1, (l.n - 1) * 2 + p.n, l.n, p.n, '1', CONCAT('101', l.n, LPAD(p.n, 2, '0')), 'MANUAL', NOW()
+FROM (
+  SELECT 1 n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+  UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10
+) l
+CROSS JOIN (SELECT 1 n UNION ALL SELECT 2) p;
 
--- 中转架/下料架/NG架（frame 2/3/91/92）：各 2层×6=12 全部空槽，待运行时入库
-INSERT INTO MAS_AUTO_FRAME_SLOT (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE) VALUES
-  (2,1,1,1,'0'),(2,2,1,2,'0'),(2,3,1,3,'0'),(2,4,1,4,'0'),(2,5,1,5,'0'),(2,6,1,6,'0'),
-  (2,7,2,1,'0'),(2,8,2,2,'0'),(2,9,2,3,'0'),(2,10,2,4,'0'),(2,11,2,5,'0'),(2,12,2,6,'0'),
-  (3,1,1,1,'0'),(3,2,1,2,'0'),(3,3,1,3,'0'),(3,4,1,4,'0'),(3,5,1,5,'0'),(3,6,1,6,'0'),
-  (3,7,2,1,'0'),(3,8,2,2,'0'),(3,9,2,3,'0'),(3,10,2,4,'0'),(3,11,2,5,'0'),(3,12,2,6,'0'),
-  (91,1,1,1,'0'),(91,2,1,2,'0'),(91,3,1,3,'0'),(91,4,1,4,'0'),(91,5,1,5,'0'),(91,6,1,6,'0'),
-  (91,7,2,1,'0'),(91,8,2,2,'0'),(91,9,2,3,'0'),(91,10,2,4,'0'),(91,11,2,5,'0'),(91,12,2,6,'0'),
-  (92,1,1,1,'0'),(92,2,1,2,'0'),(92,3,1,3,'0'),(92,4,1,4,'0'),(92,5,1,5,'0'),(92,6,1,6,'0'),
-  (92,7,2,1,'0'),(92,8,2,2,'0'),(92,9,2,3,'0'),(92,10,2,4,'0'),(92,11,2,5,'0'),(92,12,2,6,'0');
+INSERT INTO MAS_AUTO_FRAME_SLOT (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE)
+SELECT f.id, (l.n - 1) * 2 + p.n, l.n, p.n, '0'
+FROM (SELECT 2 AS id UNION ALL SELECT 3 UNION ALL SELECT 91 UNION ALL SELECT 92) f
+CROSS JOIN (
+  SELECT 1 n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+  UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10
+) l
+CROSS JOIN (SELECT 1 n UNION ALL SELECT 2) p;
 
 -- =============================================================
--- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（宝龙 B5）
---   搬运 cell = 货架码3位 + 孔位码3位；站点/shelf = 货架码3位。
---   货架百位：1上料 / 2 CNC / 3下料。CNC 孔位百位固定 1。
---   上料区/上料总架 shelf 不能同时写成 101（解析器同码多行会歧义拒发）；shelf 仍留演示码。
---   中转/NG 无 B5 百位，保持演示码。
+-- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（现场搬运规则）
+--   现场目前只下发搬运（transit / cell）。
+--   cell = 货架码 + 层号（不补零）+ 层内位 2 位：上料 L1=101101/101102、L10=1011001/1011002；内长宽工位1 201101。
+--   shelf：上料 101 / 内长宽 201 / 中转 301·302 / 下料 303 / NG 401。
+--   禁止 LOAD_AREA=101 或 UNLOAD_AREA=301（与料架 shelf 同码会歧义拒发）。
+--   平面度/A基准 cell、缓存区：未现场确认；缓存区留演示码。
 -- =============================================================
--- 命名区域：上料区/下料区 + 换架缓存区/空托盘回收区
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
-  ('AREA', 'LOAD_AREA',     '101', 'station', '0', 'system'),
-  ('AREA', 'UNLOAD_AREA',   '301', 'station', '0', 'system'),
   ('AREA', 'FULL_BUFFER',   '650001', 'station', '0', 'system'),
   ('AREA', 'EMPTY_BUFFER',  '650002', 'station', '0', 'system'),
   ('AREA', 'PALLET_RETURN', '650003', 'station', '0', 'system');
--- 加工位 cell（5 个加工位）
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, POSITION_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('POSITION', 1, 1, '201101', 'cell', '0', 'system'),
   ('POSITION', 1, 2, '201102', 'cell', '0', 'system'),
   ('POSITION', 2, 3, '202101', 'cell', '0', 'system'),
   ('POSITION', 3, 5, '203101', 'cell', '0', 'system'),
   ('POSITION', 3, 6, '203102', 'cell', '0', 'system');
--- 料架站点 shelf（换架/盘点用）
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
-  ('FRAME', 1,  '上料总架',  '651001', 'shelf', '0', 'system'),
-  ('FRAME', 2,  'EQ2中转架', '651002', 'shelf', '0', 'system'),
-  ('FRAME', 3,  '下料总架',  '651003', 'shelf', '0', 'system'),
-  ('FRAME', 91, 'NG专用架',  '651091', 'shelf', '0', 'system'),
-  ('FRAME', 92, 'EQ3中转架', '651092', 'shelf', '0', 'system');
--- 料架 cell（下料/中转/NG 分流入库按此解析；缺失则拒发，禁止 FRAME-{id} 假码）
-INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
-  ('FRAME', 2,  'EQ2中转架cell', '653002', 'cell', '0', 'system'),
-  ('FRAME', 3,  '下料总架cell',  '301101', 'cell', '0', 'system'),
-  ('FRAME', 91, 'NG架cell',      '653091', 'cell', '0', 'system'),
-  ('FRAME', 92, 'EQ3中转架cell', '653092', 'cell', '0', 'system');
+  ('FRAME', 1,  '上料架101',   '101', 'shelf', '0', 'system'),
+  ('FRAME', 2,  '中转架301',   '301', 'shelf', '0', 'system'),
+  ('FRAME', 3,  '下料总架303', '303', 'shelf', '0', 'system'),
+  ('FRAME', 91, 'NG架401',    '401', 'shelf', '0', 'system'),
+  ('FRAME', 92, '中转架302',   '302', 'shelf', '0', 'system');
+INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR)
+SELECT 'FRAME', f.id, CONCAT('L', l.n, 'P', p.n), CONCAT(f.code, l.n, LPAD(p.n, 2, '0')), 'cell', '0', 'system'
+FROM (
+  SELECT 1 AS id, '101' AS code
+  UNION ALL SELECT 2, '301'
+  UNION ALL SELECT 3, '303'
+  UNION ALL SELECT 91, '401'
+  UNION ALL SELECT 92, '302'
+) f
+CROSS JOIN (
+  SELECT 1 n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+  UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10
+) l
+CROSS JOIN (SELECT 1 n UNION ALL SELECT 2) p;
 
 -- =============================================================
 -- 七、常用查询示例

@@ -46,12 +46,32 @@ public sealed record LocationMapItem
     public string? EquipmentName { get; init; }
     public string? PositionName { get; init; }
     public string? FrameName { get; init; }
+    public string? FrameCode { get; init; }
 
     public string LocTypeText => LocationDisplayLabels.LocTypeToZh(LocType);
     public string RcsTypeText => LocationDisplayLabels.RcsTypeToZh(RcsType);
-    public string LocNameText => LocType == "AREA"
-        ? LocationDisplayLabels.AreaNameToZh(LocName)
-        : (LocName ?? "");
+    public string LocNameText
+    {
+        get
+        {
+            if (LocType == "AREA")
+                return LocationDisplayLabels.AreaNameToZh(LocName);
+            if (LocType == "FRAME" && RcsType == "cell"
+                && RcsCellCode.TryParse(RcsCode, FrameCode, out var layer, out var pos))
+                return RcsCellCode.FormatSlotLabel(layer, pos);
+            return LocName ?? "";
+        }
+    }
+    public string LayerText =>
+        LocType == "FRAME" && RcsType == "cell"
+        && RcsCellCode.TryParse(RcsCode, FrameCode, out var layer, out _)
+            ? layer.ToString()
+            : "";
+    public string PosText =>
+        LocType == "FRAME" && RcsType == "cell"
+        && RcsCellCode.TryParse(RcsCode, FrameCode, out _, out var pos)
+            ? pos.ToString()
+            : "";
     public string EquipmentText => LocationDisplayLabels.FormatRef(EquipmentName, EquipmentId);
     public string PositionText => LocationDisplayLabels.FormatRef(PositionName, PositionId);
     public string FrameText => LocationDisplayLabels.FormatRef(FrameName, FrameId);

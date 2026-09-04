@@ -93,7 +93,7 @@ public sealed class MissingLocationMapRoutingTests
     public async Task Dispatch_UploadRouteUnmapped_MustNotReserveOrSendRcs()
     {
         var (slots, tasks, plc, alarms, scheduler) = BuildUploadHarness(
-            new FixedRoutes { MissingUpload = true });
+            new FixedRoutes { MissingFrameCell = true });
 
         scheduler.ProbeMarkReconciled();
         scheduler.ProbeSeedUploadCandidate(Eq, Pos);

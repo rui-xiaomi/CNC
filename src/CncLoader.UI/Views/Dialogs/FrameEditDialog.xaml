@@ -27,12 +27,12 @@
             <Grid Margin="0,0,0,8">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <TextBlock Text="层数" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                <TextBox x:Name="LayerBox" Grid.Column="1" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}" Text="2"/>
+                <TextBox x:Name="LayerBox" Grid.Column="1" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}" Text="10"/>
             </Grid>
             <Grid Margin="0,0,0,16">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <TextBlock Text="每层槽数" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                <TextBox x:Name="PerLayerBox" Grid.Column="1" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}" Text="5"/>
+                <TextBox x:Name="PerLayerBox" Grid.Column="1" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}" Text="2"/>
             </Grid>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

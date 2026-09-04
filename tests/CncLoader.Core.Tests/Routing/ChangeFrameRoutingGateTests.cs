@@ -131,7 +131,7 @@ public sealed class ChangeFrameRoutingGateTests
             Assert.That(_client.TransitCount, Is.EqualTo(1));
             Assert.That(_client.ExcuteCount, Is.EqualTo(0), "换架走 Transit 非 Excute");
             Assert.That(_tasks.Created.Single().Kind, Is.EqualTo(RcsTaskKind.ChangeFrame));
-            Assert.That(_tasks.Created.Single().FromCode, Is.EqualTo(FrameCellCode));
+            Assert.That(_tasks.Created.Single().FromCode, Is.EqualTo(FrameShelfCode));
             Assert.That(_tasks.Created.Single().ToCode, Is.EqualTo(EmptyBufferCode));
             Assert.That(_loc.SnapshotByCode(FrameCellCode).Single().EquipmentId, Is.Null);
             Assert.That(_loc.SnapshotByCode(EmptyBufferCode).Single().EquipmentId, Is.Null);
@@ -173,7 +173,7 @@ public sealed class ChangeFrameRoutingGateTests
             Assert.That(_tasks.CreateCount - createBefore, Is.EqualTo(1), "push 再 Create 一次");
             Assert.That(_client.TransitCount - transitBefore, Is.EqualTo(1));
             Assert.That(_tasks.Created.Last().FromCode, Is.EqualTo(EmptyBufferCode));
-            Assert.That(_tasks.Created.Last().ToCode, Is.EqualTo(FrameCellCode));
+            Assert.That(_tasks.Created.Last().ToCode, Is.EqualTo(FrameShelfCode));
             Assert.That(_resolver.CallCount, Is.EqualTo(1), "push 发送边界 Resolve 一次");
             Assert.That(_validator.CallCount, Is.EqualTo(1));
             Assert.That(_validator.Contexts.All(c => c.Operation == DispatchOperationKind.ChangeFrame), Is.True);
@@ -193,7 +193,7 @@ public sealed class ChangeFrameRoutingGateTests
         Assert.Multiple(() =>
         {
             Assert.That(pull.State, Is.EqualTo("RUNNING"));
-            Assert.That(_tasks.Created.Single().FromCode, Is.EqualTo(FrameDownloadCellCode));
+            Assert.That(_tasks.Created.Single().FromCode, Is.EqualTo(FrameDownloadShelfCode));
             Assert.That(_tasks.Created.Single().ToCode, Is.EqualTo(FullBufferCode));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
             Assert.That(_resolver.CallCount, Is.EqualTo(1));
@@ -291,7 +291,7 @@ public sealed class ChangeFrameRoutingGateTests
         _loc.Seed(new LocationMapItem
         {
             Id = 90, LocType = "FRAME", FrameId = FrameIdTransit, LocName = "dup",
-            RcsCode = FrameCellCode, RcsType = "cell",
+            RcsCode = FrameShelfCode, RcsType = "shelf",
             EquipmentId = null, PositionId = null
         });
 

@@ -5,12 +5,9 @@ using Microsoft.Extensions.Logging;
 namespace CncLoader.Communication.State;
 
 /// <summary>
-/// 路由决策默认实现（§6.2 简化版）：
-/// 上料：from=上料区命名点（LOCATION_MAP LOC_NAME="LOAD_AREA"），to=加工位 cell；
-/// 下料：from=加工位 cell，to=下料区命名点（LOC_NAME="UNLOAD_AREA"）。
-/// 加工位 cell 由 LOCATION_MAP 按 (EQUIPMENT_ID+POSITION_ID, rcsType="cell") 解析。
-/// 解析失败返回 null——调度器据此告警人工（产线配置未录入）。
-/// 完整工序间流转/中转架/NG分流留步骤⑥。
+/// 路由决策：现场搬运为 cell 级（货架码+孔位，如 101101→201101）。
+/// 上料命名区 / 下料命名区仅作无料架绑定时的回退；有料架时用 shelf + 预记槽 cell。
+/// 解析失败返回 null——调度器据此告警人工；禁止 FRAME-{id} 假码。
 /// </summary>
 public sealed class RouteResolver : IRouteResolver
 {
@@ -61,5 +58,25 @@ public sealed class RouteResolver : IRouteResolver
         // 仅返回 LOCATION_MAP 真实编码；缺映射返回 null，禁止 FRAME-{id} 假码下发。
         var cell = await _locationMap.ResolveFrameAsync(frameId, "cell", ct);
         return cell?.RcsCode;
+    }
+
+    public async Task<string?> ResolveFrameShelfAsync(long frameId, CancellationToken ct = default)
+    {
+        var shelf = await _locationMap.ResolveFrameAsync(frameId, "shelf", ct)
+                    ?? await _locationMap.ResolveFrameAsync(frameId, "station", ct);
+        return string.IsNullOrWhiteSpace(shelf?.RcsCode) ? null : shelf.RcsCode;
+    }
+
+    public async Task<string?> ResolveFrameSlotCellAsync(
+        long frameId, int layerNo, int posInLayer, CancellationToken ct = default)
+    {
+        var shelf = await ResolveFrameShelfAsync(frameId, ct);
+        var composed = RcsCellCode.TryCompose(shelf, layerNo, posInLayer);
+        if (composed is null) return null;
+
+        var hit = await _locationMap.ResolveByRcsCodeAsync(composed, ct);
+        if (hit is null || hit.FrameId != frameId || !string.Equals(hit.RcsType, "cell", StringComparison.Ordinal))
+            return null;
+        return composed;
     }
 }

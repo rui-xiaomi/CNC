@@ -80,4 +80,12 @@ public interface IRouteResolver
     Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default);
     /// <summary>解析料架 cell 编码（LOCATION_MAP FrameId + rcsType="cell"；缺映射返回 null，禁止假码）。</summary>
     Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default);
+
+    /// <summary>解析料架 shelf/station（整架搬运/盘点）。缺映射返回 null。</summary>
+    Task<string?> ResolveFrameShelfAsync(long frameId, CancellationToken ct = default)
+        => ResolveFrameCellAsync(frameId, ct);
+
+    /// <summary>解析料架指定槽 cell（货架码+层+层内位）。缺 LOCATION_MAP 返回 null，禁止假码。</summary>
+    Task<string?> ResolveFrameSlotCellAsync(long frameId, int layerNo, int posInLayer, CancellationToken ct = default)
+        => ResolveFrameCellAsync(frameId, ct);
 }

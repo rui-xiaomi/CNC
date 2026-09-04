@@ -141,6 +141,10 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         {
             if (found.Contains(id) || !_notFoundAlarmed.TryAdd(id, true)) continue;
             await _alarms.RaiseRcsTaskNotFoundAsync(id, "轮询 queryTask 未返回该任务（RCS 侧查无），工位已收口可点恢复", ct);
+            // P0-3：RCS 查无任务 → 落 FAILED 终态，移出未完结列表。否则该 taskId 每 3s 都进 queryTask IN 列表
+            // 且只增不减，月级积累导致请求体膨胀。直接落库不走 notifier，故不触发 auto-redo（任务已判定不存在，重发无意义）。
+            if (!await _store.UpdateStateAsync(id, RcsTaskState.Failed, null, "RCS 侧查无此任务，已落 FAILED 收口", ct))
+                _logger.LogWarning("RCS 查无任务 {TaskId} 落 FAILED 未生效（任务不存在）", id);
             await NotifySchedulerAbandonedAsync(id, "RCS_NOT_FOUND", ct);
         }
     }
@@ -226,6 +230,10 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
     /// </summary>
     internal Task ProbeAutoRedoOnceAsync(string taskId, string source = "probe")
         => AutoRedoAsync(taskId, source);
+
+    /// <summary>测试探测：跑一轮真实兜底轮询（含查无任务落 FAILED 收口），不启动轮询循环。</summary>
+    internal Task ProbePollOnceAsync(CancellationToken ct = default)
+        => PollOnceAsync(ct);
 
     private async Task NotifySchedulerAbandonedAsync(string taskId, string reason, CancellationToken ct)
     {

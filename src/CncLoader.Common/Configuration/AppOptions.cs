@@ -86,8 +86,9 @@ public sealed class RcsOptions
     /// <summary>定期盘点间隔（分钟）。到点且 RCS 空闲时逐料架发起 identifyQR。</summary>
     public int InventoryIntervalMinutes { get; set; } = 60;
 
-    /// <summary>是否启用本机 RCS 模拟器（第四阶段③启用）。</summary>
-    public bool UseSimulator { get; set; } = true;
+    /// <summary>是否启用本机 RCS 模拟器（第四阶段③启用）。默认 false（fail-closed）：现场配置缺失时不进模拟器，
+    /// 演示/自测场景在 appsettings.json 显式设 true。</summary>
+    public bool UseSimulator { get; set; }
 
     /// <summary>模拟器：收到任务后回推结果前的延时下限（毫秒）。</summary>
     public int SimulatorMinDelayMs { get; set; } = 1500;
@@ -151,8 +152,9 @@ public sealed class PlcOptions
     public int ConnectTimeoutMs { get; set; } = 3000;
     public int ReadWriteTimeoutMs { get; set; } = 2000;
 
-    /// <summary>是否在启动时启用内置 Modbus TCP 模拟器（开发期无真机时使用）。</summary>
-    public bool UseSimulator { get; set; } = true;
+    /// <summary>是否在启动时启用内置 Modbus TCP 模拟器（开发期无真机时使用）。默认 false（fail-closed）：
+    /// 现场配置缺失时不进模拟器，演示/自测场景在 appsettings.json 显式设 true。</summary>
+    public bool UseSimulator { get; set; }
 
     /// <summary>模拟器监听 IP（环回）。</summary>
     public string SimulatorBindAddress { get; set; } = "127.0.0.1";
