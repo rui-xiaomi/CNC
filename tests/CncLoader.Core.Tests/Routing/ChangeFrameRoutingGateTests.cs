@@ -135,13 +135,13 @@ public sealed class ChangeFrameRoutingGateTests
             Assert.That(_tasks.Created.Single().ToCode, Is.EqualTo(EmptyBufferCode));
             Assert.That(_loc.SnapshotByCode(FrameCellCode).Single().EquipmentId, Is.Null);
             Assert.That(_loc.SnapshotByCode(EmptyBufferCode).Single().EquipmentId, Is.Null);
-            Assert.That(_resolver.CallCount, Is.EqualTo(2), "Transit Pre+Final Resolve");
-            Assert.That(_validator.CallCount, Is.EqualTo(2), "Transit Pre+Final Validate");
+            Assert.That(_resolver.CallCount, Is.EqualTo(1), "发送边界 Resolve 一次");
+            Assert.That(_validator.CallCount, Is.EqualTo(1), "发送边界 Validate 一次");
             Assert.That(_validator.Contexts.All(c => c.Operation == DispatchOperationKind.ChangeFrame), Is.True);
             Assert.That(_validator.Contexts.All(c => c.OperationEquipmentId == EqId), Is.True,
                 "Final Context 须携带换架机台");
-            Assert.That(_eq.FindFrameBindsCallCount, Is.GreaterThanOrEqualTo(2),
-                "业务 Pre + Service Pre/Final 须查 FrameBind");
+            Assert.That(_eq.FindFrameBindsCallCount, Is.GreaterThanOrEqualTo(1),
+                "须查 FrameBind");
             Assert.That(_order.IndexOf("Validate"), Is.LessThan(_order.IndexOf("CreateTask")),
                 $"Bind/Validate 须在 Create 前；顺序={string.Join("→", _order)}");
             Assert.That(_order.IndexOf("Resolve"), Is.LessThan(_order.IndexOf("CreateTask")),
@@ -174,8 +174,8 @@ public sealed class ChangeFrameRoutingGateTests
             Assert.That(_client.TransitCount - transitBefore, Is.EqualTo(1));
             Assert.That(_tasks.Created.Last().FromCode, Is.EqualTo(EmptyBufferCode));
             Assert.That(_tasks.Created.Last().ToCode, Is.EqualTo(FrameCellCode));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2), "push 须 Pre+Final");
-            Assert.That(_validator.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1), "push 发送边界 Resolve 一次");
+            Assert.That(_validator.CallCount, Is.EqualTo(1));
             Assert.That(_validator.Contexts.All(c => c.Operation == DispatchOperationKind.ChangeFrame), Is.True);
             Assert.That(_validator.Contexts.All(c => c.OperationEquipmentId == EqId), Is.True);
             Assert.That(_validator.Contexts.All(c =>
@@ -196,7 +196,7 @@ public sealed class ChangeFrameRoutingGateTests
             Assert.That(_tasks.Created.Single().FromCode, Is.EqualTo(FrameDownloadCellCode));
             Assert.That(_tasks.Created.Single().ToCode, Is.EqualTo(FullBufferCode));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1));
         });
     }
 
@@ -571,28 +571,21 @@ public sealed class ChangeFrameRoutingGateTests
                 $"Pre 后禁 Frame 实体须拒；Create={_tasks.CreateCount} Finds={_frames.FindCallCount}");
             Assert.That(_tasks.CreateCount, Is.EqualTo(0));
             Assert.That(_client.TransitCount, Is.EqualTo(0));
-            Assert.That(_frames.FindCallCount, Is.GreaterThanOrEqualTo(2), "Pre+Final 各读 Frame");
+            Assert.That(_frames.FindCallCount, Is.GreaterThanOrEqualTo(2), "编排解析 + Service 门禁各读 Frame");
         });
     }
 
     [Test]
-    public async Task Pull_EquipmentDisabledAfterPreValidate_FinalRejects()
+    public async Task Pull_EquipmentDisabled_Rejects_NoCreate_NoRcs()
     {
-        var inner = new RoutingAvailabilityValidator(
-            _eq, _equipment, _frames, NullLogger<RoutingAvailabilityValidator>.Instance);
-        var validator = new CountingRoutingValidator(
-            new DisableEquipmentAfterFirstValidate(inner, _eq, EqId))
-        {
-            OrderSink = _order
-        };
-        RebuildOrchestrator(_resolver, validator);
+        _eq.SetEquipmentState(EqId, "1");
 
         var e = await StartPullAsync(FrameRole.Upload);
 
         Assert.Multiple(() =>
         {
             Assert.That(e.State, Is.EqualTo("FAILED"),
-                $"Pre 后禁 Equipment Final 须拒；Create={_tasks.CreateCount}");
+                $"机台禁用须拒；Create={_tasks.CreateCount}");
             Assert.That(_tasks.CreateCount, Is.EqualTo(0));
             Assert.That(_client.TransitCount, Is.EqualTo(0));
             Assert.That(_alarms.RaiseCount, Is.EqualTo(0));
@@ -875,32 +868,6 @@ public sealed class ChangeFrameRoutingGateTests
         public Task<RoutingAvailabilityResult> ValidateAsync(
             DispatchRouteContext context, CancellationToken ct = default)
             => throw new InvalidOperationException("validator-down");
-    }
-
-    /// <summary>Pre Validate 返回后禁用机台，供 ChangeFrame Final Classify 拒发。</summary>
-    private sealed class DisableEquipmentAfterFirstValidate : IRoutingAvailabilityValidator
-    {
-        private readonly IRoutingAvailabilityValidator _inner;
-        private readonly MutableEquipmentRoutingStore _eq;
-        private readonly long _equipmentId;
-        private int _calls;
-
-        public DisableEquipmentAfterFirstValidate(
-            IRoutingAvailabilityValidator inner, MutableEquipmentRoutingStore eq, long equipmentId)
-        {
-            _inner = inner;
-            _eq = eq;
-            _equipmentId = equipmentId;
-        }
-
-        public async Task<RoutingAvailabilityResult> ValidateAsync(
-            DispatchRouteContext context, CancellationToken ct = default)
-        {
-            var r = await _inner.ValidateAsync(context, ct);
-            if (Interlocked.Increment(ref _calls) == 1)
-                _eq.SetEquipmentState(_equipmentId, "1");
-            return r;
-        }
     }
 
     private sealed class CfNoopMsgLog : IRcsMessageLog

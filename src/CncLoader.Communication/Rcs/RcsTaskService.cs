@@ -28,7 +28,11 @@ public sealed class RcsTaskService : IRcsTaskService
     private readonly ISlotAccountService _slots;
     private readonly ILogger<RcsTaskService> _logger;
 
-    public RcsTaskService(
+    /// <summary>
+    /// 刻意 internal：入参含 internal 的 <see cref="IRcsClient"/>，
+    /// 使「在容器外自己 new 一个绕过门禁的任务服务」在通信层之外无法编译。
+    /// </summary>
+    internal RcsTaskService(
         IRcsClient client,
         IRcsTaskStore store,
         IRcsMessageLog msgLog,
@@ -50,7 +54,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
     public async Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
     {
-        // Pre + Final 双权威读取：ResolvePre→ValidatePre→ResolveFinal→ValidateFinal→Create→RCS
+        // 发送边界一次权威读取：Resolve→Validate→角色→Create→RCS
         // 无 Skip 逃生；PalletReturn / ChangeFrame 另在 Service 边界执行角色策略
         if (args.Operation == DispatchOperationKind.ChangeFrame
             && (args.EquipmentId is null or <= 0))
@@ -60,14 +64,9 @@ public sealed class RcsTaskService : IRcsTaskService
             return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
         }
 
-        var pre = await ResolveAndValidateForNewExecutionAsync(args, ct);
-        if (!pre.Ok) return pre.Failure!;
-        if (!MatchesOperationRole(args.Operation, pre.Context!))
-            return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
-
-        var final = await ValidateFinalAsync(args, ct);
-        if (!final.Ok) return final.Failure!;
-        if (!MatchesOperationRole(args.Operation, final.Context!))
+        var gate = await ValidateFinalAsync(args, ct);
+        if (!gate.Ok) return gate.Failure!;
+        if (!MatchesOperationRole(args.Operation, gate.Context!))
             return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
 
         var taskId = string.IsNullOrWhiteSpace(args.TaskId)
@@ -216,13 +215,10 @@ public sealed class RcsTaskService : IRcsTaskService
         var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
         if (row is null) return RcsResult.Fail("", $"任务不存在：{rcsTaskId}");
 
-        var gate = await ResolveAndValidateForNewExecutionAsync(row.FromCode, row.ToCode, ct);
+        var gate = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!gate.Ok) return gate.Failure!;
 
-        var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
-        if (!final.Ok) return final.Failure!;
-
-        var hold = await EnsureReplayReservationAsync(row, final.Context!, ct);
+        var hold = await EnsureReplayReservationAsync(row, gate.Context!, ct);
         if (!hold.Ok) return hold.Failure!;
 
         await _store.IncrementRedoAsync(rcsTaskId, ct);
@@ -243,13 +239,10 @@ public sealed class RcsTaskService : IRcsTaskService
         var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
         if (row is null) return RcsResult.Fail("", $"任务不存在：{rcsTaskId}");
 
-        var gate = await ResolveAndValidateForNewExecutionAsync(row.FromCode, row.ToCode, ct);
+        var gate = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!gate.Ok) return gate.Failure!;
 
-        var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
-        if (!final.Ok) return final.Failure!;
-
-        var hold = await EnsureReplayReservationAsync(row, final.Context!, ct);
+        var hold = await EnsureReplayReservationAsync(row, gate.Context!, ct);
         if (!hold.Ok) return hold.Failure!;
 
         var result = await BuildAndSendAsync(row, "redo", ct);
@@ -261,7 +254,7 @@ public sealed class RcsTaskService : IRcsTaskService
     }
 
     /// <summary>
-    /// Tracker 自动重派：Load→ResolvePre→ValidatePre→ResolveFinal→ValidateFinal→
+    /// Tracker 自动重派：Load→发送边界一次 Resolve+Validate→
     /// TryClaimAutoRedo→RcsSend。门禁失败不 Claim；Claim 失败不 Send；不回滚已消费次数。
     /// </summary>
     public async Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default)
@@ -269,13 +262,10 @@ public sealed class RcsTaskService : IRcsTaskService
         var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
         if (row is null) return RcsResult.Fail("", $"任务不存在：{rcsTaskId}");
 
-        var gate = await ResolveAndValidateForNewExecutionAsync(row.FromCode, row.ToCode, ct);
+        var gate = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
         if (!gate.Ok) return gate.Failure!;
 
-        var final = await ValidateFinalAsync(row.FromCode, row.ToCode, ct);
-        if (!final.Ok) return final.Failure!;
-
-        var hold = await EnsureReplayReservationAsync(row, final.Context!, ct);
+        var hold = await EnsureReplayReservationAsync(row, gate.Context!, ct);
         if (!hold.Ok) return hold.Failure!;
 
         var claim = await _store.TryClaimAutoRedoAsync(rcsTaskId, maxRedoCount, ct);
@@ -343,31 +333,19 @@ public sealed class RcsTaskService : IRcsTaskService
             Author = author
         }, ct);
 
-    /// <summary>
-    /// 新执行统一门禁：Resolve + ValidatePre。
-    /// 不修改任务、不 Increment、不调用 RCS。
-    /// </summary>
-    private Task<GateOutcome> ResolveAndValidateForNewExecutionAsync(
-        TransitDispatchArgs args, CancellationToken ct)
-        => ResolveAndValidateCoreAsync(args.FromCode, args.ToCode, args, isFinal: false, ct);
-
-    /// <summary>Redo/Redispatch：按落库 From/To 门禁（无换架 Operation 上下文；本期不扩 Tracker）。</summary>
-    private Task<GateOutcome> ResolveAndValidateForNewExecutionAsync(
-        string? fromCode, string? toCode, CancellationToken ct)
-        => ResolveAndValidateCoreAsync(fromCode, toCode, operationArgs: null, isFinal: false, ct);
-
-    /// <summary>Grab/Identify/Redo Final（无换架 Operation 上下文）。</summary>
+    /// <summary>Grab/Identify/Redo 发送边界（无换架 Operation 上下文）。</summary>
     private Task<GateOutcome> ValidateFinalAsync(
         string? fromCode, string? toCode, CancellationToken ct)
-        => ResolveAndValidateCoreAsync(fromCode, toCode, operationArgs: null, isFinal: true, ct);
+        => ResolveAndValidateCoreAsync(fromCode, toCode, operationArgs: null, ct);
 
+    /// <summary>发送边界一次 Resolve+Validate。不修改任务、不 Increment、不调用 RCS。</summary>
     private Task<GateOutcome> ValidateFinalAsync(
         TransitDispatchArgs args, CancellationToken ct)
-        => ResolveAndValidateCoreAsync(args.FromCode, args.ToCode, args, isFinal: true, ct);
+        => ResolveAndValidateCoreAsync(args.FromCode, args.ToCode, args, ct);
 
     private async Task<GateOutcome> ResolveAndValidateCoreAsync(
         string? fromCode, string? toCode, TransitDispatchArgs? operationArgs,
-        bool isFinal, CancellationToken ct)
+        CancellationToken ct)
     {
         try
         {
@@ -384,16 +362,14 @@ public sealed class RcsTaskService : IRcsTaskService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "受管路由{Phase}解析异常，fail-closed", isFinal ? " Final" : "");
+                _logger.LogWarning(ex, "受管路由解析异常，fail-closed");
                 return GateOutcome.Reject(RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage));
             }
 
-            if (isFinal && !resolved.IsResolved)
+            if (!resolved.IsResolved)
                 return GateOutcome.Reject(RcsResult.RouteUnavailable(RouteUnavailableUiMessage));
 
-            var ctx = resolved.IsResolved
-                ? ApplyOperationContext(resolved.Context!, operationArgs)
-                : ApplyOperationContext(BuildFailClosedContext(fromCode, toCode), operationArgs);
+            var ctx = ApplyOperationContext(resolved.Context!, operationArgs);
 
             RoutingAvailabilityResult gate;
             try
@@ -406,18 +382,13 @@ public sealed class RcsTaskService : IRcsTaskService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "路由{Phase}校验异常，fail-closed", isFinal ? " Final" : " Pre");
+                _logger.LogWarning(ex, "路由校验异常，fail-closed");
                 return GateOutcome.Reject(RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage));
             }
 
-            if (!resolved.IsResolved || !gate.IsAvailable)
+            if (!gate.IsAvailable)
             {
-                var kind = isFinal
-                    ? (gate.Reason == RoutingUnavailableReason.ConfigurationUnavailable
-                        ? RcsFailureKind.ConfigurationUnavailable
-                        : RcsFailureKind.RouteUnavailable)
-                    : MapFailureKind(resolved, gate);
-                return GateOutcome.Reject(kind == RcsFailureKind.ConfigurationUnavailable
+                return GateOutcome.Reject(gate.Reason == RoutingUnavailableReason.ConfigurationUnavailable
                     ? RcsResult.ConfigurationUnavailable(RouteUnavailableUiMessage)
                     : RcsResult.RouteUnavailable(RouteUnavailableUiMessage));
             }
@@ -442,15 +413,6 @@ public sealed class RcsTaskService : IRcsTaskService
                 : null
         };
     }
-
-    private static DispatchRouteContext BuildFailClosedContext(string? fromCode, string? toCode) => new()
-    {
-        SourceEquipmentId = 0,
-        DestEquipmentId = RouteDependency.RequiredMissing,
-        FromCode = fromCode,
-        ToCode = toCode,
-        RequiresResolvedCells = true
-    };
 
     /// <summary>
     /// 操作角色策略：Transit 无额外限制；
@@ -528,15 +490,6 @@ public sealed class RcsTaskService : IRcsTaskService
 
         return from.Kind == ManagedEndpointKind.Frame
                && to.Kind == ManagedEndpointKind.Frame;
-    }
-
-    private static RcsFailureKind MapFailureKind(
-        ManagedDispatchRouteResult resolved, RoutingAvailabilityResult pre)
-    {
-        if (resolved.Status == ManagedDispatchRouteStatus.ConfigurationUnavailable
-            || pre.Reason == RoutingUnavailableReason.ConfigurationUnavailable)
-            return RcsFailureKind.ConfigurationUnavailable;
-        return RcsFailureKind.RouteUnavailable;
     }
 
     private async Task FinishAsync(string taskId, RcsResult result, CancellationToken ct)

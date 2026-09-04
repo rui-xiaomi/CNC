@@ -17,9 +17,6 @@ public sealed class PalletReturnRoutingGateTests
     [SetUp]
     public void SetUp() => _h = ManualReplayHarness.CreateForPalletReturn();
 
-    [TearDown]
-    public void TearDown() => RcsViewModel.TestNotifications = null;
-
     // ─── 真实链还原（文档化断言，防漂移）──────────────────────────
 
     [Test]
@@ -114,10 +111,10 @@ public sealed class PalletReturnRoutingGateTests
             Assert.That(_h.Client.SendCount, Is.EqualTo(1), "合法路径应 RCS 一次");
             Assert.That(_h.TaskStore.CreateCount, Is.EqualTo(1));
             Assert.That(_h.Notify.SuccessCount, Is.EqualTo(1));
-            Assert.That(_h.RouteResolver.CallCount, Is.GreaterThanOrEqualTo(2),
-                "须 Pre+Final Resolve");
-            Assert.That(_h.Validator.CallCount, Is.GreaterThanOrEqualTo(2),
-                "须 Pre+Final Validate");
+            Assert.That(_h.RouteResolver.CallCount, Is.GreaterThanOrEqualTo(1),
+                "须经 Resolver");
+            Assert.That(_h.Validator.CallCount, Is.GreaterThanOrEqualTo(1),
+                "须经 Validator");
             Assert.That(_h.Plc.WriteCount, Is.EqualTo(0));
         });
     }
@@ -135,8 +132,8 @@ public sealed class PalletReturnRoutingGateTests
             Assert.That(_h.Client.SendCount, Is.EqualTo(1));
             Assert.That(_h.TaskStore.CreateCount, Is.EqualTo(1));
             Assert.That(_h.Notify.SuccessCount, Is.EqualTo(1));
-            Assert.That(_h.RouteResolver.CallCount, Is.GreaterThanOrEqualTo(2),
-                "FRAME→PALLET_RETURN 须经 Resolver Pre+Final");
+            Assert.That(_h.RouteResolver.CallCount, Is.GreaterThanOrEqualTo(1),
+                "FRAME→PALLET_RETURN 须经 Resolver");
             Assert.That(_h.Frames.FindCallCount, Is.GreaterThanOrEqualTo(1),
                 "须校验 Frame 活动");
             Assert.That(_h.Plc.WriteCount, Is.EqualTo(0));

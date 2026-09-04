@@ -61,7 +61,7 @@ internal sealed class CountingRoutingValidator : IRoutingAvailabilityValidator
     }
 }
 
-/// <summary>计数包装真实 Resolver（PalletReturn / 类型化门禁断言 Pre+Final）。</summary>
+/// <summary>计数包装真实 Resolver（PalletReturn / 类型化门禁断言发送边界次数）。</summary>
 internal sealed class CountingManagedRouteResolver : IManagedDispatchRouteResolver
 {
     private readonly IManagedDispatchRouteResolver _inner;
@@ -679,6 +679,25 @@ internal sealed class FakeNotifyCounter : IUserNotificationService
     public void Error(string message) { ErrorCount++; All.Add(message); }
     public void Info(string message) { InfoCount++; All.Add(message); }
 
+    /// <summary>二次确认的应答（默认确认，便于沿用「真实 RCS 模式下点了确定」的既有断言）。</summary>
+    public bool ConfirmAnswer { get; set; } = true;
+    public int ConfirmCount { get; private set; }
+    public List<string> Confirmations { get; } = new();
+    public int AlertCount { get; private set; }
+
+    public bool Confirm(string message, string title)
+    {
+        ConfirmCount++;
+        Confirmations.Add(message);
+        return ConfirmAnswer;
+    }
+
+    public void Alert(string message, string title)
+    {
+        AlertCount++;
+        All.Add(message);
+    }
+
     /// <summary>多步场景（如 R19 第二次派工）前清零，避免累加计数污染断言。</summary>
     public void Reset()
     {
@@ -686,6 +705,9 @@ internal sealed class FakeNotifyCounter : IUserNotificationService
         WarningCount = 0;
         ErrorCount = 0;
         InfoCount = 0;
+        ConfirmCount = 0;
+        AlertCount = 0;
+        Confirmations.Clear();
         All.Clear();
     }
 }
@@ -791,9 +813,7 @@ internal sealed class ManualReplayHarness
             }
         });
 
-        // headless：挂接通知接缝，避免 Growl 无视觉树 NRE 假红
-        RcsViewModel.TestNotifications = notify;
-
+        // headless：通知与 UI 线程都走注入的接缝，避免 Growl / Dispatcher 无视觉树 NRE 假红
         var vm = new RcsViewModel(
             taskService,
             loc,
@@ -809,6 +829,8 @@ internal sealed class ManualReplayHarness
             new StubUser(),
             resolver,
             validator,
+            notify,
+            new UI.ImmediateUiDispatcher(),
             options);
 
         return new ManualReplayHarness

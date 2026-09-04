@@ -29,7 +29,7 @@ public interface IRcsTaskService
     Task<RcsResult> RedispatchAsync(string rcsTaskId, CancellationToken ct = default);
 
     /// <summary>
-    /// Tracker 自动重派统一入口：Resolve→ValidatePre→ResolveFinal→ValidateFinal→
+    /// Tracker 自动重派统一入口：发送边界一次 Resolve+Validate→
     /// 原子 Claim（消费一次 RedoCount）→ RCS Send。门禁失败不 Claim、不发送、不改任务态。
     /// </summary>
     Task<RcsResult> AutoRedispatchAsync(string rcsTaskId, int maxRedoCount, CancellationToken ct = default);

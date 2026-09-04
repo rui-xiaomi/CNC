@@ -105,57 +105,24 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
     }
 
     [Test]
-    public async Task Supplement_FinalFail_RedoCountUnchanged_CallbackNotForgotten()
+    public async Task Supplement_GateFail_RedoCountUnchanged_CallbackNotForgotten()
     {
-        // Pre 通过、Final 失败：第二次 Validate 拒绝 → 不得 Increment / Forget / RCS
-        var store = new MutableEquipmentRoutingStore();
-        store.SeedActiveChain(
-            ManualReplayRoutingCodes.LineId, ManualReplayRoutingCodes.LineCode,
-            ManualReplayRoutingCodes.CraftId, 1, ManualReplayRoutingCodes.SrcEq);
-        store.SeedNextEquipment(
-            ManualReplayRoutingCodes.DstEq, ManualReplayRoutingCodes.DstCraftId,
-            2, ManualReplayRoutingCodes.LineId);
-        var loc = new FakeLocationMapForRouting();
-        loc.Seed(new LocationMapItem
-        {
-            Id = 1, LocType = "POSITION", EquipmentId = ManualReplayRoutingCodes.SrcEq,
-            PositionId = 1, RcsCode = ManualReplayRoutingCodes.FromCell, RcsType = "cell"
-        });
-        loc.Seed(new LocationMapItem
-        {
-            Id = 2, LocType = "POSITION", EquipmentId = ManualReplayRoutingCodes.DstEq,
-            PositionId = 1, RcsCode = ManualReplayRoutingCodes.ToCell, RcsType = "cell"
-        });
-        var equipment = new TracingEquipmentConfigService(store, new CallTrace());
-        var frames = new FakeFrameRoutingStore();
-        var inner = new RoutingAvailabilityValidator(
-            store, equipment, frames, NullLogger<RoutingAvailabilityValidator>.Instance);
-        var flip = new FinalFailValidator(inner);
-        var resolver = new ManagedDispatchRouteResolver(
-            loc, frames, NullLogger<ManagedDispatchRouteResolver>.Instance);
-        var client = new FakeRcsHttpClient();
-        var taskStore = new MutableRcsTaskStore();
-        var callbacks = new TrackingCallbackProcessor();
-        var svc = new global::CncLoader.Communication.Rcs.RcsTaskService(
-            client, taskStore, new NoopMsg(), callbacks,
-            resolver, flip, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance, new TrackingSlotsForClosure());
-        taskStore.Seed(new RcsTaskRow(
-            1, "LINE-A-MV-FINAL-FAIL", "transit", "2", RcsTaskState.Failed, "failed", 5,
-            ManualReplayRoutingCodes.FromCell, ManualReplayRoutingCodes.ToCell,
-            ManualReplayRoutingCodes.SrcEq, 1, null, null, null,
-            3, "0", DateTime.Now, null, null, "prev"));
+        var h = ManualReplayHarness.Create();
+        var row = h.SeedHistoricalTask(
+            "LINE-A-MV-FINAL-FAIL", state: RcsTaskState.Failed, error: "prev", redoCount: 3);
+        h.Store.SetCraftState(ManualReplayRoutingCodes.CraftId, "1");
 
-        var result = await svc.RedoAsync("LINE-A-MV-FINAL-FAIL");
-        var after = taskStore.Snapshot("LINE-A-MV-FINAL-FAIL")!;
+        var result = await h.TaskService.RedoAsync(row.RcsTaskId!);
+        var after = h.TaskStore.Snapshot(row.RcsTaskId!)!;
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Success, Is.False);
-            Assert.That(flip.CallCount, Is.EqualTo(2), "Pre + Final");
-            Assert.That(taskStore.IncrementRedoCount, Is.EqualTo(0));
+            Assert.That(h.Validator.CallCount, Is.EqualTo(1), "发送边界 Validate 一次");
+            Assert.That(h.TaskStore.IncrementRedoCount, Is.EqualTo(0));
             Assert.That(after.RedoCount, Is.EqualTo(3));
-            Assert.That(callbacks.ForgetCount, Is.EqualTo(0));
-            Assert.That(client.SendCount, Is.EqualTo(0));
+            Assert.That(h.Callbacks.ForgetCount, Is.EqualTo(0));
+            Assert.That(h.Client.SendCount, Is.EqualTo(0));
         });
     }
 
@@ -184,7 +151,7 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
     }
 
     [Test]
-    public async Task Supplement_ManualAllActive_PreAndFinalEachOnce()
+    public async Task Supplement_ManualAllActive_ViewModelPreAndServiceOnce()
     {
         var h = ManualReplayHarness.Create();
         h.ViewModel.SelectedKind = "搬运";
@@ -195,9 +162,9 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
         Assert.Multiple(() =>
         {
             Assert.That(h.Client.SendCount, Is.EqualTo(1));
-            Assert.That(h.Validator.CallCount, Is.EqualTo(3),
-                "ViewModel Pre + Service Pre + Service Final 各一次");
-            Assert.That(h.Validator.Results.Count(r => r.IsAvailable), Is.EqualTo(3));
+            Assert.That(h.Validator.CallCount, Is.EqualTo(2),
+                "ViewModel Pre + Service 发送边界各一次");
+            Assert.That(h.Validator.Results.Count(r => r.IsAvailable), Is.EqualTo(2));
         });
     }
 
@@ -251,24 +218,6 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
             Assert.That(h.Validator.CallCount, Is.EqualTo(v0), "历史 callback 不得调用 Validator");
             Assert.That(h.Client.SendCount, Is.EqualTo(0));
         });
-    }
-
-    private sealed class FinalFailValidator : IRoutingAvailabilityValidator
-    {
-        private readonly IRoutingAvailabilityValidator _inner;
-        private int _calls;
-        public FinalFailValidator(IRoutingAvailabilityValidator inner) => _inner = inner;
-        public int CallCount => _calls;
-
-        public async Task<RoutingAvailabilityResult> ValidateAsync(
-            DispatchRouteContext context, CancellationToken ct = default)
-        {
-            var n = Interlocked.Increment(ref _calls);
-            if (n == 1) return await _inner.ValidateAsync(context, ct);
-            return RoutingAvailabilityResult.Unavailable(
-                RoutingUnavailableReason.EquipmentDisabled, "Equipment",
-                context.SourceEquipmentId, "Final 模拟禁用");
-        }
     }
 
     private sealed class ThrowingLocationMapStore : ILocationMapRoutingStore

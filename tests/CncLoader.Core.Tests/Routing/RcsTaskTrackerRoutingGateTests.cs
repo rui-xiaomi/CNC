@@ -134,8 +134,8 @@ public sealed class RcsTaskTrackerRoutingGateTests
             Assert.That(_tasks.TryClaimSuccessCount, Is.EqualTo(1), "合法路径须 Claim 一次");
             Assert.That(_client.TransitCount, Is.EqualTo(1), "合法路径须 Send 一次（harness）");
             Assert.That(_tasks.Snapshot(TaskId)!.RedoCount, Is.EqualTo(before.RedoCount + 1));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2), "AutoRedispatch Pre+Final");
-            Assert.That(_validator.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1), "AutoRedispatch 发送边界一次");
+            Assert.That(_validator.CallCount, Is.EqualTo(1));
             Assert.That(_tasks.IncrementRedoCount, Is.EqualTo(0),
                 "Tracker 不得再走 IncrementRedoAsync（避免双增）");
         });
@@ -239,50 +239,6 @@ public sealed class RcsTaskTrackerRoutingGateTests
         AssertDisabledNoConsume(before, after, "同码歧义");
     }
 
-    // ─── B. TOCTOU：Final 前禁用不得 Claim ───────────────────
-
-    [Test]
-    public async Task TocTou_DisableSourceAfterPreFind_MustNotClaim()
-    {
-        _loc.DisableAfterFindCount(LoadAreaCode, findCount: 1);
-        var before = _tasks.Snapshot(TaskId)!;
-
-        await _tracker.ProbeAutoRedoOnceAsync(TaskId);
-        var after = _tasks.Snapshot(TaskId)!;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(_resolver.CallCount, Is.GreaterThanOrEqualTo(1),
-                $"须进入 AutoRedispatch 门禁；顺序={Fmt()}");
-            Assert.That(_client.TransitCount, Is.EqualTo(0));
-            Assert.That(_tasks.TryClaimCallCount, Is.EqualTo(0),
-                $"Final 拒发不得 Claim；Actual calls={_tasks.TryClaimCallCount} " +
-                $"Redo {before.RedoCount}→{after.RedoCount} 顺序={Fmt()}");
-            Assert.That(after.RedoCount, Is.EqualTo(before.RedoCount));
-            Assert.That(after.TaskState, Is.EqualTo(before.TaskState),
-                "不得因 Claim 副作用改成 Dispatched");
-            Assert.That(after.ErrorMsg, Is.EqualTo(before.ErrorMsg));
-        });
-    }
-
-    [Test]
-    public async Task TocTou_DisableTargetAfterPreFind_MustNotClaim()
-    {
-        _loc.DisableAfterFindCount(PositionCell, findCount: 1);
-        var before = _tasks.Snapshot(TaskId)!;
-
-        await _tracker.ProbeAutoRedoOnceAsync(TaskId);
-        var after = _tasks.Snapshot(TaskId)!;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(_client.TransitCount, Is.EqualTo(0));
-            Assert.That(_tasks.TryClaimCallCount, Is.EqualTo(0),
-                $"Target Final 拒不得 Claim；Actual={_tasks.TryClaimCallCount} 顺序={Fmt()}");
-            Assert.That(after.RedoCount, Is.EqualTo(before.RedoCount));
-        });
-    }
-
     [Test]
     public async Task SameInstance_SecondAfterDisable_NoExtraClaimOrSend()
     {
@@ -331,7 +287,7 @@ public sealed class RcsTaskTrackerRoutingGateTests
             Assert.That(after.RedoCount, Is.EqualTo(before.RedoCount));
             Assert.That(after.TaskState, Is.EqualTo(before.TaskState));
             Assert.That(after.ErrorMsg, Is.EqualTo(before.ErrorMsg));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2), "上限路径仍先完成 Pre+Final");
+            Assert.That(_resolver.CallCount, Is.EqualTo(1), "上限路径仍先完成门禁");
             Assert.That(_alarms.RaiseCount, Is.GreaterThanOrEqualTo(1), "达上限告警人工");
         });
     }
@@ -354,9 +310,9 @@ public sealed class RcsTaskTrackerRoutingGateTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(_resolver.CallCount, Is.EqualTo(4),
-                "两者均可完成 Pre+Final；Actual=" + _resolver.CallCount);
-            Assert.That(_validator.CallCount, Is.EqualTo(4));
+            Assert.That(_resolver.CallCount, Is.EqualTo(2),
+                "两者均可完成发送边界门禁；Actual=" + _resolver.CallCount);
+            Assert.That(_validator.CallCount, Is.EqualTo(2));
             Assert.That(_tasks.TryClaimCallCount, Is.EqualTo(2), "两者都尝试 Claim");
             Assert.That(_tasks.TryClaimSuccessCount, Is.EqualTo(1),
                 $"原子 Claim 只允许一个成功；Actual={_tasks.TryClaimSuccessCount}");

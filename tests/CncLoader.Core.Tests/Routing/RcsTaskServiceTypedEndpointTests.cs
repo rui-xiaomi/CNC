@@ -81,8 +81,8 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
             Assert.That(_client.SendCount, Is.EqualTo(1));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2), "Pre+Final 各 Resolve 一次");
-            Assert.That(_validator.CallCount, Is.EqualTo(2), "Pre+Final 各 Validate 一次");
+            Assert.That(_resolver.CallCount, Is.EqualTo(1), "发送边界 Resolve 一次");
+            Assert.That(_validator.CallCount, Is.EqualTo(1), "发送边界 Validate 一次");
             Assert.That(_tasks.Created.Any(c => c.FromCode == LoadAreaCode && c.ToCode == PositionCell),
                 Is.True);
         });
@@ -110,8 +110,8 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(result.Success, Is.True);
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2));
-            Assert.That(_validator.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1));
+            Assert.That(_validator.CallCount, Is.EqualTo(1));
         });
     }
 
@@ -139,7 +139,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(result.Success, Is.True);
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1));
         });
     }
 
@@ -269,42 +269,11 @@ public sealed class RcsTaskServiceTypedEndpointTests
     }
 
     [Test]
-    public async Task Final_DisableAreaAfterFirstFind_SecondResolveRejects()
+    public async Task Final_FrameEntityDisabledBeforeSend_NoCreate()
     {
-        _loc.DisableAfterFindCount(LoadAreaCode, findCount: 1);
+        _frames.SetState(FrameIdTransit, "1");
 
         var result = await _svc.DispatchTransitAsync(new TransitDispatchArgs
-        {
-            FromCode = LoadAreaCode, ToCode = PositionCell,
-            WorkLineId = LineId, LineCode = LineCode, EquipmentId = EqId
-        });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Success, Is.False);
-            Assert.That(_tasks.CreateCount, Is.EqualTo(0));
-            Assert.That(_client.SendCount, Is.EqualTo(0));
-            Assert.That(_resolver.CallCount, Is.EqualTo(2), "Pre 过 Final 拒：须双 Resolve");
-        });
-    }
-
-    [Test]
-    public async Task Final_DisableFrameEntityAfterPre_Rejects_NoCreate()
-    {
-        // Pre Validate 通过后禁用 Frame 实体 → Final Resolve 拒发
-        var equipment = new TracingEquipmentConfigService(_eq, new CallTrace());
-        var innerValidator = new RoutingAvailabilityValidator(
-            _eq, equipment, _frames, NullLogger<RoutingAvailabilityValidator>.Instance);
-        var validator = new CountingRoutingValidator(
-            new DisableFrameAfterFirstValidate(innerValidator, _frames, FrameIdTransit));
-        var resolver = new CountingManagedRouteResolver(
-            new ManagedDispatchRouteResolver(
-                _loc, _frames, NullLogger<ManagedDispatchRouteResolver>.Instance));
-        var svc = new RcsTaskService(
-            _client, _tasks, new NoopMsgLog(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
-
-        var result = await svc.DispatchTransitAsync(new TransitDispatchArgs
         {
             FromCode = FrameCellCode, ToCode = EmptyBufferCode,
             WorkLineId = LineId, LineCode = LineCode
@@ -315,19 +284,19 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(result.Success, Is.False);
             Assert.That(_tasks.CreateCount, Is.EqualTo(0));
             Assert.That(_client.SendCount, Is.EqualTo(0));
-            Assert.That(resolver.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1));
         });
     }
 
     [Test]
-    public async Task Final_DisableAreaAfterFirstFind_Redo_NoSend()
+    public async Task Final_AreaDisabledBeforeRedo_NoSend()
     {
         _tasks.Seed(new RcsTaskRow(
             1, "LINE01-MV-TOCTOU-1", "transit", "0", RcsTaskState.Failed, "failed", 5,
             LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
             0, "0", DateTime.Now, null, null, "prev"));
 
-        _loc.DisableAfterFindCount(LoadAreaCode, findCount: 1);
+        _loc.SetStateByCode(LoadAreaCode, remove: false, state: "1");
 
         var result = await _svc.RedoAsync("LINE01-MV-TOCTOU-1");
 
@@ -340,7 +309,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
     }
 
     [Test]
-    public async Task AllActive_ServiceOrder_HasPreAndFinal()
+    public async Task AllActive_ServiceOrder_ResolvesAndValidatesOnce()
     {
         var result = await _svc.DispatchTransitAsync(new TransitDispatchArgs
         {
@@ -351,8 +320,8 @@ public sealed class RcsTaskServiceTypedEndpointTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Success, Is.True);
-            Assert.That(_resolver.CallCount, Is.EqualTo(2));
-            Assert.That(_validator.CallCount, Is.EqualTo(2));
+            Assert.That(_resolver.CallCount, Is.EqualTo(1));
+            Assert.That(_validator.CallCount, Is.EqualTo(1));
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.SendCount, Is.EqualTo(1));
         });
@@ -430,32 +399,6 @@ public sealed class RcsTaskServiceTypedEndpointTests
         {
             Interlocked.Increment(ref _calls);
             return await _inner.ResolveAsync(fromCode, toCode, ct);
-        }
-    }
-
-    /// <summary>Pre Validate 返回后禁用 Frame，供 Final Resolve 拒发。</summary>
-    private sealed class DisableFrameAfterFirstValidate : IRoutingAvailabilityValidator
-    {
-        private readonly IRoutingAvailabilityValidator _inner;
-        private readonly FakeFrameRoutingStore _frames;
-        private readonly long _frameId;
-        private int _calls;
-
-        public DisableFrameAfterFirstValidate(
-            IRoutingAvailabilityValidator inner, FakeFrameRoutingStore frames, long frameId)
-        {
-            _inner = inner;
-            _frames = frames;
-            _frameId = frameId;
-        }
-
-        public async Task<RoutingAvailabilityResult> ValidateAsync(
-            DispatchRouteContext context, CancellationToken ct = default)
-        {
-            var r = await _inner.ValidateAsync(context, ct);
-            if (Interlocked.Increment(ref _calls) == 1)
-                _frames.SetState(_frameId, "1");
-            return r;
         }
     }
 
