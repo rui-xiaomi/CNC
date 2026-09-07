@@ -24,7 +24,8 @@ public sealed class PlcEndpointResolver : IPlcEndpointResolver
         if (_options.UseSimulator)
         {
             var simBase = isFins ? FinsSimulatorPortBase : SimulatorPortBase;
-            return new PlcEndpoint(_options.SimulatorBindAddress, simBase + (int)plcId, protocol);
+            return new PlcEndpoint(SimulatorLoopback.ResolvePlcBind(true, _options.SimulatorBindAddress),
+                simBase + (int)plcId, protocol);
         }
 
         var defaultPort = isFins ? _options.FinsDefaultPort : _options.DefaultPort;

@@ -1,13 +1,12 @@
 using CncLoader.Communication.State;
 using CncLoader.Core.Rcs;
-using CncLoader.Core.Signals;
 using CncLoader.Core.State;
 
 namespace CncLoader.Core.Tests.Routing;
 
 /// <summary>
-/// P0-5 R11：直接交接路由门禁 GREEN。
-/// 走真实 EnqueueUnload → ResolveUnloadTarget(NextMachineCell) → ReserveUnload(_expectedInbound) → Final → DispatchTransit。
+/// P0-5 R11：下一工序下料走本机下料架（下游上料架），禁止工位直送。
+/// 走真实 EnqueueUnload → ResolveUnloadTarget(DownloadFrame) → ReservePut → Final → DispatchTransit。
 /// </summary>
 [TestFixture]
 public sealed class DirectHandoffRoutingGateTests
@@ -16,6 +15,7 @@ public sealed class DirectHandoffRoutingGateTests
     private const long SrcPos = 1;
     private const long DstEq = 2;
     private const long DstPos = 1;
+    private const long TransitFrame = 70;
     private const long LineId = 10;
     private const long SrcCraft = 100;
     private const long DstCraft = 200;
@@ -148,15 +148,17 @@ public sealed class DirectHandoffRoutingGateTests
         {
             Assert.That(enqueued, Is.True);
             Assert.That(h.Scheduler.ProbeHasExpectedInbound(DstEq, DstPos), Is.False,
-                "最终门禁失败须撤销 _expectedInbound，不留可误匹配上下文");
+                "自动下料不得登记工位直送");
+            Assert.That(h.Slots.ReservePutCount, Is.EqualTo(1));
+            Assert.That(h.Slots.RollbackPutCount, Is.EqualTo(1),
+                "最终门禁失败须回滚中转架入库预记");
             Assert.That(h.Tasks.DispatchTransitCount, Is.EqualTo(0));
         });
     }
 
     [Test]
-    public async Task R11_AllActive_HandoffPath_WiresDestIdentity()
+    public async Task R11_AllActive_GoesTransitFrame_NotMachineCell()
     {
-        // 基线：确认测试接缝能走上真实直接交接（含目标 identity），避免 R11 假阴性。
         var h = BuildHandoffHarness();
         h.Scheduler.ProbeMarkReconciled();
         var enqueued = await h.Scheduler.ProbeEnqueueUnloadAsync(SrcEq, SrcPos, isOk: true, materialId: "M-H");
@@ -165,14 +167,13 @@ public sealed class DirectHandoffRoutingGateTests
         Assert.Multiple(() =>
         {
             Assert.That(enqueued, Is.True);
-            Assert.That(h.Scheduler.ProbeHasExpectedInbound(DstEq, DstPos), Is.True,
-                "直接交接须登记目标 (DestEquipmentId, DestPositionId)");
+            Assert.That(h.Scheduler.ProbeHasExpectedInbound(DstEq, DstPos), Is.False,
+                "现场无工位直送，不得登记 _expectedInbound");
+            Assert.That(h.Slots.ReservePutCount, Is.EqualTo(1));
             Assert.That(h.Tasks.DispatchTransitCount, Is.EqualTo(1));
             Assert.That(h.Tasks.LastTaskType, Is.EqualTo("1"));
-            Assert.That(h.Tasks.LastArgs?.EquipmentId, Is.EqualTo(SrcEq),
-                "TransitDispatchArgs.EquipmentId 为源机台");
-            // 目标 identity 在 _expectedInbound key，不在 TransitDispatchArgs
-            Assert.That(h.Tasks.LastArgs?.ToCode, Is.EqualTo($"CELL-EQ{DstEq}-P{DstPos}"));
+            Assert.That(h.Tasks.LastArgs?.EquipmentId, Is.EqualTo(SrcEq));
+            Assert.That(h.Tasks.LastArgs?.ToCode, Is.EqualTo($"RACK-CELL-{TransitFrame}"));
         });
     }
 
@@ -191,30 +192,14 @@ public sealed class DirectHandoffRoutingGateTests
         var store = new MutableEquipmentRoutingStore();
         store.SeedActiveChain(LineId, "LINE-A", SrcCraft, craftNode: 1, equipmentId: SrcEq);
         store.SeedNextEquipment(DstEq, DstCraft, nextNode: 2, lineId: LineId);
-        // 不绑下料架：OK 且有空闲下游 → NextMachineCell；目标禁用时无终点可退
+        store.BindFrame(SrcEq, TransitFrame, FrameRole.Unload);
+        store.BindFrame(DstEq, TransitFrame, FrameRole.Upload);
 
         var equipment = new TracingEquipmentConfigService(store, trace);
         var slots = new TracingSlots(trace, occupiedFrameId: -1, equipment: equipment, store: store);
         var tasks = new TracingTaskService(trace);
         var plc = new TracingPlcOps(trace);
         var signalStore = new SignalStateStore();
-
-        // 目标机台在线 + 无料，供 FindIdlePositionAmong
-        signalStore.UpdateMachine(new MachineStatus
-        {
-            EquipmentId = DstEq,
-            PlcOnline = true,
-            Safe = true,
-            DoorOpen = false
-        });
-        signalStore.UpdateReading(DstEq, new SignalReading
-        {
-            Signal = SignalKey.PosHasMat,
-            PositionId = DstPos,
-            RegisterAddress = "D0",
-            RawValue = 0,
-            On = false
-        });
 
         IRoutingAvailabilityValidator? validator = null;
         if (finalDisablesDest)

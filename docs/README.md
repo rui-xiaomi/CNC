@@ -21,6 +21,7 @@
 | `现场联调配置清单.md`                                                                       | **Phase 6 联调前配置勾选**。演示默认 vs 现场必改、DB/防火墙/日志自检；含安全门禁现场核对；带「待真机验证」项。                                     | 现场主入口    |
 | `adr/0002-槽位预记先于RCS下发.md`                                                           | **架构决策**：自动派工先槽位预记后 RCS。                                                                              | Accepted |
 | `adr/0003-配置软删不用EF全局查询过滤器.md`                                                       | **架构决策**：软删过滤保持调用方显式判活，保留「禁用 vs 不存在」区分。                                                               | Accepted |
+| `adr/0004-RCS任务能力档.md`                                                               | **架构决策**：工位上下料默认 Grab，换架/空托盘固定 Transit；`transitTask.taskType` 为 `out`/`in`/`move`。                      | Accepted |
 | `../.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md` | **P0/P1 安全门禁代码级验收归档**（非生产验收）。                                                                         | 验收证据     |
 
 

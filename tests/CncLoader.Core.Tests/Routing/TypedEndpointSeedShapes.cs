@@ -33,6 +33,7 @@ internal static class TypedEndpointSeedShapes
 
     // ── POSITION cell ───────────────────────────────────────────
     public const string PositionCell = "601203";
+    public const string EquipmentStationCode = "201";
 
     // ── FRAME shelf / cell（无 Eq）──────────────────────────────
     public const string FrameShelfCode = "651002";
@@ -49,6 +50,18 @@ internal static class TypedEndpointSeedShapes
         RcsCode = rcsCode,
         RcsType = "station",
         EquipmentId = null,
+        PositionId = null,
+        FrameId = null
+    };
+
+    public static LocationMapItem EquipmentStation(long id = 15) => new()
+    {
+        Id = id,
+        LocType = "EQUIPMENT",
+        LocName = "内长宽",
+        RcsCode = EquipmentStationCode,
+        RcsType = "station",
+        EquipmentId = EqId,
         PositionId = null,
         FrameId = null
     };

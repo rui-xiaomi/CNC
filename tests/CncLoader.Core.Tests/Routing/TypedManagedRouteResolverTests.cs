@@ -247,12 +247,27 @@ public sealed class TypedManagedRouteResolverTests
     }
 
     [Test]
+    public async Task EquipmentStation_Resolves_AsEquipment()
+    {
+        _loc.Seed(EquipmentStation());
+        var resolved = await _resolver.ResolveAsync(FrameShelfCode, EquipmentStationCode);
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved.IsResolved, Is.True);
+            Assert.That(resolved.Context!.FromEndpoint!.Kind, Is.EqualTo(ManagedEndpointKind.Frame));
+            Assert.That(resolved.Context.ToEndpoint!.Kind, Is.EqualTo(ManagedEndpointKind.Equipment));
+            Assert.That(resolved.Context.ToEndpoint.EquipmentId, Is.EqualTo(EqId));
+            Assert.That(resolved.Context.DestEquipmentId.IsApplicable, Is.True);
+        });
+    }
+
+    [Test]
     public async Task Supplement_UnknownLocType_InvalidRelationship()
     {
         const string code = "UNK-TYPE-1";
         _loc.Seed(new LocationMapItem
         {
-            Id = 90, LocType = "EQUIPMENT", LocName = "EQ1", RcsCode = code,
+            Id = 90, LocType = "NOT_A_KIND", LocName = "EQ1", RcsCode = code,
             RcsType = "station", EquipmentId = EqId
         });
 

@@ -114,7 +114,12 @@ public sealed class ReconcileSlotSettlementTests
             new NoopAlarms(),
             Options.Create(new AppOptions
             {
-                Rcs = new RcsOptions { SchedulerEnabled = true, SchedulerIntervalMs = 10_000 }
+                Rcs = new RcsOptions
+                {
+                    SchedulerEnabled = true,
+                    SchedulerIntervalMs = 10_000,
+                    LoadUnloadVerb = RcsLoadUnloadVerbs.Transit
+                }
             }),
             NullLogger<PositionScheduler>.Instance,
             new NoopWorkRecords(),

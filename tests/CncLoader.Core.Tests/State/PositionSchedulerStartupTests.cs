@@ -643,7 +643,8 @@ public sealed class PositionSchedulerReconciliationStartupTests
                 {
                     SchedulerEnabled = schedulerEnabled,
                     SchedulerIntervalMs = 10_000,
-                    ReconcileRetryIntervalMs = retryIntervalMs
+                    ReconcileRetryIntervalMs = retryIntervalMs,
+                    LoadUnloadVerb = RcsLoadUnloadVerbs.Transit
                 }
             });
             var equipment = new FakeEquipment();

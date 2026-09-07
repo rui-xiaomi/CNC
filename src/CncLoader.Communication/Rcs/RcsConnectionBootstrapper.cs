@@ -1,6 +1,8 @@
+using CncLoader.Common.Configuration;
 using CncLoader.Core.Rcs;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace CncLoader.Communication.Rcs;
 
@@ -9,15 +11,18 @@ public sealed class RcsConnectionBootstrapper : IHostedService
 {
     private readonly IRcsConnectionConfigService _store;
     private readonly IRcsRuntimeConfig _runtime;
+    private readonly RcsOptions _options;
     private readonly ILogger<RcsConnectionBootstrapper> _logger;
 
     public RcsConnectionBootstrapper(
         IRcsConnectionConfigService store,
         IRcsRuntimeConfig runtime,
+        IOptions<AppOptions> options,
         ILogger<RcsConnectionBootstrapper> logger)
     {
         _store = store;
         _runtime = runtime;
+        _options = options.Value.Rcs;
         _logger = logger;
     }
 
@@ -30,8 +35,18 @@ public sealed class RcsConnectionBootstrapper : IHostedService
             {
                 _runtime.Apply(existing);
                 _runtime.CaptureBootCallback();
-                _logger.LogInformation("RCS 连接配置已从库加载：{Url} client={Code} 回调={Host}:{Port}",
-                    existing.BaseUrl, existing.ClientCode, existing.CallbackHost, existing.CallbackPort);
+                if (_options.UseSimulator)
+                {
+                    _logger.LogInformation(
+                        "RCS 模拟器模式：出站改写为本机 {Url}（库内现场地址 {DbUrl} 已忽略）client={Code} 回调={Host}:{Port}",
+                        _runtime.BaseUrl, existing.BaseUrl, existing.ClientCode,
+                        existing.CallbackHost, existing.CallbackPort);
+                }
+                else
+                {
+                    _logger.LogInformation("RCS 连接配置已从库加载：{Url} client={Code} 回调={Host}:{Port}",
+                        existing.BaseUrl, existing.ClientCode, existing.CallbackHost, existing.CallbackPort);
+                }
                 return;
             }
 

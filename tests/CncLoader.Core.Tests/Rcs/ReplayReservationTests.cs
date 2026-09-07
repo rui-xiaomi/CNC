@@ -26,11 +26,24 @@ public sealed class ReplayReservationTests
         Assert.That(plan, Is.EqualTo(ReplayReservationPlan.Skip));
     }
 
-    [TestCase("grab")]
+    [Test]
+    public void 抓取上料且起点是料架_须取料预记()
+    {
+        var plan = ReplayReservation.Decide("grab", "0", ManagedEndpointKind.Frame, ManagedEndpointKind.Position);
+        Assert.That(plan, Is.EqualTo(ReplayReservationPlan.Take));
+    }
+
+    [Test]
+    public void 抓取下料且终点是料架_须入库预记()
+    {
+        var plan = ReplayReservation.Decide("grab", "1", ManagedEndpointKind.Position, ManagedEndpointKind.Frame);
+        Assert.That(plan, Is.EqualTo(ReplayReservationPlan.Put));
+    }
+
     [TestCase("identify")]
     [TestCase("change_frame")]
     [TestCase("pallet_return")]
-    public void 非搬运种类_不建槽位账(string kind)
+    public void 非搬运非抓取种类_不建槽位账(string kind)
     {
         var plan = ReplayReservation.Decide(kind, "0", ManagedEndpointKind.Frame, ManagedEndpointKind.Position);
         Assert.That(plan, Is.EqualTo(ReplayReservationPlan.Skip));

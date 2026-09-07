@@ -8,6 +8,8 @@ namespace CncLoader.Communication.Rcs;
 public sealed class RcsRuntimeConfig : IRcsRuntimeConfig
 {
     private readonly object _gate = new();
+    private readonly bool _useSimulator;
+    private readonly string _simulatorBaseUrl;
     private string _baseUrl;
     private string _clientCode;
     private readonly string _version;
@@ -23,8 +25,11 @@ public sealed class RcsRuntimeConfig : IRcsRuntimeConfig
     public RcsRuntimeConfig(IOptions<AppOptions> options)
     {
         var r = options.Value.Rcs;
+        _useSimulator = r.UseSimulator;
+        _simulatorBaseUrl = SimulatorLoopback.ToLocalRcsBaseUrl(r.BaseUrl);
         // 与 Apply 对齐：BaseUrl/ClientCode/CallbackHost 均 Trim 并兜底，避免 Field 模板尾随空格/空值构造非法 URI。
-        _baseUrl = r.BaseUrl?.Trim() ?? "";
+        // 模拟器模式必须环回：库表现场 BaseUrl 只用于真机，Apply 不得覆盖本机地址。
+        _baseUrl = _useSimulator ? _simulatorBaseUrl : (r.BaseUrl?.Trim() ?? "");
         _clientCode = r.ClientCode?.Trim() ?? "";
         _version = r.Version;
         _tokenCode = r.TokenCode;
@@ -54,7 +59,7 @@ public sealed class RcsRuntimeConfig : IRcsRuntimeConfig
         ArgumentNullException.ThrowIfNull(config);
         lock (_gate)
         {
-            _baseUrl = config.BaseUrl.Trim();
+            _baseUrl = _useSimulator ? _simulatorBaseUrl : config.BaseUrl.Trim();
             _clientCode = config.ClientCode.Trim();
             _callbackHost = string.IsNullOrWhiteSpace(config.CallbackHost) ? "0.0.0.0" : config.CallbackHost.Trim();
             _callbackPort = config.CallbackPort;

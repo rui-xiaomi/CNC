@@ -94,6 +94,60 @@ public sealed class RcsAuxiliaryOperationRoutingGateTests
     }
 
     [Test]
+    public async Task Grab_FrameShelfToEquipmentStation_Succeeds()
+    {
+        _loc.Seed(EquipmentStation());
+        var result = await DispatchGrabAsync(FrameShelfCode, EquipmentStationCode);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True, "101 料架站 → 201 机台站须走 excuteTask");
+            Assert.That(_client.ExcuteCount, Is.EqualTo(1));
+            Assert.That(_client.TransitCount, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task Grab_FrameShelfToFrameShelf_Succeeds()
+    {
+        _loc.Seed(FrameDownloadShelf());
+        var result = await DispatchGrabAsync(FrameShelfCode, FrameDownloadShelfCode);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True, "现场抓取 FRAME(shelf)→FRAME(shelf) 须走 excuteTask");
+            Assert.That(_client.ExcuteCount, Is.EqualTo(1));
+            Assert.That(_client.TransitCount, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task Grab_FrameCell_MustReject_NoExcute()
+    {
+        var result = await DispatchGrabAsync(FrameShelfCode, FrameCellCode);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False, "cell 不得当抓取站");
+            Assert.That(_tasks.CreateCount, Is.EqualTo(0));
+            Assert.That(_client.ExcuteCount, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task Grab_PositionCell_MustReject_NoExcute()
+    {
+        var result = await DispatchGrabAsync(FrameShelfCode, PositionCell);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False, "加工位 cell 不得当抓取站");
+            Assert.That(_tasks.CreateCount, Is.EqualTo(0));
+            Assert.That(_client.ExcuteCount, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
     public async Task Grab_AllActive_MustRunFinalGate_BeforeCreate()
     {
         await DispatchGrabAsync(LoadAreaCode, UnloadAreaCode);

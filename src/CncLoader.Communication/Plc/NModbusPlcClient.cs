@@ -19,6 +19,7 @@ public sealed class NModbusPlcClient : IPlcClient
     private readonly IDeviceLogger _deviceLogger;
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
+    private readonly LinkFaultAccumulator _linkFaults;
     private readonly object _sync = new();
     private readonly SemaphoreSlim _ioGate = new(1, 1);
 
@@ -27,7 +28,7 @@ public sealed class NModbusPlcClient : IPlcClient
     private PlcConnectionState _state = PlcConnectionState.Disconnected;
 
     public NModbusPlcClient(long plcId, PlcEndpoint endpoint, int connectTimeoutMs, int rwTimeoutMs,
-        ILogger<NModbusPlcClient> logger, IDeviceLogger deviceLogger)
+        ILogger<NModbusPlcClient> logger, IDeviceLogger deviceLogger, int linkFaultThreshold = 3)
     {
         PlcId = plcId;
         Endpoint = endpoint;
@@ -35,6 +36,7 @@ public sealed class NModbusPlcClient : IPlcClient
         _rwTimeoutMs = rwTimeoutMs;
         _logger = logger;
         _deviceLogger = deviceLogger;
+        _linkFaults = new LinkFaultAccumulator(linkFaultThreshold);
     }
 
     public long PlcId { get; }
@@ -50,6 +52,14 @@ public sealed class NModbusPlcClient : IPlcClient
         var sw = Stopwatch.StartNew();
         try
         {
+            lock (_sync)
+            {
+                _master?.Dispose();
+                _tcp?.Dispose();
+                _master = null;
+                _tcp = null;
+            }
+
             var tcp = new TcpClient();
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
             linked.CancelAfter(_connectTimeoutMs);
@@ -65,6 +75,7 @@ public sealed class NModbusPlcClient : IPlcClient
                 _tcp = tcp;
                 _master = master;
             }
+            _linkFaults.NoteSuccess();
             SetState(PlcConnectionState.Connected);
             _deviceLogger.Log(new DeviceLogEntry
             {
@@ -138,6 +149,7 @@ public sealed class NModbusPlcClient : IPlcClient
             {
                 var regs = await master.ReadHoldingRegistersAsync(SlaveAddress, start, (ushort)length);
                 var result = Array.ConvertAll(regs, r => (int)r);
+                _linkFaults.NoteSuccess();
                 _deviceLogger.Log(new DeviceLogEntry
                 {
                     DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
@@ -175,6 +187,7 @@ public sealed class NModbusPlcClient : IPlcClient
             try
             {
                 await master.WriteSingleRegisterAsync(SlaveAddress, addr, (ushort)value);
+                _linkFaults.NoteSuccess();
                 _deviceLogger.Log(new DeviceLogEntry
                 {
                     DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
@@ -201,12 +214,18 @@ public sealed class NModbusPlcClient : IPlcClient
     }
 
     /// <summary>
-    /// 链路级失败（超时/套接字/IO）才置 Faulted：TCP 断链后 IsConnected 必须翻 false，
-    /// 否则轮询会拿着陈旧信号继续派工。取消（关停）与 Modbus 设备异常响应（已收到应答）不视为断链。
+    /// 套接字/IO 立即 Faulted；读超时累计达阈值才断链。
     /// </summary>
     private void MarkFaultedIfLinkFailure(Exception ex)
     {
-        if (ex is TimeoutException or SocketException or IOException)
+        if (ex is SocketException or IOException)
+        {
+            if (_linkFaults.NoteHardFailure())
+                SetState(PlcConnectionState.Faulted, ex.Message);
+            return;
+        }
+
+        if (ex is TimeoutException && _linkFaults.NoteTimeout())
             SetState(PlcConnectionState.Faulted, ex.Message);
     }
 

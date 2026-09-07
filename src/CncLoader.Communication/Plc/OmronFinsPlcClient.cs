@@ -28,6 +28,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
     private readonly IDeviceLogger _deviceLogger;
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
+    private readonly LinkFaultAccumulator _linkFaults;
     private readonly object _sync = new();
     private readonly SemaphoreSlim _ioGate;
     private int _nonFatalWarned;
@@ -39,7 +40,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
     private PlcConnectionState _state = PlcConnectionState.Disconnected;
 
     public OmronFinsPlcClient(long plcId, PlcEndpoint endpoint, int connectTimeoutMs, int rwTimeoutMs,
-        ILogger<OmronFinsPlcClient> logger, IDeviceLogger deviceLogger)
+        ILogger<OmronFinsPlcClient> logger, IDeviceLogger deviceLogger, int linkFaultThreshold = 3)
     {
         PlcId = plcId;
         Endpoint = endpoint;
@@ -47,6 +48,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
         _rwTimeoutMs = rwTimeoutMs;
         _logger = logger;
         _deviceLogger = deviceLogger;
+        _linkFaults = new LinkFaultAccumulator(linkFaultThreshold);
         _ioGate = FinsEndpointIoGate.For(endpoint.Host, endpoint.Port);
     }
 
@@ -63,6 +65,12 @@ public sealed class OmronFinsPlcClient : IPlcClient
         var sw = Stopwatch.StartNew();
         try
         {
+            lock (_sync)
+            {
+                _udp?.Dispose();
+                _udp = null;
+            }
+
             var udp = new UdpClient();
             // UDP 无连接握手，Connect 仅固定远端并触发本地端点分配，便于推导源节点号。
             udp.Connect(Endpoint.Host, Endpoint.Port);
@@ -81,6 +89,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
             // 进而拖垮轮询（每个点位都等满读超时）。探活失败即视为连接失败。
             await ProbeAsync(ct);
 
+            _linkFaults.NoteSuccess();
             SetState(PlcConnectionState.Connected);
             _deviceLogger.Log(new DeviceLogEntry
             {
@@ -183,6 +192,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
             for (var i = 0; i < length; i++)
                 result[i] = (resp[dataStart + i * 2] << 8) | resp[dataStart + i * 2 + 1];
 
+            _linkFaults.NoteSuccess();
             _deviceLogger.Log(new DeviceLogEntry
             {
                 DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Read,
@@ -222,6 +232,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
             };
             await SendAsync(0x01, 0x02, body, ct);
 
+            _linkFaults.NoteSuccess();
             _deviceLogger.Log(new DeviceLogEntry
             {
                 DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Write,
@@ -338,12 +349,19 @@ public sealed class OmronFinsPlcClient : IPlcClient
     }
 
     /// <summary>
-    /// 链路级失败（超时/套接字/IO）才置 Faulted：UDP 断链后 IsConnected 必须翻 false，
-    /// 否则轮询会拿着陈旧信号继续派工。取消（关停）与协议级错误（已收到应答）不视为断链。
+    /// 套接字/IO 立即 Faulted；读超时累计达阈值才断链（单次 UDP 丢包不断整台）。
+    /// 取消与协议级错误不视为断链。
     /// </summary>
     private void MarkFaultedIfLinkFailure(Exception ex)
     {
-        if (ex is TimeoutException or SocketException or IOException)
+        if (ex is SocketException or IOException)
+        {
+            if (_linkFaults.NoteHardFailure())
+                SetState(PlcConnectionState.Faulted, ex.Message);
+            return;
+        }
+
+        if (ex is TimeoutException && _linkFaults.NoteTimeout())
             SetState(PlcConnectionState.Faulted, ex.Message);
     }
 

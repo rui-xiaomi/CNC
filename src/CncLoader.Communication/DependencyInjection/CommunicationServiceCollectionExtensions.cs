@@ -32,7 +32,8 @@ public static class CommunicationServiceCollectionExtensions
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<IDeviceLogger>(),
                 plc.ConnectTimeoutMs,
-                plc.ReadWriteTimeoutMs);
+                plc.ReadWriteTimeoutMs,
+                plc.LinkFaultThreshold);
         });
 
         services.AddSingleton<PlcConnectionManager>();
@@ -108,14 +109,16 @@ public static class CommunicationServiceCollectionExtensions
         services.AddSingleton(sp =>
         {
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
-            return new ModbusTcpSimulator(plc.SimulatorBindAddress,
+            var bind = SimulatorLoopback.ResolvePlcBind(plc.UseSimulator, plc.SimulatorBindAddress);
+            return new ModbusTcpSimulator(bind,
                 sp.GetRequiredService<ILogger<ModbusTcpSimulator>>());
         });
 
         services.AddSingleton(sp =>
         {
             var plc = sp.GetRequiredService<IOptions<AppOptions>>().Value.Plc;
-            return new OmronFinsUdpSimulator(plc.SimulatorBindAddress,
+            var bind = SimulatorLoopback.ResolvePlcBind(plc.UseSimulator, plc.SimulatorBindAddress);
+            return new OmronFinsUdpSimulator(bind,
                 sp.GetRequiredService<ILogger<OmronFinsUdpSimulator>>());
         });
 
@@ -139,6 +142,7 @@ public static class CommunicationServiceCollectionExtensions
 
         // PLC 失联监测：持续离线超阈值补大声告警（不负责重连，P0-5）。
         services.AddHostedService<PlcHealthMonitor>();
+        services.AddHostedService<PlcReconnectService>();
 
         return services;
     }

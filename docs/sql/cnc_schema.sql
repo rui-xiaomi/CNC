@@ -474,7 +474,7 @@ CREATE TABLE MAS_AUTO_EQUIMENT_WORKDATA (
 
 -- =============================================================
 -- 六、初始化数据（1线体 → 三道串行工序：内长宽→平面度→A基准 → 3机台）
---     业务链：物料依次经三台机台，每道 OK 看下游有空位则直接交接/无则进该台中转架等位，NG→NG架人工处理，末道→下料架。
+--     业务链：一架两用（上游下料架=下游上料架），无工位直送。NG→NG架，末道→下料架 303。
 --     点位地址取自 docs/测试机信号表.md；LOCATION_MAP 按现场搬运规则（101/201/301/302/401）。
 -- =============================================================
 
@@ -571,29 +571,33 @@ INSERT INTO MAS_AUTO_PLC_POINT
   (3, 3,5,    'POS_TEST_START', '1', 'D1500', 'Q0.2'),
   (3, 3,6,    'POS_TEST_START', '1', 'D1502', 'Q0.3');
 
--- 料架：5个（上料架101 / 中转架301 / 下料总架303 / NG架401 / 中转架302）
+-- 料架：5个（上料101 / 工序架301 / 下料303 / NG401 / 工序架302）
 --   全部 10 层 × 左右 2 位 = 20 槽。
 INSERT INTO MAS_AUTO_FRAME
   (ID1, FRAME_NAME, FRAME_CODE, FRAME_IDENTIFY_CODE, LAYER_TOTAL, SLOTS_PER_LAYER, SLOT_TOTAL, STATE, AUTHOR) VALUES
   (1,  '上料架101',   '101', '101', 10, 2, 20, '0', 'system'),
-  (2,  '中转架301',   '301', '301', 10, 2, 20, '0', 'system'),
+  (2,  '工序架301',   '301', '301', 10, 2, 20, '0', 'system'),
   (3,  '下料总架303', '303', '303', 10, 2, 20, '0', 'system'),
   (91, 'NG架401',    '401', '401', 10, 2, 20, '0', 'system'),
-  (92, '中转架302',   '302', '302', 10, 2, 20, '0', 'system');
+  (92, '工序架302',   '302', '302', 10, 2, 20, '0', 'system');
 
--- 料架绑定（角色 0上料/1下料/2中转/3NG）：三道串行产线布局
---   EQ01 内长宽(首道)：上料架 frame1 + NG架 frame91
---   EQ02 平面度(中道)：中转架 frame2  + NG架 frame91   （无上料架，靠上游交接/中转回流）
---   EQ03 A基准 (末道)：中转架 frame92 + 下料架 frame3 + NG架 frame91
+-- 料架绑定：一架两用（0上料/1下料/3NG）。role2 本线不用。
+--   101 = 内长宽上料
+--   301 = 内长宽下料 = 平面度上料
+--   302 = 平面度下料 = A基准上料
+--   303 = A基准下料
+--   401 = 三机 NG
 INSERT INTO MAS_AUTO_FRAME_BIND
   (FRAME_ID, EQUIMENT_ID, FRAME_ROLE, STATE, AUTHOR) VALUES
-  (1,  1, '0', '0', 'system'),   -- 上料架101 → 内长宽 上料架
-  (91, 1, '3', '0', 'system'),   -- NG架401 → 内长宽 NG架
-  (2,  2, '2', '0', 'system'),   -- 中转架301 → 平面度 中转架
-  (91, 2, '3', '0', 'system'),   -- NG架401 → 平面度 NG架
-  (92, 3, '2', '0', 'system'),   -- 中转架302 → A基准 中转架
-  (3,  3, '1', '0', 'system'),   -- 下料总架303 → A基准 下料架
-  (91, 3, '3', '0', 'system');   -- NG架401 → A基准 NG架
+  (1,  1, '0', '0', 'system'),   -- 101 内长宽上料
+  (2,  1, '1', '0', 'system'),   -- 301 内长宽下料
+  (91, 1, '3', '0', 'system'),   -- 401 内长宽 NG
+  (2,  2, '0', '0', 'system'),   -- 301 平面度上料
+  (92, 2, '1', '0', 'system'),   -- 302 平面度下料
+  (91, 2, '3', '0', 'system'),   -- 401 平面度 NG
+  (92, 3, '0', '0', 'system'),   -- 302 A基准上料
+  (3,  3, '1', '0', 'system'),   -- 303 A基准下料
+  (91, 3, '3', '0', 'system');   -- 401 A基准 NG
 
 -- 槽位预建。上料/中转/下料：10 层 × 左右 2 位。上料架物料码=该槽 cell（货架 + 层编码10起 + 位）。
 INSERT INTO MAS_AUTO_FRAME_SLOT
@@ -616,17 +620,22 @@ CROSS JOIN (SELECT 1 n UNION ALL SELECT 2) p;
 
 -- =============================================================
 -- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（现场搬运规则）
---   现场目前只下发搬运（transit / cell）。
---   料架 cell = 货架码 + 层编码（第1层=10、第2层=11…）+ 层内位 1 位：上料 L1=101101/101102、L2=101111/101112、L10=101191/101192；下料 303 同规则。
---   内长宽工位1 201101（加工位仍按录入，不走料架层编码）。
---   shelf：上料 101 / 内长宽 201 / 中转 301·302 / 下料 303 / NG 401。
+--   工位上下料默认抓取（station + 孔）；换架仍搬运。无工位直送。
+--   料架 cell = 货架码 + 层编码（第1层=10、第2层=11…）+ 层内位 1 位：上料 L1=101101/101102、L2=101111/101112、L10=101191/101192；中转/下料同规则。
+--   机台站（LOC_TYPE=EQUIPMENT）：内长宽 201 / 平面度 202 / A基准 203。
+--   工位 cell：201101/201102、202101、203101/203102（平面度第二工位 2026-06-30 取消，未录 202102）。
+--   shelf：上料 101 / 中转 301·302 / 下料 303 / NG 401。
 --   禁止 LOAD_AREA=101 或 UNLOAD_AREA=301（与料架 shelf 同码会歧义拒发）。
---   平面度/A基准 cell、缓存区：未现场确认；缓存区留演示码。
+--   缓存区：未现场确认，留演示码。
 -- =============================================================
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('AREA', 'FULL_BUFFER',   '650001', 'station', '0', 'system'),
   ('AREA', 'EMPTY_BUFFER',  '650002', 'station', '0', 'system'),
   ('AREA', 'PALLET_RETURN', '650003', 'station', '0', 'system');
+INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
+  ('EQUIPMENT', 1, '201', 'station', '0', 'system'),
+  ('EQUIPMENT', 2, '202', 'station', '0', 'system'),
+  ('EQUIPMENT', 3, '203', 'station', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, POSITION_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('POSITION', 1, 1, '201101', 'cell', '0', 'system'),
   ('POSITION', 1, 2, '201102', 'cell', '0', 'system'),
@@ -635,10 +644,10 @@ INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, POSITION_ID, RCS_CODE,
   ('POSITION', 3, 6, '203102', 'cell', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('FRAME', 1,  '上料架101',   '101', 'shelf', '0', 'system'),
-  ('FRAME', 2,  '中转架301',   '301', 'shelf', '0', 'system'),
+  ('FRAME', 2,  '工序架301',   '301', 'shelf', '0', 'system'),
   ('FRAME', 3,  '下料总架303', '303', 'shelf', '0', 'system'),
   ('FRAME', 91, 'NG架401',    '401', 'shelf', '0', 'system'),
-  ('FRAME', 92, '中转架302',   '302', 'shelf', '0', 'system');
+  ('FRAME', 92, '工序架302',   '302', 'shelf', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR)
 SELECT 'FRAME', f.id, CONCAT('L', l.n, 'P', p.n), CONCAT(f.code, 9 + l.n, p.n), 'cell', '0', 'system'
 FROM (

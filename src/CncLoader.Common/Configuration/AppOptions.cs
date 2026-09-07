@@ -87,7 +87,7 @@ public sealed class RcsOptions
     public int InventoryIntervalMinutes { get; set; } = 60;
 
     /// <summary>是否启用本机 RCS 模拟器（第四阶段③启用）。默认 false（fail-closed）：现场配置缺失时不进模拟器，
-    /// 演示/自测场景在 appsettings.json 显式设 true。</summary>
+    /// 演示/自测场景在 appsettings.json 显式设 true。true 时出站 BaseUrl 强制改写 127.0.0.1，忽略库内现场地址。</summary>
     public bool UseSimulator { get; set; }
 
     /// <summary>模拟器：收到任务后回推结果前的延时下限（毫秒）。</summary>
@@ -107,6 +107,28 @@ public sealed class RcsOptions
 
     /// <summary>CNC 机台模拟器：上料 RCS 报完成时不置 HasMat=ON（默认 false）。用于演示「复核不过 → Alarm 粘滞」安全底线；改后需重启。</summary>
     public bool SimulatorSkipMaterialArrival { get; set; }
+
+    /// <summary>
+    /// 工位上下料 RCS 动词。Grab=excuteTask/grabTask；Transit=transitTask。
+    /// 默认 Grab（本现场复合车）。改后须重启，禁止热切。换架/空托盘不受此项影响。
+    /// </summary>
+    public string LoadUnloadVerb { get; set; } = RcsLoadUnloadVerbs.Grab;
+}
+
+/// <summary>工位上下料能力档取值。</summary>
+public static class RcsLoadUnloadVerbs
+{
+    public const string Grab = "Grab";
+    public const string Transit = "Transit";
+
+    public static bool IsDefined(string? value)
+        => IsGrab(value) || IsTransit(value);
+
+    public static bool IsGrab(string? value)
+        => string.Equals(value, Grab, StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsTransit(string? value)
+        => string.Equals(value, Transit, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>数据库连接配置。Password 可为明文（开发）或 DPAPI 密文（PasswordProtected=true）。</summary>
@@ -138,8 +160,32 @@ public sealed class PlcOptions
     public int PollingIntervalMs { get; set; } = 500;
 
     /// <summary>PLC 信号读值有效期（毫秒）。超过此值的机台快照/读值视为过期（unknown），
-    /// 调度器按 fail-closed 处理（不再派工）。默认 2500 = PollingIntervalMs × 5。</summary>
+    /// 调度器按 fail-closed 处理（不再派工）。默认 2500 = PollingIntervalMs × 5。
+    /// 实际判定用 <see cref="EffectiveSignalMaxAgeMs"/>，避免读写超时比有效期更长时误判失联。</summary>
     public int SignalMaxAgeMs { get; set; } = 2500;
+
+    /// <summary>连续读超时多少次才把该 PLC 标 Faulted。默认 3；单次 UDP 丢包不断整台。</summary>
+    public int LinkFaultThreshold { get; set; } = 3;
+
+    /// <summary>Faulted 后是否自动重连。人工 Disconnect 不重连。</summary>
+    public bool AutoReconnectEnabled { get; set; } = true;
+
+    /// <summary>自动重连初始间隔（毫秒）。失败后倍增，上限 <see cref="AutoReconnectMaxDelayMs"/>。</summary>
+    public int AutoReconnectInitialDelayMs { get; set; } = 2000;
+
+    /// <summary>自动重连最大间隔（毫秒）。</summary>
+    public int AutoReconnectMaxDelayMs { get; set; } = 30000;
+
+    /// <summary>信号有效期下限：至少覆盖一次读写超时 + 三轮轮询，避免等超时过程中被当成失联。</summary>
+    public int EffectiveSignalMaxAgeMs
+    {
+        get
+        {
+            var configured = SignalMaxAgeMs > 0 ? SignalMaxAgeMs : 2500;
+            var floor = Math.Max(0, ReadWriteTimeoutMs) + Math.Max(0, PollingIntervalMs) * 3;
+            return Math.Max(configured, floor);
+        }
+    }
 
     /// <summary>PLC 持续失联多少毫秒后触发失联告警（PlcHealthMonitor）。默认 30000（30s）。
     /// 设 ≤0 停用失联监测。失联期间工位已 Offline 停派工，本项只补「大声告警」。</summary>
@@ -156,7 +202,7 @@ public sealed class PlcOptions
     /// 现场配置缺失时不进模拟器，演示/自测场景在 appsettings.json 显式设 true。</summary>
     public bool UseSimulator { get; set; }
 
-    /// <summary>模拟器监听 IP（环回）。</summary>
+    /// <summary>模拟器监听 IP。UseSimulator=true 时非环回值会被强制改写为 127.0.0.1。</summary>
     public string SimulatorBindAddress { get; set; } = "127.0.0.1";
 }
 

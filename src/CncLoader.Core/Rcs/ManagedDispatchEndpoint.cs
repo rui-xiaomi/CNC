@@ -9,7 +9,8 @@ public enum ManagedEndpointKind
 {
     Position = 0,
     Area,
-    Frame
+    Frame,
+    Equipment
 }
 
 /// <summary>
@@ -55,6 +56,7 @@ public sealed record ManagedDispatchEndpoint
         ManagedEndpointKind.Area => $"AREA:{LocName}:{RcsCode}",
         ManagedEndpointKind.Frame => $"FRAME:{FrameId}:{RcsCode}",
         ManagedEndpointKind.Position => $"POSITION:EQ{EquipmentId}/P{PositionId}:{RcsCode}",
+        ManagedEndpointKind.Equipment => $"EQUIPMENT:EQ{EquipmentId}:{RcsCode}",
         _ => $"?:{RcsCode}"
     };
 
@@ -94,6 +96,9 @@ public sealed record ManagedDispatchEndpoint
             case "FRAME":
                 kind = ManagedEndpointKind.Frame;
                 return true;
+            case "EQUIPMENT":
+                kind = ManagedEndpointKind.Equipment;
+                return true;
             default:
                 kind = default;
                 return false;
@@ -118,7 +123,7 @@ public static class DispatchRouteContextFactory
         {
             FromEndpoint = from,
             ToEndpoint = to,
-            SourceEquipmentId = from.Kind == ManagedEndpointKind.Position
+            SourceEquipmentId = from.Kind is ManagedEndpointKind.Position or ManagedEndpointKind.Equipment
                 ? from.EquipmentId ?? 0
                 : 0,
             SourcePositionId = from.Kind == ManagedEndpointKind.Position
@@ -137,9 +142,9 @@ public static class DispatchRouteContextFactory
     private static RouteDependency EquipmentDependency(ManagedDispatchEndpoint ep) =>
         ep.Kind switch
         {
-            ManagedEndpointKind.Position when ep.EquipmentId is > 0 =>
+            ManagedEndpointKind.Position or ManagedEndpointKind.Equipment when ep.EquipmentId is > 0 =>
                 RouteDependency.Required(ep.EquipmentId.Value),
-            ManagedEndpointKind.Position => RouteDependency.RequiredMissing,
+            ManagedEndpointKind.Position or ManagedEndpointKind.Equipment => RouteDependency.RequiredMissing,
             _ => RouteDependency.NotApplicable
         };
 

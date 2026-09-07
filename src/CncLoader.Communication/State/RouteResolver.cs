@@ -53,6 +53,16 @@ public sealed class RouteResolver : IRouteResolver
         return cell?.RcsCode;
     }
 
+    public async Task<string?> ResolvePositionStationAsync(long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        var position = await _locationMap.ResolvePositionAsync(equipmentId, positionId, "station", ct);
+        if (!string.IsNullOrWhiteSpace(position?.RcsCode))
+            return position.RcsCode;
+
+        var equipment = await _locationMap.ResolvePositionAsync(equipmentId, null, "station", ct);
+        return string.IsNullOrWhiteSpace(equipment?.RcsCode) ? null : equipment.RcsCode;
+    }
+
     public async Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default)
     {
         // 仅返回 LOCATION_MAP 真实编码；缺映射返回 null，禁止 FRAME-{id} 假码下发。

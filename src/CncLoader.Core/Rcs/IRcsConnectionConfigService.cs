@@ -30,7 +30,8 @@ public sealed class RcsConnectionConfig
 }
 
 /// <summary>
-/// 进程内可变 RCS 连接配置。启动时由 appsettings 初始化，再被库表覆盖；
+/// 进程内可变 RCS 连接配置。启动时由 appsettings 初始化，再被库表覆盖
+/// （<c>UseSimulator=true</c> 时 BaseUrl 保持本机环回，不吃库内现场地址）；
 /// 页面保存后热更新出站相关字段。回调 Host/Port 变更需重启才重绑 Kestrel。
 /// </summary>
 public interface IRcsRuntimeConfig

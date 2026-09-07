@@ -80,6 +80,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(result.Success, Is.True);
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
+            Assert.That(_client.LastTransitTaskType, Is.EqualTo("out"));
             Assert.That(_client.SendCount, Is.EqualTo(1));
             Assert.That(_resolver.CallCount, Is.EqualTo(1), "发送边界 Resolve 一次");
             Assert.That(_validator.CallCount, Is.EqualTo(1), "发送边界 Validate 一次");
@@ -110,6 +111,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(result.Success, Is.True);
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
+            Assert.That(_client.LastTransitTaskType, Is.EqualTo("in"));
             Assert.That(_resolver.CallCount, Is.EqualTo(1));
             Assert.That(_validator.CallCount, Is.EqualTo(1));
         });
@@ -139,6 +141,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
             Assert.That(result.Success, Is.True);
             Assert.That(_tasks.CreateCount, Is.EqualTo(1));
             Assert.That(_client.TransitCount, Is.EqualTo(1));
+            Assert.That(_client.LastTransitTaskType, Is.EqualTo("move"));
             Assert.That(_resolver.CallCount, Is.EqualTo(1));
         });
     }

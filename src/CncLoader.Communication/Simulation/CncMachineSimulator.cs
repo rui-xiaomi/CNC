@@ -146,8 +146,8 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
                 WriteRegister(b.PlcId, b.OkOffset, (ushort)b.OkOff);
                 WriteRegister(b.PlcId, b.NgOffset, (ushort)b.NgOff);
                 _logger.LogInformation("CNC-sim EQ{Eq} POS{Pos} 下料完成 → HasMat=OFF/AllowLoad=ON", row.EquipmentId, row.PositionId);
-                // 工序间直接交接：若下料终点 cell 映射到另一加工位，模拟件落到该工位 → 目标 HasMat=ON
-                await PlaceHandoffAsync(row.ToCode);
+                // 工序间直接交接：搬运用 cell；抓取 ToCode 是机台站码，须用 dstPos 落到目标工位
+                await PlaceHandoffAsync(row);
             }
             else // 上料完成 → 工件到位
             {
@@ -170,19 +170,32 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
     private PositionBehavior? FindBehavior(long equipmentId, long positionId)
         => _byEquipment.TryGetValue((equipmentId, positionId), out var b) ? b : null;
 
-    /// <summary>工序间直接交接：下料终点 cell 若为某加工位 → 模拟件落到该工位（目标 HasMat=ON / AllowLoad=OFF）。</summary>
-    private async Task PlaceHandoffAsync(string toCode)
+    /// <summary>工序间直接交接：下料终点落到目标工位（HasMat=ON / AllowLoad=OFF）。</summary>
+    private async Task PlaceHandoffAsync(RcsTaskRow row)
     {
+        var toCode = row.ToCode;
         try
         {
-            var loc = await _locationMap.ResolveByRcsCodeAsync(toCode);
-            if (loc?.EquipmentId is not long dstEq || loc.PositionId is not long dstPos) return;
+            var byCode = await _locationMap.ResolveByRcsCodeAsync(toCode);
+            var dest = byCode is { EquipmentId: not null, PositionId: not null }
+                ? byCode
+                : GrabHandoffDest.Resolve(
+                    await _locationMap.GetAllAsync(),
+                    toCode,
+                    byCode,
+                    GrabHandoffDest.TryReadDstPos(row.ReqParam));
+            if (dest?.EquipmentId is not long dstEq || dest.PositionId is not long dstPos)
+            {
+                _logger.LogWarning("CNC-sim 工序间交接未落到工位 toCode={Code}（抓取站码需 dstPos 或工位 cell）", toCode);
+                return;
+            }
             var target = FindBehavior(dstEq, dstPos);
             if (target is null) return;
             target.HasMaterial = true;
             WriteRegister(target.PlcId, target.HasMatOffset, (ushort)target.HasMatOn);
             WriteRegister(target.PlcId, target.AllowLoadOffset, (ushort)target.AllowLoadOff);
-            _logger.LogInformation("CNC-sim 工序间交接件落到 EQ{Eq} POS{Pos}（终点 {Cell}）→ HasMat=ON", dstEq, dstPos, toCode);
+            _logger.LogInformation("CNC-sim 工序间交接件落到 EQ{Eq} POS{Pos}（终点 {Cell}）→ HasMat=ON",
+                dstEq, dstPos, dest.RcsCode);
         }
         catch (Exception ex) { _logger.LogWarning(ex, "CNC-sim 处理工序间交接落位异常 toCode={Cell}", toCode); }
     }

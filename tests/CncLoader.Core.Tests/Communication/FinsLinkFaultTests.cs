@@ -7,22 +7,44 @@ using NUnit.Framework;
 
 namespace CncLoader.Core.Tests.Communication;
 
-/// <summary>P0-1：FINS/UDP 断链后读超时，必须置 Faulted 使 IsConnected 翻 false，否则轮询拿陈旧信号继续派工。</summary>
+/// <summary>P0-1：持续读超时才置 Faulted；单次 UDP 丢包不得整台下线。</summary>
 [TestFixture]
 public sealed class FinsLinkFaultTests
 {
     [Test]
-    public async Task FINS读超时_链路故障_置Faulted且IsConnected为false()
+    public async Task FINS单次读超时_保持在线()
     {
-        // 服务端只回应连接探活（D0 读），之后静默：模拟真机断链/断电后的读超时。
         await using var server = new RespondOnceFinsServer();
         var endpoint = new PlcEndpoint("127.0.0.1", server.Port, "FINS");
-        using var client = new OmronFinsPlcClient(1, endpoint, connectTimeoutMs: 2000, rwTimeoutMs: 300,
-            NullLogger<OmronFinsPlcClient>.Instance, new NoopDeviceLogger());
+        using var client = new OmronFinsPlcClient(1, endpoint, connectTimeoutMs: 2000, rwTimeoutMs: 200,
+            NullLogger<OmronFinsPlcClient>.Instance, new NoopDeviceLogger(), linkFaultThreshold: 3);
 
         await client.ConnectAsync();
-        Assert.That(client.IsConnected, Is.True, "连接探活成功后应在线");
+        Assert.That(client.IsConnected, Is.True);
 
+        Assert.ThrowsAsync<TimeoutException>(async () => await client.ReadRegistersAsync("D1006", 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.State, Is.EqualTo(PlcConnectionState.Connected));
+            Assert.That(client.IsConnected, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task FINS连续读超时达阈值_置Faulted且IsConnected为false()
+    {
+        await using var server = new RespondOnceFinsServer();
+        var endpoint = new PlcEndpoint("127.0.0.1", server.Port, "FINS");
+        using var client = new OmronFinsPlcClient(1, endpoint, connectTimeoutMs: 2000, rwTimeoutMs: 200,
+            NullLogger<OmronFinsPlcClient>.Instance, new NoopDeviceLogger(), linkFaultThreshold: 3);
+
+        await client.ConnectAsync();
+        Assert.That(client.IsConnected, Is.True);
+
+        Assert.ThrowsAsync<TimeoutException>(async () => await client.ReadRegistersAsync("D1006", 1));
+        Assert.ThrowsAsync<TimeoutException>(async () => await client.ReadRegistersAsync("D1006", 1));
+        Assert.That(client.IsConnected, Is.True, "第 2 次超时仍在线");
         Assert.ThrowsAsync<TimeoutException>(async () => await client.ReadRegistersAsync("D1006", 1));
 
         Assert.Multiple(() =>

@@ -82,7 +82,7 @@ public sealed class PlcHealthMonitor : IHostedService
     private async Task CheckAsync(CancellationToken ct)
     {
         var threshold = TimeSpan.FromMilliseconds(_plcOptions.OfflineAlarmAfterMs);
-        var maxAge = TimeSpan.FromMilliseconds(_plcOptions.SignalMaxAgeMs);
+        var maxAge = TimeSpan.FromMilliseconds(_plcOptions.EffectiveSignalMaxAgeMs);
         var now = DateTime.UtcNow;
 
         var toAlarm = new List<(long PlcId, TimeSpan DownFor)>();

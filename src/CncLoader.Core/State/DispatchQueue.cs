@@ -45,11 +45,11 @@ public enum UnloadTarget
 {
     /// <summary>下料架（末道工序，role1）。</summary>
     DownloadFrame,
-    /// <summary>中转架排队（下一工序繁忙，role2）。</summary>
+    /// <summary>旧 role2 中转架。现场一架两用走 <see cref="DownloadFrame"/>。</summary>
     TransitFrame,
     /// <summary>NG 专用架（role3，不再流转）。</summary>
     NgFrame,
-    /// <summary>直接交接到下一工序机台 cell（下一工序有空闲工位）。</summary>
+    /// <summary>工位直送（现场自动调度不再选用；收口/手动遗留仍识别）。</summary>
     NextMachineCell,
 }
 
@@ -78,6 +78,12 @@ public interface IRouteResolver
     Task<(string from, string to)?> ResolveUnloadAsync(long equipmentId, long positionId, CancellationToken ct = default);
     /// <summary>解析加工位 cell 编码（LOCATION_MAP rcsType="cell"）；失败返回 null。</summary>
     Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default);
+    /// <summary>
+    /// 解析加工位 station（先 POSITION station，缺则 EQUIPMENT station）。
+    /// 禁止回退 cell。缺映射返回 null。
+    /// </summary>
+    Task<string?> ResolvePositionStationAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
     /// <summary>解析料架 cell 编码（LOCATION_MAP FrameId + rcsType="cell"；缺映射返回 null，禁止假码）。</summary>
     Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default);
 

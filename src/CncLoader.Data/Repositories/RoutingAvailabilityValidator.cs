@@ -51,7 +51,8 @@ public sealed class RoutingAvailabilityValidator : IRoutingAvailabilityValidator
             }
 
             // POSITION / 遗留机台上下文：Equipment→Craft→WorkLine
-            var sourceNeedsEquipment = fromKind is null or ManagedEndpointKind.Position;
+            var sourceNeedsEquipment = fromKind is null or ManagedEndpointKind.Position
+                or ManagedEndpointKind.Equipment;
             if (sourceNeedsEquipment)
             {
                 if (context.SourceEquipmentId <= 0)
@@ -90,12 +91,11 @@ public sealed class RoutingAvailabilityValidator : IRoutingAvailabilityValidator
                 if (!destClassified.IsAvailable) return destClassified;
                 lineRef ??= destLine ?? destClassified.SourceWorkLine;
             }
-            else if (toKind is ManagedEndpointKind.Position)
+            else if (toKind is ManagedEndpointKind.Position or ManagedEndpointKind.Equipment)
             {
-                // Kind=Position 但工厂未标 DestEquipment → fail-closed
                 return RoutingAvailabilityResult.Unavailable(
                     RoutingUnavailableReason.InvalidRelationship, "Equipment", null,
-                    "目标加工位缺少机台依赖");
+                    "目标机台/加工位缺少机台依赖");
             }
 
             // Frame 实体：类型化 FRAME 已在 ValidateTypedEndpoint 检查；
@@ -227,6 +227,15 @@ public sealed class RoutingAvailabilityValidator : IRoutingAvailabilityValidator
                     return RoutingAvailabilityResult.Unavailable(
                         RoutingUnavailableReason.InvalidRelationship, "LocationMap", ep.LocationMapId,
                         $"{side} 加工位端点缺少机台/工位");
+                }
+                return null;
+
+            case ManagedEndpointKind.Equipment:
+                if (ep.EquipmentId is null or <= 0)
+                {
+                    return RoutingAvailabilityResult.Unavailable(
+                        RoutingUnavailableReason.InvalidRelationship, "LocationMap", ep.LocationMapId,
+                        $"{side} 机台端点缺少机台关联");
                 }
                 return null;
 

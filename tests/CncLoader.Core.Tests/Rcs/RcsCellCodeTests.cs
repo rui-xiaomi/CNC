@@ -162,6 +162,37 @@ public sealed class RouteResolverSlotCellTests
         Assert.That(await resolver.ResolveFrameSlotCellAsync(1, 1, 1), Is.Null);
     }
 
+    [Test]
+    public async Task PositionStation_优先加工位station()
+    {
+        var map = new StubMap();
+        map.SeedPosition(9, 1, "station", "201");
+        map.SeedPosition(9, null, "station", "200");
+        var resolver = new RouteResolver(map, NullLogger<RouteResolver>.Instance);
+
+        Assert.That(await resolver.ResolvePositionStationAsync(9, 1), Is.EqualTo("201"));
+    }
+
+    [Test]
+    public async Task PositionStation_缺加工位回退机台station()
+    {
+        var map = new StubMap();
+        map.SeedPosition(9, null, "station", "200");
+        var resolver = new RouteResolver(map, NullLogger<RouteResolver>.Instance);
+
+        Assert.That(await resolver.ResolvePositionStationAsync(9, 1), Is.EqualTo("200"));
+    }
+
+    [Test]
+    public async Task PositionStation_只有cell_不回退()
+    {
+        var map = new StubMap();
+        map.SeedPosition(9, 1, "cell", "201101");
+        var resolver = new RouteResolver(map, NullLogger<RouteResolver>.Instance);
+
+        Assert.That(await resolver.ResolvePositionStationAsync(9, 1), Is.Null);
+    }
+
     private sealed class StubMap : ILocationMapService
     {
         private readonly List<LocationMapItem> _items = new();
@@ -181,9 +212,20 @@ public sealed class RouteResolverSlotCellTests
         public Task DeleteAsync(long id, CancellationToken ct = default)
             => throw new NotSupportedException();
 
+        public void SeedPosition(long equipmentId, long? positionId, string rcsType, string rcsCode)
+            => _items.Add(new LocationMapItem
+            {
+                LocType = positionId is null ? "EQUIPMENT" : "POSITION",
+                EquipmentId = equipmentId,
+                PositionId = positionId,
+                RcsCode = rcsCode,
+                RcsType = rcsType
+            });
+
         public Task<LocationMapItem?> ResolvePositionAsync(long equipmentId, long? positionId,
             string rcsType, CancellationToken ct = default)
-            => Task.FromResult<LocationMapItem?>(null);
+            => Task.FromResult(_items.FirstOrDefault(i =>
+                i.EquipmentId == equipmentId && i.PositionId == positionId && i.RcsType == rcsType));
 
         public Task<LocationMapItem?> ResolveFrameAsync(long frameId, string rcsType, CancellationToken ct = default)
             => Task.FromResult(_items.FirstOrDefault(i => i.FrameId == frameId && i.RcsType == rcsType));

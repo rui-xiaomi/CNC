@@ -42,6 +42,34 @@ public static class RcsTaskKindNames
     };
 }
 
+/// <summary>transitTask 协议 taskType：in 入库、out 出库、move 搬运（AGV 接口契约）。</summary>
+public static class RcsTransitTaskTypes
+{
+    public const string In = "in";
+    public const string Out = "out";
+    public const string Move = "move";
+
+    /// <summary>换架/空托盘固定 move；工位上料 0→out，下料 1→in，其余 move。</summary>
+    public static string FromDispatch(RcsTaskKind kind, string? dbTaskType)
+    {
+        if (kind is RcsTaskKind.ChangeFrame or RcsTaskKind.PalletReturn)
+            return Move;
+        return FromStored(null, dbTaskType);
+    }
+
+    public static string FromStored(string? kind, string? dbTaskType)
+    {
+        if (kind is "change_frame" or "pallet_return" or "CF" or "PR")
+            return Move;
+        return dbTaskType switch
+        {
+            "0" => Out,
+            "1" => In,
+            _ => Move
+        };
+    }
+}
+
 /// <summary>本系统任务态（RCS 11 态映射到此 5+1 态，见开发文档 §4.5）。</summary>
 public static class RcsTaskState
 {
@@ -96,8 +124,8 @@ public abstract class RcsRequestBase
 /// <summary>3.1 执行搬运任务 transitTask。</summary>
 public sealed class TransitTaskRequest : RcsRequestBase
 {
-    /// <summary>任务类型 in/out/move；本系统固定 move（RCS 预留字段）。</summary>
-    [JsonPropertyName("taskType")] public string TaskType { get; set; } = "move";
+    /// <summary>任务类型：in 入库、out 出库、move 搬运。</summary>
+    [JsonPropertyName("taskType")] public string TaskType { get; set; } = RcsTransitTaskTypes.Move;
     [JsonPropertyName("priority")] public int Priority { get; set; } = 5;
     [JsonPropertyName("container")] public RcsContainer? Container { get; set; }
     [JsonPropertyName("position")] public List<RcsPosition> Position { get; set; } = new();

@@ -17,22 +17,24 @@ public sealed class PlcClientFactory : IPlcClientFactory
     private readonly IDeviceLogger _deviceLogger;
     private readonly int _connectTimeoutMs;
     private readonly int _rwTimeoutMs;
+    private readonly int _linkFaultThreshold;
 
     public PlcClientFactory(ILoggerFactory loggerFactory, IDeviceLogger deviceLogger,
-        int connectTimeoutMs, int rwTimeoutMs)
+        int connectTimeoutMs, int rwTimeoutMs, int linkFaultThreshold = 3)
     {
         _loggerFactory = loggerFactory;
         _deviceLogger = deviceLogger;
         _connectTimeoutMs = connectTimeoutMs;
         _rwTimeoutMs = rwTimeoutMs;
+        _linkFaultThreshold = linkFaultThreshold;
     }
 
     public IPlcClient Create(long plcId, PlcEndpoint endpoint) =>
         endpoint.Protocol.Contains("FINS", StringComparison.OrdinalIgnoreCase)
             ? new OmronFinsPlcClient(plcId, endpoint, _connectTimeoutMs, _rwTimeoutMs,
-                _loggerFactory.CreateLogger<OmronFinsPlcClient>(), _deviceLogger)
+                _loggerFactory.CreateLogger<OmronFinsPlcClient>(), _deviceLogger, _linkFaultThreshold)
             : new NModbusPlcClient(plcId, endpoint, _connectTimeoutMs, _rwTimeoutMs,
-                _loggerFactory.CreateLogger<NModbusPlcClient>(), _deviceLogger);
+                _loggerFactory.CreateLogger<NModbusPlcClient>(), _deviceLogger, _linkFaultThreshold);
 }
 
 /// <summary>

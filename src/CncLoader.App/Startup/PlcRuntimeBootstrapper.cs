@@ -63,10 +63,17 @@ public sealed class PlcRuntimeBootstrapper
             await _simulator.StartAsync();
             await _finsSimulator.StartAsync();
 
+            var bind = SimulatorLoopback.ResolvePlcBind(true, _plc.SimulatorBindAddress);
+            if (!SimulatorLoopback.IsLoopback(_plc.SimulatorBindAddress))
+            {
+                _logger.LogWarning("PLC 模拟器忽略 SimulatorBindAddress={Configured}，改绑 {Bind}",
+                    _plc.SimulatorBindAddress, bind);
+            }
+
             foreach (var p in plcs)
             {
                 var port = (IsFins(p.Protocol) ? FinsSimulatorPortBase : SimulatorPortBase) + (int)p.PlcId;
-                _connections.Register(p.PlcId, new PlcEndpoint(_plc.SimulatorBindAddress, port, p.Protocol));
+                _connections.Register(p.PlcId, new PlcEndpoint(bind, port, p.Protocol));
             }
             var finsCount = plcs.Count(p => IsFins(p.Protocol));
             _logger.LogInformation("内置模拟器已启动：Modbus {Modbus} 台、FINS {Fins} 台。",

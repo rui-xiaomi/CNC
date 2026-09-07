@@ -467,9 +467,11 @@ internal sealed class TracingTaskService : IRcsTaskService
     public TracingTaskService(CallTrace trace) => _trace = trace;
 
     public int DispatchTransitCount { get; private set; }
+    public int DispatchGrabCount { get; private set; }
     public string? LastTaskId { get; private set; }
     public string? LastTaskType { get; private set; }
     public TransitDispatchArgs? LastArgs { get; private set; }
+    public GrabDispatchArgs? LastGrabArgs { get; private set; }
 
     public Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
     {
@@ -485,7 +487,17 @@ internal sealed class TracingTaskService : IRcsTaskService
     }
 
     public Task<RcsResult> DispatchGrabAsync(GrabDispatchArgs args, CancellationToken ct = default)
-        => Task.FromResult(RcsResult.Fail("", "noop"));
+    {
+        _trace.Add(DispatchGateEvents.RcsDispatch);
+        DispatchGrabCount++;
+        LastTaskId = args.TaskId;
+        LastTaskType = args.TaskType;
+        LastGrabArgs = args;
+        return Task.FromResult(new RcsResult(true, 200, true, "ok", "", "{}", null, 1)
+        {
+            TaskId = args.TaskId ?? "missing"
+        });
+    }
     public Task<RcsResult> DispatchIdentifyAsync(IdentifyDispatchArgs args, CancellationToken ct = default)
         => Task.FromResult(RcsResult.Fail("", "noop"));
     public Task<RcsResult> CancelAsync(string rcsTaskId, CancellationToken ct = default)
@@ -541,15 +553,28 @@ internal sealed class FixedRoutes : IRouteResolver
     public bool MissingUnload { get; set; }
     public bool MissingPositionCell { get; set; }
     public bool MissingFrameCell { get; set; }
+    public bool MissingPositionStation { get; set; }
+    public string? PositionStation { get; set; }
+    public string? PositionCell { get; set; }
+    public string? FrameShelf { get; set; }
+    public string? FrameSlotCell { get; set; }
 
     public Task<(string from, string to)?> ResolveUploadAsync(long equipmentId, long positionId, CancellationToken ct = default)
         => Task.FromResult(MissingUpload ? null : ((string, string)?)("FROM-A", "TO-B"));
     public Task<(string from, string to)?> ResolveUnloadAsync(long equipmentId, long positionId, CancellationToken ct = default)
         => Task.FromResult(MissingUnload ? null : ((string, string)?)("POS-CELL", "UNLOAD-CELL"));
     public Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default)
-        => Task.FromResult(MissingPositionCell ? null : $"CELL-EQ{equipmentId}-P{positionId}");
+        => Task.FromResult(MissingPositionCell ? null : (PositionCell ?? $"CELL-EQ{equipmentId}-P{positionId}"));
+    public Task<string?> ResolvePositionStationAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.FromResult(MissingPositionStation ? null : PositionStation);
     public Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default)
         => Task.FromResult(MissingFrameCell ? null : $"RACK-CELL-{frameId}");
+    public Task<string?> ResolveFrameShelfAsync(long frameId, CancellationToken ct = default)
+        => Task.FromResult(string.IsNullOrWhiteSpace(FrameShelf)
+            ? (MissingFrameCell ? null : $"RACK-CELL-{frameId}")
+            : FrameShelf);
+    public Task<string?> ResolveFrameSlotCellAsync(long frameId, int layerNo, int posInLayer, CancellationToken ct = default)
+        => Task.FromResult(MissingFrameCell ? null : (FrameSlotCell ?? $"RACK-CELL-{frameId}"));
 }
 
 internal sealed class UnusedDbContextFactory : IDbContextFactory<CncDbContext>
@@ -703,7 +728,8 @@ internal static class DispatchGateHarness
         IRouteResolver? routes = null,
         IPlcPointSource? points = null,
         IRcsTaskStore? taskStore = null,
-        int hasMatRecheckFailThreshold = 6)
+        int hasMatRecheckFailThreshold = 6,
+        string loadUnloadVerb = RcsLoadUnloadVerbs.Transit)
     {
         var options = Options.Create(new AppOptions
         {
@@ -711,7 +737,8 @@ internal static class DispatchGateHarness
             {
                 SchedulerEnabled = false,
                 ReconcileRetryIntervalMs = 5000,
-                HasMatRecheckFailThreshold = hasMatRecheckFailThreshold
+                HasMatRecheckFailThreshold = hasMatRecheckFailThreshold,
+                LoadUnloadVerb = loadUnloadVerb
             }
         });
         var v = validator ?? new RoutingAvailabilityValidator(

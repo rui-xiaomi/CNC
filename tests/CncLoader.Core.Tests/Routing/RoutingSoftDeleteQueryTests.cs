@@ -422,7 +422,12 @@ public sealed class RoutingSoftDeleteQueryTests
     {
         var options = Options.Create(new AppOptions
         {
-            Rcs = new RcsOptions { SchedulerEnabled = false, ReconcileRetryIntervalMs = 5000 }
+            Rcs = new RcsOptions
+            {
+                SchedulerEnabled = false,
+                ReconcileRetryIntervalMs = 5000,
+                LoadUnloadVerb = RcsLoadUnloadVerbs.Transit
+            }
         });
         return new PositionScheduler(
             new SignalStateStore(),

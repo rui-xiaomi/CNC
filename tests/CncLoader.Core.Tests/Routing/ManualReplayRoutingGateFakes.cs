@@ -93,6 +93,7 @@ internal sealed class CountingManagedRouteResolver : IManagedDispatchRouteResolv
 internal sealed class FakeRcsHttpClient : IRcsClient
 {
     public int TransitCount { get; private set; }
+    public string? LastTransitTaskType { get; private set; }
     public int ExcuteCount { get; private set; }
     public int CancelCount { get; private set; }
     public int QueryCount { get; private set; }
@@ -107,6 +108,7 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public Task<RcsResult> TransitTaskAsync(TransitTaskRequest req, CancellationToken ct = default)
     {
         TransitCount++;
+        LastTransitTaskType = req.TaskType;
         TransitTaskIds.Add(req.TaskId ?? "");
         OrderSink?.Add("RcsTransit");
         if (FailNextTransit)

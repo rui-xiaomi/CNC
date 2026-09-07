@@ -312,6 +312,13 @@ public sealed partial class RcsViewModel : PageViewModelBase
 
     partial void OnSelectedKindChanged(string value)
     {
+        if (ShowGrabParams
+            && string.Equals(FromCode, "101101", StringComparison.Ordinal)
+            && string.Equals(ToCode, "201101", StringComparison.Ordinal))
+        {
+            FromCode = "101";
+            ToCode = "201";
+        }
         OnPropertyChanged(nameof(ShowTransitParams));
         OnPropertyChanged(nameof(ShowGrabParams));
         OnPropertyChanged(nameof(ShowIdentifyParams));

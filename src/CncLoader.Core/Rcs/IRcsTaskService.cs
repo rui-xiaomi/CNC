@@ -103,8 +103,12 @@ public sealed record TransitDispatchArgs
 /// <summary>抓取下发入参。</summary>
 public sealed record GrabDispatchArgs
 {
+    /// <summary>调用方预生成的 taskId；为空时由服务生成。</summary>
+    public string? TaskId { get; init; }
     public long WorkLineId { get; init; }
     public string LineCode { get; init; } = "LINE";
+    /// <summary>0=上料 1=下料；落库供 Redo 补预记。默认 0。</summary>
+    public string TaskType { get; init; } = "0";
     public int Priority { get; init; } = 5;
     /// <summary>起点 station 编码。</summary>
     public required string SrcStation { get; init; }

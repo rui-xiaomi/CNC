@@ -109,12 +109,27 @@ public sealed class ManagedDispatchRouteResolver : IManagedDispatchRouteResolver
             ManagedEndpointKind.Position => ValidatePosition(endpoint, side),
             ManagedEndpointKind.Area => ValidateArea(endpoint, side),
             ManagedEndpointKind.Frame => await ValidateFrameAsync(endpoint, side, ct),
+            ManagedEndpointKind.Equipment => ValidateEquipment(endpoint, side),
             _ => EndpointHit.Fail(
                 ManagedDispatchRouteStatus.InvalidRelationship,
                 $"{side} 端点类型未知",
                 "LocationMap",
                 row.Id)
         };
+    }
+
+    private static EndpointHit ValidateEquipment(ManagedDispatchEndpoint ep, string side)
+    {
+        if (ep.EquipmentId is null or <= 0)
+        {
+            return EndpointHit.Fail(
+                ManagedDispatchRouteStatus.InvalidRelationship,
+                $"{side} 机台映射缺少机台关联",
+                "LocationMap",
+                ep.LocationMapId);
+        }
+
+        return EndpointHit.Ok(ep);
     }
 
     private static EndpointHit ValidatePosition(ManagedDispatchEndpoint ep, string side)

@@ -42,6 +42,28 @@ public sealed class AppOptionsTests
     }
 
     [Test]
+    public void 配置缺失时上下料动词应为Grab()
+    {
+        Assert.That(new RcsOptions().LoadUnloadVerb, Is.EqualTo(RcsLoadUnloadVerbs.Grab));
+    }
+
+    [Test]
+    public void 上下料动词非法时启动校验应失败()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["App:Rcs:LoadUnloadVerb"] = "Fly"
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        using var host = Host.CreateDefaultBuilder()
+            .ConfigureLogging(logging => logging.ClearProviders())
+            .ConfigureServices(services => services.AddCncCommon(configuration))
+            .Build();
+
+        Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync());
+    }
+
+    [Test]
     public void 对账重试间隔小于等于零时启动校验应失败([Values(0, -1)] int invalid)
     {
         var values = new Dictionary<string, string?>

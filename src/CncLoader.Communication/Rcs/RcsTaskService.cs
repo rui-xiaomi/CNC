@@ -99,7 +99,7 @@ public sealed class RcsTaskService : IRcsTaskService
         var req = new TransitTaskRequest
         {
             TaskId = taskId,
-            TaskType = "move",
+            TaskType = RcsTransitTaskTypes.FromDispatch(args.Kind, args.TaskType),
             Priority = args.Priority,
             Position =
             {
@@ -121,7 +121,9 @@ public sealed class RcsTaskService : IRcsTaskService
         if (!MatchesGrabRole(final.Context!))
             return RcsResult.RouteUnavailable(RouteUnavailableUiMessage);
 
-        var taskId = RcsTaskId.Next(args.LineCode, RcsTaskKind.Grab);
+        var taskId = string.IsNullOrWhiteSpace(args.TaskId)
+            ? RcsTaskId.Next(args.LineCode, RcsTaskKind.Grab)
+            : args.TaskId;
         var param = JsonSerializer.Serialize(args.Items, JsonOpt);
 
         await _store.CreateAsync(new RcsTaskRecord
@@ -129,7 +131,7 @@ public sealed class RcsTaskService : IRcsTaskService
             RcsTaskId = taskId,
             Kind = RcsTaskKind.Grab,
             WorkLineId = args.WorkLineId,
-            TaskType = "0",
+            TaskType = string.IsNullOrWhiteSpace(args.TaskType) ? "0" : args.TaskType,
             Priority = args.Priority,
             FromCode = args.SrcStation,
             ToCode = args.DstStation,
@@ -465,7 +467,8 @@ public sealed class RcsTaskService : IRcsTaskService
            && ep.LocName is "EMPTY_BUFFER" or "FULL_BUFFER";
 
     /// <summary>
-    /// Grab：双端均为配置角色 AREA（LOAD/UNLOAD/缓冲/回收）；拒绝 POSITION/FRAME/未知角色。
+    /// Grab：两端须为 station/shelf（现场 101 料架站 → 201 机台站）。
+    /// AREA 五角色、FRAME/EQUIPMENT/POSITION 的 station|shelf 均可；拒绝 cell。
     /// </summary>
     private static bool MatchesGrabRole(DispatchRouteContext ctx)
     {
@@ -474,12 +477,21 @@ public sealed class RcsTaskService : IRcsTaskService
         if (from is null || to is null)
             return false;
 
-        return IsGrabAreaEndpoint(from) && IsGrabAreaEndpoint(to);
+        return IsGrabEndpoint(from) && IsGrabEndpoint(to);
     }
 
-    private static bool IsGrabAreaEndpoint(ManagedDispatchEndpoint ep)
-        => ep.Kind == ManagedEndpointKind.Area
-           && ManagedDispatchEndpoint.IsConfiguredAreaRole(ep.LocName);
+    private static bool IsGrabEndpoint(ManagedDispatchEndpoint ep)
+        => IsGrabStationType(ep.RcsType) && ep.Kind switch
+        {
+            ManagedEndpointKind.Area => ManagedDispatchEndpoint.IsConfiguredAreaRole(ep.LocName),
+            ManagedEndpointKind.Frame => true,
+            ManagedEndpointKind.Position => true,
+            ManagedEndpointKind.Equipment => true,
+            _ => false
+        };
+
+    private static bool IsGrabStationType(string? rcsType)
+        => rcsType is "station" or "shelf";
 
     /// <summary>
     /// Identify / 盘点：单端必须为活动 FRAME（shelf/station 由 LOCATION_MAP.RcsType 表达）；拒绝 AREA/POSITION。
@@ -536,7 +548,7 @@ public sealed class RcsTaskService : IRcsTaskService
         var tr = new TransitTaskRequest
         {
             TaskId = row.RcsTaskId!,
-            TaskType = "move",
+            TaskType = RcsTransitTaskTypes.FromStored(kind, row.TaskType),
             Priority = row.Priority,
             CommandType = commandType,
             Position = { new RcsPosition(row.FromCode, "cell"), new RcsPosition(row.ToCode, "cell") }

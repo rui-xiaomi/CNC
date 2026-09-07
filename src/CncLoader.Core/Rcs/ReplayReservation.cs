@@ -3,7 +3,7 @@ namespace CncLoader.Core.Rcs;
 /// <summary>重发前是否需要（再）锁槽。</summary>
 public enum ReplayReservationPlan
 {
-    /// <summary>命名区 / 换架 / 抓取 / 盘点：无槽位账。</summary>
+    /// <summary>命名区 / 换架 / 手动无槽抓取 / 盘点：无槽位账。</summary>
     Skip,
     Take,
     Put
@@ -31,7 +31,7 @@ public static class ReplayReservation
         ManagedEndpointKind? fromKind,
         ManagedEndpointKind? toKind)
     {
-        if (!IsTransitKind(kind))
+        if (!HasSlotAccount(kind))
             return ReplayReservationPlan.Skip;
 
         if (taskType == "0" && fromKind == ManagedEndpointKind.Frame)
@@ -74,6 +74,6 @@ public static class ReplayReservation
         return ReplayReservationHold.NewlyCreated(plan == ReplayReservationPlan.Take);
     }
 
-    private static bool IsTransitKind(string? kind)
-        => kind is null or "" or "transit" or "TR";
+    private static bool HasSlotAccount(string? kind)
+        => kind is null or "" or "transit" or "TR" or "grab" or "GR";
 }

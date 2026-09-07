@@ -19,6 +19,8 @@ public static class CommonServiceCollectionExtensions
                 "App:Rcs:HasMatRecheckFailThreshold 必须大于 0。")
             .Validate(options => options.Rcs.ReconcileRetryIntervalMs > 0,
                 "App:Rcs:ReconcileRetryIntervalMs 必须大于 0。")
+            .Validate(options => RcsLoadUnloadVerbs.IsDefined(options.Rcs.LoadUnloadVerb),
+                "App:Rcs:LoadUnloadVerb 必须为 Grab 或 Transit。")
             .Validate(options => options.Plc.PollingIntervalMs > 0,
                 "App:Plc:PollingIntervalMs 必须大于 0（0 会导致轮询循环紧转）。")
             .ValidateOnStart();
