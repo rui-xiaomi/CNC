@@ -5,6 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- AGENTS.md 把「0 警告 0 错误」列为合并前必过门禁，由构建强制而非靠人工检查。 -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- 现场无外网时 NU1900（拉不到 nuget.org 漏洞库）会被当成错误；审计不影响编译结果。 -->
+    <NuGetAudit>false</NuGetAudit>
+    <NoWarn>$(NoWarn);NU1900</NoWarn>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900</WarningsNotAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
   </PropertyGroup>
 </Project>

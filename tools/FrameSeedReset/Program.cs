@@ -21,7 +21,7 @@ await using var db = await sp.GetRequiredService<IDbContextFactory<CncDbContext>
 
 const long loadFrameId = 1;
 var materials = Enumerable.Range(1, 10)
-    .SelectMany(layer => new[] { $"101{layer}01", $"101{layer}02" })
+    .SelectMany(layer => new[] { $"101{9 + layer}1", $"101{9 + layer}2" })
     .ToArray();
 
 await using var tx = await db.Database.BeginTransactionAsync();
@@ -56,7 +56,7 @@ var summary = await db.FrameSlots
     .OrderBy(x => x.FrameId)
     .ToListAsync();
 
-Console.WriteLine("料架槽位已清空，上料架101(ID=1)已写入 101101/101102…1011001/1011002：");
+Console.WriteLine("料架槽位已清空，上料架101(ID=1)已写入 101101/101102…101191/101192：");
 foreach (var row in summary)
     Console.WriteLine($"  frame {row.FrameId}: 占用 {row.Occupied}/{row.Total}");
 

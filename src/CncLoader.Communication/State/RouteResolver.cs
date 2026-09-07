@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace CncLoader.Communication.State;
 
 /// <summary>
-/// 路由决策：现场搬运为 cell 级（货架码+孔位，如 101101→201101）。
+/// 路由决策：现场搬运为 cell 级（料架货架+层10起+位，如 101101→201101）。
 /// 上料命名区 / 下料命名区仅作无料架绑定时的回退；有料架时用 shelf + 预记槽 cell。
 /// 解析失败返回 null——调度器据此告警人工；禁止 FRAME-{id} 假码。
 /// </summary>
