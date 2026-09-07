@@ -595,10 +595,10 @@ INSERT INTO MAS_AUTO_FRAME_BIND
   (3,  3, '1', '0', 'system'),   -- 下料总架303 → A基准 下料架
   (91, 3, '3', '0', 'system');   -- NG架401 → A基准 NG架
 
--- 槽位预建。上料/中转/下料：10 层 × 左右 2 位。上料架物料码=该槽 cell（101 + 层不补零 + 位2位）。
+-- 槽位预建。上料/中转/下料：10 层 × 左右 2 位。上料架物料码=该槽 cell（货架 + 层编码10起 + 位）。
 INSERT INTO MAS_AUTO_FRAME_SLOT
   (FRAME_ID, SLOT_NO, LAYER_NO, POS_IN_LAYER, SLOT_STATE, ELECTRODE_ID, BIND_SOURCE, BIND_TIME)
-SELECT 1, (l.n - 1) * 2 + p.n, l.n, p.n, '1', CONCAT('101', l.n, LPAD(p.n, 2, '0')), 'MANUAL', NOW()
+SELECT 1, (l.n - 1) * 2 + p.n, l.n, p.n, '1', CONCAT('101', 9 + l.n, p.n), 'MANUAL', NOW()
 FROM (
   SELECT 1 n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
   UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10
@@ -617,7 +617,8 @@ CROSS JOIN (SELECT 1 n UNION ALL SELECT 2) p;
 -- =============================================================
 -- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（现场搬运规则）
 --   现场目前只下发搬运（transit / cell）。
---   cell = 货架码 + 层号（不补零）+ 层内位 2 位：上料 L1=101101/101102、L10=1011001/1011002；内长宽工位1 201101。
+--   料架 cell = 货架码 + 层编码（第1层=10、第2层=11…）+ 层内位 1 位：上料 L1=101101/101102、L2=101111/101112、L10=101191/101192；下料 303 同规则。
+--   内长宽工位1 201101（加工位仍按录入，不走料架层编码）。
 --   shelf：上料 101 / 内长宽 201 / 中转 301·302 / 下料 303 / NG 401。
 --   禁止 LOAD_AREA=101 或 UNLOAD_AREA=301（与料架 shelf 同码会歧义拒发）。
 --   平面度/A基准 cell、缓存区：未现场确认；缓存区留演示码。
@@ -639,7 +640,7 @@ INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_T
   ('FRAME', 91, 'NG架401',    '401', 'shelf', '0', 'system'),
   ('FRAME', 92, '中转架302',   '302', 'shelf', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR)
-SELECT 'FRAME', f.id, CONCAT('L', l.n, 'P', p.n), CONCAT(f.code, l.n, LPAD(p.n, 2, '0')), 'cell', '0', 'system'
+SELECT 'FRAME', f.id, CONCAT('L', l.n, 'P', p.n), CONCAT(f.code, 9 + l.n, p.n), 'cell', '0', 'system'
 FROM (
   SELECT 1 AS id, '101' AS code
   UNION ALL SELECT 2, '301'

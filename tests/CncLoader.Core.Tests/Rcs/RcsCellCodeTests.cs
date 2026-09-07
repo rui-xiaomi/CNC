@@ -16,14 +16,16 @@ public sealed class RcsCellCodeTests
         => Assert.That(RcsCellCode.TryCompose("201", 1, 2), Is.EqualTo("201102"));
 
     [Test]
-    public void Compose_Layer2Pos1_UsesLayerHundreds()
-        => Assert.That(RcsCellCode.TryCompose("101", 2, 1), Is.EqualTo("101201"));
+    public void Compose_Layer2Pos1_UsesLayer11()
+        => Assert.That(RcsCellCode.TryCompose("101", 2, 1), Is.EqualTo("101111"));
 
     [Test]
-    public void Compose_Layer10LeftRight_DoesNotPadLayer()
+    public void Compose_Layer3And10_UsesLayer12And19()
     {
-        Assert.That(RcsCellCode.TryCompose("101", 10, 1), Is.EqualTo("1011001"));
-        Assert.That(RcsCellCode.TryCompose("101", 10, 2), Is.EqualTo("1011002"));
+        Assert.That(RcsCellCode.TryCompose("101", 3, 1), Is.EqualTo("101121"));
+        Assert.That(RcsCellCode.TryCompose("101", 10, 1), Is.EqualTo("101191"));
+        Assert.That(RcsCellCode.TryCompose("101", 10, 2), Is.EqualTo("101192"));
+        Assert.That(RcsCellCode.TryCompose("303", 2, 2), Is.EqualTo("303112"));
     }
 
     [TestCase(null)]
@@ -37,17 +39,17 @@ public sealed class RcsCellCodeTests
         => Assert.That(RcsCellCode.TryCompose("101", 1, 0), Is.Null);
 
     [Test]
-    public void Parse_Layer2Pos1_Is201()
+    public void Parse_Layer2Pos1_Is111()
     {
-        Assert.That(RcsCellCode.TryParse("101201", "101", out var layer, out var pos), Is.True);
+        Assert.That(RcsCellCode.TryParse("101111", "101", out var layer, out var pos), Is.True);
         Assert.That(layer, Is.EqualTo(2));
         Assert.That(pos, Is.EqualTo(1));
     }
 
     [Test]
-    public void Parse_Layer10_DoesNotPadLayer()
+    public void Parse_Layer10_UsesLayer19()
     {
-        Assert.That(RcsCellCode.TryParse("1011001", "101", out var layer, out var pos), Is.True);
+        Assert.That(RcsCellCode.TryParse("101191", "101", out var layer, out var pos), Is.True);
         Assert.That(layer, Is.EqualTo(10));
         Assert.That(pos, Is.EqualTo(1));
         Assert.That(RcsCellCode.FormatSlotLabel(layer, pos), Is.EqualTo("L10P1"));
@@ -57,18 +59,22 @@ public sealed class RcsCellCodeTests
     public void Parse_RoundTrip_Layer10Right()
     {
         var composed = RcsCellCode.TryCompose("302", 10, 2);
-        Assert.That(composed, Is.EqualTo("3021002"));
+        Assert.That(composed, Is.EqualTo("302192"));
         Assert.That(RcsCellCode.TryParse(composed, "302", out var layer, out var pos), Is.True);
         Assert.That((layer, pos), Is.EqualTo((10, 2)));
     }
 
     [Test]
     public void Parse_WrongShelf_ReturnsFalse()
-        => Assert.That(RcsCellCode.TryParse("101201", "301", out _, out _), Is.False);
+        => Assert.That(RcsCellCode.TryParse("101111", "301", out _, out _), Is.False);
 
     [Test]
     public void Parse_ShelfOnly_ReturnsFalse()
         => Assert.That(RcsCellCode.TryParse("101", "101", out _, out _), Is.False);
+
+    [Test]
+    public void Parse_OldUnpaddedLayerCode_ReturnsFalse()
+        => Assert.That(RcsCellCode.TryParse("1011001", "101", out _, out _), Is.False);
 }
 
 [TestFixture]
@@ -81,7 +87,7 @@ public sealed class LocationMapItemDisplayTests
         {
             LocType = "FRAME",
             RcsType = "cell",
-            RcsCode = "101201",
+            RcsCode = "101111",
             FrameCode = "101",
             LocName = "L1P3"
         };
@@ -122,6 +128,17 @@ public sealed class RouteResolverSlotCellTests
 
         Assert.That(await resolver.ResolveFrameSlotCellAsync(1, 1, 1), Is.EqualTo("101101"));
         Assert.That(await resolver.ResolveFrameShelfAsync(1), Is.EqualTo("101"));
+    }
+
+    [Test]
+    public async Task SlotCell_Layer2_UsesLayer11Code()
+    {
+        var map = new StubMap();
+        map.SeedFrame(1, "shelf", "101");
+        map.SeedFrame(1, "cell", "101111");
+        var resolver = new RouteResolver(map, NullLogger<RouteResolver>.Instance);
+
+        Assert.That(await resolver.ResolveFrameSlotCellAsync(1, 2, 1), Is.EqualTo("101111"));
     }
 
     [Test]

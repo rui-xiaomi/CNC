@@ -85,7 +85,7 @@ public interface IRouteResolver
     Task<string?> ResolveFrameShelfAsync(long frameId, CancellationToken ct = default)
         => ResolveFrameCellAsync(frameId, ct);
 
-    /// <summary>解析料架指定槽 cell（货架码+层+层内位）。缺 LOCATION_MAP 返回 null，禁止假码。</summary>
+    /// <summary>解析料架指定槽 cell（货架+层编码10起+位）。缺 LOCATION_MAP 返回 null，禁止假码。</summary>
     Task<string?> ResolveFrameSlotCellAsync(long frameId, int layerNo, int posInLayer, CancellationToken ct = default)
         => ResolveFrameCellAsync(frameId, ct);
 }
