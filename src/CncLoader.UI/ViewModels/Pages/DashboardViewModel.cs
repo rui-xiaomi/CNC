@@ -23,6 +23,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private readonly IPositionScheduler _scheduler;
     private readonly IFrameService _frames;
     private readonly IWorkLineService _workLines;
+    private readonly IEquipmentConfigService? _equipment;
+    private readonly ICraftworkService? _crafts;
     private readonly ICurrentUser _user;
     private readonly IUserNotificationService _notify;
     private readonly IUiDispatcher _ui;
@@ -31,6 +33,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private readonly Dictionary<long, MachineCardVm> _machines = new();
     private readonly Dictionary<(long Eq, long Pos), PositionCardVm> _positions = new();
     private readonly Dictionary<long, string> _equipmentNames = new();
+    private readonly Dictionary<long, string> _equipmentNos = new();
+    private Dictionary<long, int> _processOrder = new();
     private readonly DispatcherTimer _throttle;
     private readonly DispatcherTimer _statsTimer;
     private volatile bool _positionsDirty;
@@ -38,7 +42,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
 
     public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms,
         IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user,
-        IUserNotificationService notify, IUiDispatcher ui)
+        IUserNotificationService notify, IUiDispatcher ui,
+        IEquipmentConfigService? equipment = null, ICraftworkService? crafts = null)
     {
         _store = store;
         _workRecords = workRecords;
@@ -46,6 +51,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         _scheduler = scheduler;
         _frames = frames;
         _workLines = workLines;
+        _equipment = equipment;
+        _crafts = crafts;
         _user = user;
         _notify = notify;
         _ui = ui;
@@ -165,9 +172,45 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
             foreach (var o in opts) _equipmentNames[o.Id] = o.DisplayName;
         }
         catch { /* 名称缺失时回退 EQ{id} */ }
+        await LoadProcessOrderAsync();
         await RefreshFlowLineCodeAsync();
         await RefreshAsync();
     }
+
+    /// <summary>按工序 CRAFTWORK_NODE 排机台；缺配置时回退机台主键。</summary>
+    private async Task LoadProcessOrderAsync()
+    {
+        if (_equipment is null || _crafts is null) return;
+        try
+        {
+            var crafts = await _crafts.GetByLineAsync(null);
+            var order = new Dictionary<long, int>();
+            var seq = 0;
+            foreach (var c in crafts.OrderBy(x => x.Sort).ThenBy(x => x.Id))
+            {
+                var eqs = await _equipment.GetByCraftAsync(c.Id);
+                foreach (var e in eqs.OrderBy(x => x.No, StringComparer.OrdinalIgnoreCase).ThenBy(x => x.Id))
+                {
+                    order[e.Id] = seq++;
+                    _equipmentNos[e.Id] = e.No;
+                    if (!string.IsNullOrWhiteSpace(e.Name))
+                        _equipmentNames[e.Id] = e.Name;
+                }
+            }
+            _processOrder = order;
+        }
+        catch { /* 排序缺失时产线流仍按机台主键 */ }
+    }
+
+    public static IReadOnlyList<T> OrderByProcess<T>(
+        IEnumerable<T> items, Func<T, long> idOf, IReadOnlyDictionary<long, int> order)
+        => items
+            .OrderBy(x => order.TryGetValue(idOf(x), out var n) ? n : int.MaxValue)
+            .ThenBy(idOf)
+            .ToList();
+
+    private string EquipmentNoOf(long equipmentId)
+        => _equipmentNos.TryGetValue(equipmentId, out var no) ? no : $"EQ{equipmentId:D2}";
 
     private async Task RefreshFlowLineCodeAsync()
     {
@@ -284,7 +327,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
 
             if (!_machines.TryGetValue(eqId, out var card))
             {
-                card = new MachineCardVm(eqId, name);
+                card = new MachineCardVm(eqId, name, EquipmentNoOf(eqId));
                 _machines[eqId] = card;
                 Machines.Add(card);
             }
@@ -318,7 +361,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
             var name = _equipmentNames.TryGetValue(ms.EquipmentId, out var n) ? n : $"EQ{ms.EquipmentId}";
             if (!_machines.TryGetValue(ms.EquipmentId, out var card))
             {
-                card = new MachineCardVm(ms.EquipmentId, name);
+                card = new MachineCardVm(ms.EquipmentId, name, EquipmentNoOf(ms.EquipmentId));
                 _machines[ms.EquipmentId] = card;
                 Machines.Add(card);
             }
@@ -338,8 +381,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
             _machines.Remove(eqId);
         }
 
-        // 保持 Machines 按 EquipmentId 升序（产线流与列表一致）
-        var orderedMachines = Machines.OrderBy(m => m.EquipmentId).ToList();
+        // 产线流与左栏机台按工序排序，不按机台主键（主键 2=平面度、3=A基准）
+        var orderedMachines = OrderByProcess(Machines, m => m.EquipmentId, _processOrder);
         if (!Machines.SequenceEqual(orderedMachines))
         {
             Machines.Clear();
@@ -357,13 +400,13 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
 
     private void RebuildFlowNodes()
     {
-        // 上料架 → EQ升序机台 → 终点分叉（下料 / NG）；锚点仅示意，不绑实时水位
+        // 上料架 → 工序顺序机台 → 终点分叉（下料 / NG）；锚点仅示意，不绑实时水位
         var desired = new List<FlowNodeVm>
         {
             new("upload", "上料架", null, isAnchor: true)
         };
-        foreach (var m in Machines.OrderBy(x => x.EquipmentId))
-            desired.Add(new FlowNodeVm($"eq-{m.EquipmentId}", m.Name, m.EquipmentId, isAnchor: false));
+        foreach (var m in OrderByProcess(Machines, x => x.EquipmentId, _processOrder))
+            desired.Add(new FlowNodeVm($"eq-{m.EquipmentId}", m.Name, m.EquipmentId, isAnchor: false, m.EquipmentCode));
         desired.Add(new("ends", "终点", null, isAnchor: true) { IsEndFork = true });
 
         // 原地同步集合，避免整表 Clear 闪烁
@@ -609,19 +652,20 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
 /// <summary>产线流工序节点（看板顶部横向总览）。末尾可用 IsEndFork 表示下料/NG 分叉。</summary>
 public sealed partial class FlowNodeVm : ObservableObject
 {
-    public FlowNodeVm(string key, string title, long? equipmentId, bool isAnchor)
+    public FlowNodeVm(string key, string title, long? equipmentId, bool isAnchor, string? equipmentNo = null)
     {
         Key = key;
         Title = title;
         EquipmentId = equipmentId;
         IsAnchor = isAnchor;
+        EquipmentCode = equipmentNo ?? (equipmentId is long id ? $"EQ{id:D2}" : "");
     }
 
     public string Key { get; }
     public long? EquipmentId { get; }
     public bool IsAnchor { get; }
     public bool IsEquipment => !IsAnchor && EquipmentId is not null && !IsEndFork;
-    public string EquipmentCode => EquipmentId is long id ? $"EQ{id:D2}" : "";
+    public string EquipmentCode { get; }
 
     /// <summary>终点分叉：主卡=下料，副卡=NG。</summary>
     public bool IsEndFork { get; set; }
@@ -652,16 +696,17 @@ public sealed partial class FlowNodeVm : ObservableObject
 /// <summary>机台治具卡（看板签名元素）。</summary>
 public sealed partial class MachineCardVm : ObservableObject
 {
-    public MachineCardVm(long equipmentId, string name)
+    public MachineCardVm(long equipmentId, string name, string? equipmentNo = null)
     {
         EquipmentId = equipmentId;
         Name = name;
+        EquipmentCode = equipmentNo ?? $"EQ{equipmentId:D2}";
         Positions = new ObservableCollection<PositionCardVm>();
     }
 
     public long EquipmentId { get; }
     public string Name { get; }
-    public string EquipmentCode => $"EQ{EquipmentId:D2}";
+    public string EquipmentCode { get; }
     public ObservableCollection<PositionCardVm> Positions { get; }
 
     [ObservableProperty]
