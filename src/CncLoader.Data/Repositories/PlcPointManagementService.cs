@@ -88,7 +88,7 @@ public sealed class PlcPointManagementService : IPlcPointManagementService
 
         var index = equipmentId switch { 1 => 1, 2 => 2, 3 => 3, _ => 0 };
         if (index == 0)
-            throw new InvalidOperationException("批量导入仅支持种子机台 EQ01/EQ02/EQ03（ID 1/2/3）");
+            throw new InvalidOperationException("批量导入仅支持种子机台 ID 1/2/3（内长宽/平面度/A基准）");
 
         var existingKeys = await db.PlcPoints
             .Where(p => p.EquipmentId == equipmentId && p.State == ConfigActivity.Active)

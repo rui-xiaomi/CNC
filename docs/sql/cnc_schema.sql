@@ -497,16 +497,17 @@ INSERT INTO MAS_AUTO_WORKLINE_CRAFTWORK
   (ID1, WORKLINE_ID, CRAFTWORK_NO, CRAFTWORK_NAME, SF_QUALITY, SF_AUTO_SEND, SF_COST_STAT, CRAFTWORK_NODE, CRAFTWORK_PRIOR, STATE, AUTHOR)
 VALUES
   (1, 1, 'CW01', '内长宽', '1', '1', '1', 1, 0, '0', 'system'),
-  (2, 1, 'CW02', '平面度', '1', '1', '1', 3, 0, '0', 'system'),
-  (3, 1, 'CW03', 'A基准', '1', '1', '1', 2, 0, '0', 'system');
+  (2, 1, 'CW03', '平面度', '1', '1', '1', 3, 0, '0', 'system'),
+  (3, 1, 'CW02', 'A基准', '1', '1', '1', 2, 0, '0', 'system');
 
--- 机台（3台各挂对应工序 node1/2/3 + 各绑定独立 PLC 1/2/3）
+-- 机台主键仍为 1内长宽 / 2平面度 / 3A基准（PLC、点位、RCS 站码跟 ID）；
+-- 展示编号按工序顺序：EQ01 内长宽、EQ02 A基准、EQ03 平面度。
 INSERT INTO MAS_AUTO_WORKLINE_EQUIMENT
   (ID1, CARFTWORK_ID, PLC_ID, EQUIMENT_NO, EQUIMENT_NAME, EQUIMENT_CODE, EQUIMENT_TYPE, EQUIMENT_TYPE_NAME, EQUIMENT_WORK_TYPE, STATE, AUTHOR)
 VALUES
   (1, 1, 1, 'EQ01', '内长宽', 'M-NCK', '检测', '内长宽测试机', '产品', '0', 'system'),
-  (2, 2, 2, 'EQ02', '平面度', 'M-PMD', '检测', '平面度测试机', '产品', '0', 'system'),
-  (3, 3, 3, 'EQ03', 'A基准', 'M-ABASE', '检测', 'A基准测试机', '产品', '0', 'system');
+  (2, 2, 2, 'EQ03', '平面度', 'M-PMD', '检测', '平面度测试机', '产品', '0', 'system'),
+  (3, 3, 3, 'EQ02', 'A基准', 'M-ABASE', '检测', 'A基准测试机', '产品', '0', 'system');
 
 -- 加工位（内长宽/A基准各2个；平面度仅工位1——工位2按现场确认取消 2026-06-30）
 INSERT INTO MAS_AUTO_EQUIMENT_POSITION
@@ -514,9 +515,9 @@ INSERT INTO MAS_AUTO_EQUIMENT_POSITION
 VALUES
   (1, 1, '工位1', 'EQ01-P1', '0', '0', 'system'),
   (2, 1, '工位2', 'EQ01-P2', '0', '0', 'system'),
-  (3, 2, '工位1', 'EQ02-P1', '0', '0', 'system'),
-  (5, 3, '工位1', 'EQ03-P1', '0', '0', 'system'),
-  (6, 3, '工位2', 'EQ03-P2', '0', '0', 'system');
+  (3, 2, '工位1', 'EQ03-P1', '0', '0', 'system'),
+  (5, 3, '工位1', 'EQ02-P1', '0', '0', 'system'),
+  (6, 3, '工位2', 'EQ02-P2', '0', '0', 'system');
 
 -- 机台标准状态字典
 INSERT INTO MAS_AUTO_EQUIMENT_CONDITION
@@ -622,8 +623,8 @@ CROSS JOIN (SELECT 1 n UNION ALL SELECT 2) p;
 -- 六b、LOCATION_MAP：逻辑位置 ↔ RCS 点位编码（现场搬运规则）
 --   工位上下料默认抓取（station + 孔）；换架仍搬运。无工位直送。
 --   料架 cell = 货架码 + 层编码（第1层=10、第2层=11…）+ 层内位 1 位：上料 L1=101101/101102、L2=101111/101112、L10=101191/101192；中转/下料同规则。
---   机台站（LOC_TYPE=EQUIPMENT）：内长宽 201 / 平面度 202 / A基准 203。
---   工位 cell：201101/201102、202101、203101/203102（平面度第二工位 2026-06-30 取消，未录 202102）。
+--   机台站（LOC_TYPE=EQUIPMENT）：内长宽 201 / A基准 202 / 平面度 203。
+--   工位 cell：201101/201102、202101/202102、203101（平面度第二工位 2026-06-30 取消，未录 203102）。
 --   shelf：上料 101 / 中转 301·302 / 下料 303 / NG 401。
 --   禁止 LOAD_AREA=101 或 UNLOAD_AREA=301（与料架 shelf 同码会歧义拒发）。
 --   缓存区：未现场确认，留演示码。
@@ -634,14 +635,14 @@ INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, LOC_NAME, RCS_CODE, RCS_TYPE, STATE
   ('AREA', 'PALLET_RETURN', '650003', 'station', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('EQUIPMENT', 1, '201', 'station', '0', 'system'),
-  ('EQUIPMENT', 2, '202', 'station', '0', 'system'),
-  ('EQUIPMENT', 3, '203', 'station', '0', 'system');
+  ('EQUIPMENT', 3, '202', 'station', '0', 'system'),
+  ('EQUIPMENT', 2, '203', 'station', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, EQUIMENT_ID, POSITION_ID, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('POSITION', 1, 1, '201101', 'cell', '0', 'system'),
   ('POSITION', 1, 2, '201102', 'cell', '0', 'system'),
-  ('POSITION', 2, 3, '202101', 'cell', '0', 'system'),
-  ('POSITION', 3, 5, '203101', 'cell', '0', 'system'),
-  ('POSITION', 3, 6, '203102', 'cell', '0', 'system');
+  ('POSITION', 3, 5, '202101', 'cell', '0', 'system'),
+  ('POSITION', 3, 6, '202102', 'cell', '0', 'system'),
+  ('POSITION', 2, 3, '203101', 'cell', '0', 'system');
 INSERT INTO MAS_AUTO_LOCATION_MAP (LOC_TYPE, FRAME_ID, LOC_NAME, RCS_CODE, RCS_TYPE, STATE, AUTHOR) VALUES
   ('FRAME', 1,  '上料架101',   '101', 'shelf', '0', 'system'),
   ('FRAME', 2,  '工序架301',   '301', 'shelf', '0', 'system'),
