@@ -473,7 +473,7 @@ CREATE TABLE MAS_AUTO_EQUIMENT_WORKDATA (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='[本期不实现]加工数据写入配置';
 
 -- =============================================================
--- 六、初始化数据（1线体 → 三道串行工序：内长宽→平面度→A基准 → 3机台）
+-- 六、初始化数据（1线体 → 三道串行工序：内长宽→A基准→平面度 → 3机台）
 --     业务链：一架两用（上游下料架=下游上料架），无工位直送。NG→NG架，末道→下料架 303。
 --     点位地址取自 docs/测试机信号表.md；LOCATION_MAP 按现场搬运规则（101/201/301/302/401）。
 -- =============================================================
@@ -492,13 +492,13 @@ VALUES
   (2, '平面度PLC', '客户端', '192.168.250.1', 9600, 'FINS', '0', 'system'),
   (3, 'A基准PLC',  '客户端', '192.168.250.1', 9600, 'FINS', '0', 'system');
 
--- 工序（三道串行，CRAFTWORK_NODE 决定先后：内长宽1 → 平面度2 → A基准3）
+-- 工序（三道串行，CRAFTWORK_NODE 决定先后：内长宽1 → A基准2 → 平面度3）
 INSERT INTO MAS_AUTO_WORKLINE_CRAFTWORK
   (ID1, WORKLINE_ID, CRAFTWORK_NO, CRAFTWORK_NAME, SF_QUALITY, SF_AUTO_SEND, SF_COST_STAT, CRAFTWORK_NODE, CRAFTWORK_PRIOR, STATE, AUTHOR)
 VALUES
   (1, 1, 'CW01', '内长宽', '1', '1', '1', 1, 0, '0', 'system'),
-  (2, 1, 'CW02', '平面度', '1', '1', '1', 2, 0, '0', 'system'),
-  (3, 1, 'CW03', 'A基准', '1', '1', '1', 3, 0, '0', 'system');
+  (2, 1, 'CW02', '平面度', '1', '1', '1', 3, 0, '0', 'system'),
+  (3, 1, 'CW03', 'A基准', '1', '1', '1', 2, 0, '0', 'system');
 
 -- 机台（3台各挂对应工序 node1/2/3 + 各绑定独立 PLC 1/2/3）
 INSERT INTO MAS_AUTO_WORKLINE_EQUIMENT
@@ -583,21 +583,21 @@ INSERT INTO MAS_AUTO_FRAME
 
 -- 料架绑定：一架两用（0上料/1下料/3NG）。role2 本线不用。
 --   101 = 内长宽上料
---   301 = 内长宽下料 = 平面度上料
---   302 = 平面度下料 = A基准上料
---   303 = A基准下料
+--   301 = 内长宽下料 = A基准上料
+--   302 = A基准下料 = 平面度上料
+--   303 = 平面度下料
 --   401 = 三机 NG
 INSERT INTO MAS_AUTO_FRAME_BIND
   (FRAME_ID, EQUIMENT_ID, FRAME_ROLE, STATE, AUTHOR) VALUES
   (1,  1, '0', '0', 'system'),   -- 101 内长宽上料
   (2,  1, '1', '0', 'system'),   -- 301 内长宽下料
   (91, 1, '3', '0', 'system'),   -- 401 内长宽 NG
-  (2,  2, '0', '0', 'system'),   -- 301 平面度上料
-  (92, 2, '1', '0', 'system'),   -- 302 平面度下料
-  (91, 2, '3', '0', 'system'),   -- 401 平面度 NG
-  (92, 3, '0', '0', 'system'),   -- 302 A基准上料
-  (3,  3, '1', '0', 'system'),   -- 303 A基准下料
-  (91, 3, '3', '0', 'system');   -- 401 A基准 NG
+  (2,  3, '0', '0', 'system'),   -- 301 A基准上料
+  (92, 3, '1', '0', 'system'),   -- 302 A基准下料
+  (91, 3, '3', '0', 'system'),   -- 401 A基准 NG
+  (92, 2, '0', '0', 'system'),   -- 302 平面度上料
+  (3,  2, '1', '0', 'system'),   -- 303 平面度下料
+  (91, 2, '3', '0', 'system');   -- 401 平面度 NG
 
 -- 槽位预建。上料/中转/下料：10 层 × 左右 2 位。上料架物料码=该槽 cell（货架 + 层编码10起 + 位）。
 INSERT INTO MAS_AUTO_FRAME_SLOT
