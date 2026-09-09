@@ -1,12 +1,11 @@
 {
   "runtimeTarget": {
-    "name": ".NETCoreApp,Version=v8.0/win-x64",
+    "name": ".NETCoreApp,Version=v8.0",
     "signature": ""
   },
   "compilationOptions": {},
   "targets": {
-    ".NETCoreApp,Version=v8.0": {},
-    ".NETCoreApp,Version=v8.0/win-x64": {
+    ".NETCoreApp,Version=v8.0": {
       "CncLoader.App/1.0.0": {
         "dependencies": {
           "CncLoader.Common": "1.0.0",
@@ -485,7 +484,15 @@
       },
       "System.Diagnostics.EventLog/8.0.1": {
         "runtime": {
+          "lib/net8.0/System.Diagnostics.EventLog.dll": {
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.1024.46610"
+          }
+        },
+        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Diagnostics.EventLog.dll": {
+            "rid": "win",
+            "assetType": "runtime",
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.1024.46610"
           }
