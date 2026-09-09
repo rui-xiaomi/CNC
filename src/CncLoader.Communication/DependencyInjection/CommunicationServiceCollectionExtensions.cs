@@ -66,7 +66,8 @@ public static class CommunicationServiceCollectionExtensions
             sp.GetRequiredService<IManagedDispatchRouteResolver>(),
             sp.GetRequiredService<IRoutingAvailabilityValidator>(),
             sp.GetRequiredService<ILogger<RcsTaskService>>(),
-            sp.GetRequiredService<ISlotAccountService>()));
+            sp.GetRequiredService<ISlotAccountService>(),
+            sp.GetRequiredService<RcsCallbackNotifier>()));
 
         // 先从库加载连接配置，再启动回调宿主（保证 BootCallback* 已 Capture）
         services.AddHostedService<RcsConnectionBootstrapper>();

@@ -30,18 +30,49 @@ public static class RcsStatus
 /// </summary>
 public static class RcsStatusMapper
 {
-    public static string? ToTaskState(string? rcsStatus) => rcsStatus switch
+    public static string? ToTaskState(string? rcsStatus)
     {
-        RcsStatus.Uninitialized or RcsStatus.Queued or RcsStatus.Standby
-            or RcsStatus.Blocked or RcsStatus.Delayed => RcsTaskState.Dispatched,
-        RcsStatus.Underway => RcsTaskState.Executing,
-        RcsStatus.Completed => RcsTaskState.Completed,
-        RcsStatus.Failed or RcsStatus.Error or RcsStatus.Skipped => RcsTaskState.Failed,
-        RcsStatus.Canceled or RcsStatus.Killed => RcsTaskState.Canceled,
-        _ => null
-    };
+        if (string.IsNullOrWhiteSpace(rcsStatus)) return null;
+        var s = rcsStatus.Trim();
+        if (s.Equals("cancelled", StringComparison.OrdinalIgnoreCase))
+            s = RcsStatus.Canceled;
+        else
+            s = s.ToLowerInvariant();
+
+        return s switch
+        {
+            RcsStatus.Uninitialized or RcsStatus.Queued or RcsStatus.Standby
+                or RcsStatus.Blocked or RcsStatus.Delayed => RcsTaskState.Dispatched,
+            RcsStatus.Underway => RcsTaskState.Executing,
+            RcsStatus.Completed => RcsTaskState.Completed,
+            RcsStatus.Failed or RcsStatus.Error or RcsStatus.Skipped => RcsTaskState.Failed,
+            RcsStatus.Canceled or RcsStatus.Killed => RcsTaskState.Canceled,
+            _ => null
+        };
+    }
 
     /// <summary>是否为终态（不再轮询）。</summary>
     public static bool IsTerminal(string taskState)
         => taskState is RcsTaskState.Completed or RcsTaskState.Failed or RcsTaskState.Canceled;
+}
+
+/// <summary>
+/// cancelTask 失败文案：RCS 已取消或已删任务时，文档事例为「任务编号{taskId}不存在」。
+/// 本地未完结任务应按取消收口，不能卡在 DISPATCHED/EXECUTING。
+/// </summary>
+public static class RcsCancelSemantics
+{
+    public static bool IsAlreadyCanceledOrGone(string? message, string? error)
+        => LooksGone(message) || LooksGone(error);
+
+    private static bool LooksGone(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var t = text.Trim();
+        return t.Contains("不存在", StringComparison.Ordinal)
+               || t.Contains("已取消", StringComparison.Ordinal)
+               || t.Contains("already cancel", StringComparison.OrdinalIgnoreCase)
+               || t.Contains("not found", StringComparison.OrdinalIgnoreCase)
+               || t.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
+    }
 }

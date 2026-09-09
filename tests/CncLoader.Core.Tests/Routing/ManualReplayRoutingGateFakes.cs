@@ -132,9 +132,14 @@ internal sealed class FakeRcsHttpClient : IRcsClient
         });
     }
 
+    /// <summary>非空则 cancelTask 回 HTTP200 但 Success=false（模拟 RCS 已无此任务）。</summary>
+    public string? CancelFailMessage { get; set; }
+
     public Task<RcsResult> CancelTaskAsync(CancelTaskRequest req, CancellationToken ct = default)
     {
         CancelCount++;
+        if (CancelFailMessage is { } msg)
+            return Task.FromResult(new RcsResult(true, 200, false, msg, "{}", "{}", null, 1));
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "{}", null, 1));
     }
 

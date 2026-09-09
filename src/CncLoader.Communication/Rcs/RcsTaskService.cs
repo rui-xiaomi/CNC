@@ -27,6 +27,7 @@ public sealed class RcsTaskService : IRcsTaskService
     private readonly IRoutingAvailabilityValidator _routingValidator;
     private readonly ISlotAccountService _slots;
     private readonly ILogger<RcsTaskService> _logger;
+    private readonly RcsCallbackNotifier? _notifier;
 
     /// <summary>
     /// 刻意 internal：入参含 internal 的 <see cref="IRcsClient"/>，
@@ -40,7 +41,8 @@ public sealed class RcsTaskService : IRcsTaskService
         IManagedDispatchRouteResolver routeResolver,
         IRoutingAvailabilityValidator routingValidator,
         ILogger<RcsTaskService> logger,
-        ISlotAccountService slots)
+        ISlotAccountService slots,
+        RcsCallbackNotifier? notifier = null)
     {
         _client = client;
         _store = store;
@@ -50,6 +52,7 @@ public sealed class RcsTaskService : IRcsTaskService
         _routingValidator = routingValidator;
         _logger = logger;
         _slots = slots;
+        _notifier = notifier;
     }
 
     public async Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
@@ -204,12 +207,66 @@ public sealed class RcsTaskService : IRcsTaskService
         var result = await _client.CancelTaskAsync(req, ct);
         if (result.Success)
         {
-            if (!await _store.UpdateStateAsync(rcsTaskId, RcsTaskState.Canceled, "canceled", null, ct))
-                _logger.LogWarning("取消任务 {TaskId} RCS 已成功但本地态未更新（任务不存在）", rcsTaskId);
+            var current = await _store.GetByTaskIdAsync(rcsTaskId, ct);
+            if (current?.TaskState == RcsTaskState.Completed)
+                return result with { TaskId = rcsTaskId };
+            return await ApplyLocalCanceledAsync(rcsTaskId, "canceled", null, result, ct);
         }
-        else
-            _logger.LogWarning("取消任务 {TaskId} 失败：{Msg}", rcsTaskId, result.Message ?? result.Error);
+
+        var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
+        if (row?.TaskState == RcsTaskState.Canceled)
+            return result with
+            {
+                Success = true,
+                Ok = true,
+                FailureKind = RcsFailureKind.None,
+                TaskId = rcsTaskId,
+                Message = result.Message ?? "任务已取消"
+            };
+
+        if (row is not null
+            && row.TaskState != RcsTaskState.Completed
+            && RcsCancelSemantics.IsAlreadyCanceledOrGone(result.Message, result.Error))
+        {
+            _logger.LogInformation("取消任务 {TaskId} RCS 已无此任务/已取消，按本地取消收口：{Msg}",
+                rcsTaskId, result.Message ?? result.Error);
+            return await ApplyLocalCanceledAsync(
+                rcsTaskId, "canceled", result.Message ?? result.Error, result, ct);
+        }
+
+        _logger.LogWarning("取消任务 {TaskId} 失败：{Msg}", rcsTaskId, result.Message ?? result.Error);
         return result;
+    }
+
+    private async Task<RcsResult> ApplyLocalCanceledAsync(
+        string rcsTaskId, string rcsStatus, string? error, RcsResult result, CancellationToken ct)
+    {
+        if (!await _store.UpdateStateAsync(rcsTaskId, RcsTaskState.Canceled, rcsStatus, error, ct))
+        {
+            _logger.LogWarning("取消任务 {TaskId} 本地态未更新（任务不存在）", rcsTaskId);
+            return result with
+            {
+                Success = true,
+                Ok = true,
+                FailureKind = RcsFailureKind.None,
+                TaskId = rcsTaskId,
+                Message = result.Success ? result.Message : (error ?? result.Message ?? "已按取消收口")
+            };
+        }
+
+        _notifier?.RaiseTaskStatus(new RcsTaskStatusEvent(
+            rcsTaskId, RcsErrorCode.Cancel, error, RcsTaskState.Canceled)
+        {
+            Source = "cancel"
+        });
+        return result with
+        {
+            Success = true,
+            Ok = true,
+            FailureKind = RcsFailureKind.None,
+            TaskId = rcsTaskId,
+            Message = result.Success ? result.Message : (error ?? result.Message ?? "已按取消收口")
+        };
     }
 
     public async Task<RcsResult> RedoAsync(string rcsTaskId, CancellationToken ct = default)
