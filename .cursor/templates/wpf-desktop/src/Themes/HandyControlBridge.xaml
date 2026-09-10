@@ -1,0 +1,46 @@
+<!--
+    HandyControlBridge.xaml
+    ============================================================
+    作用：把 HandyControl 的语义色键重定向到 WPF-UI 的画刷，
+          使两个库在浅色/深色主题下保持视觉一致。
+
+    合并顺序（App.xaml 中）必须为：
+        1) HandyControl SkinDefault.xaml + Theme.xaml
+        2) ui:ThemesDictionary + ui:ControlsDictionary
+        3) 本文件
+
+    顺序说明见 docs/adr/0001-双UI库分工与主题桥接.md。
+
+    ⚠️ 升级 WPF-UI 或 HandyControl 后，须重新核对下列键名，
+       两个库都改过资源键。对照表见 docs/design/DESIGN.md §2.2。
+    ============================================================
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ── 语义色 ─────────────────────────────────────────── -->
+    <SolidColorBrush x:Key="PrimaryBrush"         Color="{DynamicResource SystemAccentColorPrimary}"/>
+    <SolidColorBrush x:Key="SuccessBrush"         Color="{DynamicResource SystemFillColorSuccess}"/>
+    <SolidColorBrush x:Key="WarningBrush"         Color="{DynamicResource SystemFillColorCaution}"/>
+    <SolidColorBrush x:Key="DangerBrush"          Color="{DynamicResource SystemFillColorCritical}"/>
+    <SolidColorBrush x:Key="InfoBrush"            Color="{DynamicResource SystemFillColorAttention}"/>
+
+    <!-- ── 文字 ───────────────────────────────────────────── -->
+    <SolidColorBrush x:Key="PrimaryTextBrush"     Color="{DynamicResource TextFillColorPrimary}"/>
+    <SolidColorBrush x:Key="SecondaryTextBrush"   Color="{DynamicResource TextFillColorSecondary}"/>
+    <SolidColorBrush x:Key="ThirdlyTextBrush"     Color="{DynamicResource TextFillColorTertiary}"/>
+
+    <!-- ── 区域与边框 ─────────────────────────────────────── -->
+    <SolidColorBrush x:Key="RegionBrush"          Color="{DynamicResource ControlFillColorDefault}"/>
+    <SolidColorBrush x:Key="SecondaryRegionBrush" Color="{DynamicResource CardBackgroundFillColorDefault}"/>
+    <SolidColorBrush x:Key="BorderBrush"          Color="{DynamicResource ControlStrokeColorDefault}"/>
+
+    <!--
+        以下键按需补充。原则：
+        - 只桥接 DESIGN.md §2.2 表中列出的语义键
+        - 禁止在业务代码中直接引用 HandyControl 的原始色板键
+          （如 DarkPrimaryBrush），那会绕过本桥接层，
+          导致切换主题时颜色不同步
+    -->
+
+</ResourceDictionary>

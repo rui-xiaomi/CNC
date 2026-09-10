@@ -1,0 +1,4 @@
+interface:
+  display_name: "WPF 桌面工作流"
+  short_description: "让 AI 编程流程直接适用于 WPF 桌面项目"
+  default_prompt: "使用 $wpf-desktop-workflow 为当前 WPF 项目建立并执行桌面端设计、PRD、测试与验收流程。"
