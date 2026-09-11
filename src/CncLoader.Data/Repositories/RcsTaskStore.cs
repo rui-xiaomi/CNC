@@ -44,14 +44,38 @@ public sealed class RcsTaskStore : IRcsTaskStore
         return entity.Id;
     }
 
+    public async Task<bool> BindRemoteIdAsync(string localTaskId, string remoteTaskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(localTaskId) || string.IsNullOrWhiteSpace(remoteTaskId))
+            return false;
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var t = await FindAsync(db, localTaskId, ct);
+        if (t is null) return false;
+        if (string.Equals(t.RcsRemoteId, remoteTaskId, StringComparison.Ordinal)
+            || string.Equals(t.RcsTaskId, remoteTaskId, StringComparison.Ordinal))
+        {
+            MarkDispatched(t);
+            await db.SaveChangesAsync(ct);
+            return true;
+        }
+
+        var taken = await db.AgvTasks.AnyAsync(
+            x => x.Id != t.Id && (x.RcsTaskId == remoteTaskId || x.RcsRemoteId == remoteTaskId), ct);
+        if (taken) return false;
+
+        t.RcsRemoteId = remoteTaskId;
+        MarkDispatched(t);
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     public async Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+        var t = await FindAsync(db, rcsTaskId, ct);
         if (t is null) return;
-        t.TaskState = RcsTaskState.Dispatched;
-        t.TaskStatus = "1";
-        t.DispatchTime = DateTime.Now;
+        MarkDispatched(t);
         await db.SaveChangesAsync(ct);
     }
 
@@ -59,7 +83,7 @@ public sealed class RcsTaskStore : IRcsTaskStore
         string? error = null, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+        var t = await FindAsync(db, rcsTaskId, ct);
         if (t is null) return false;
         t.TaskState = taskState;
         if (rcsStatus is not null) t.RcsStatus = rcsStatus;
@@ -80,7 +104,7 @@ public sealed class RcsTaskStore : IRcsTaskStore
     public async Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+        var t = await FindAsync(db, rcsTaskId, ct);
         if (t is null) return;
         t.RedoCount += 1;
         t.TaskState = RcsTaskState.Dispatched;
@@ -91,9 +115,8 @@ public sealed class RcsTaskStore : IRcsTaskStore
     public async Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        // 单条条件更新：taskId + 候选态 FAILED + RedoCount&lt;max；并发最多一人 Claim 成功。
         var affected = await db.AgvTasks
-            .Where(x => x.RcsTaskId == rcsTaskId
+            .Where(x => (x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId)
                         && x.TaskState == RcsTaskState.Failed
                         && x.RedoCount < maxRedo)
             .ExecuteUpdateAsync(s => s
@@ -104,7 +127,7 @@ public sealed class RcsTaskStore : IRcsTaskStore
         if (affected > 0) return AutoRedoClaimResult.Claimed;
 
         var row = await db.AgvTasks.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+            .FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId, ct);
         return AutoRedoClaimRules.ClassifyMiss(
             row is not null, row?.TaskState, row?.RedoCount ?? 0, maxRedo);
     }
@@ -112,12 +135,12 @@ public sealed class RcsTaskStore : IRcsTaskStore
     public async Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+        var t = await FindAsync(db, rcsTaskId, ct);
         if (t is null)
             throw new InvalidOperationException($"任务不存在：{rcsTaskId}");
         if (t.TaskState != RcsTaskState.Canceled)
             throw new InvalidOperationException($"仅已取消（CANCELED）任务可确认人工处理，当前状态为 {t.TaskState}");
-        if (t.CancelManualFlag == "1") return; // 幂等
+        if (t.CancelManualFlag == "1") return;
         t.CancelManualFlag = "1";
         await db.SaveChangesAsync(ct);
     }
@@ -125,7 +148,8 @@ public sealed class RcsTaskStore : IRcsTaskStore
     public async Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await db.AgvTasks.AsNoTracking().FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId, ct);
+        var t = await db.AgvTasks.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId, ct);
         return t is null ? null : Map(t);
     }
 
@@ -148,8 +172,21 @@ public sealed class RcsTaskStore : IRcsTaskStore
             .ToListAsync(ct);
     }
 
+    private static Task<AgvTask?> FindAsync(CncDbContext db, string id, CancellationToken ct)
+        => db.AgvTasks.FirstOrDefaultAsync(x => x.RcsTaskId == id || x.RcsRemoteId == id, ct);
+
+    private static void MarkDispatched(AgvTask t)
+    {
+        t.TaskState = RcsTaskState.Dispatched;
+        t.TaskStatus = "1";
+        t.DispatchTime = DateTime.Now;
+    }
+
     private static RcsTaskRow Map(AgvTask t) => new(
         t.Id, t.RcsTaskId, t.RcsKind, t.TaskType, t.TaskState, t.RcsStatus, t.Priority,
         t.FromFrameCode, t.ToFrameCode, t.EquipmentId, t.PositionId, t.MaterialId, t.TxnId,
-        t.ReqParam, t.RedoCount, t.CancelManualFlag, t.SendTime, t.DispatchTime, t.FinishTime, t.ErrorMsg);
+        t.ReqParam, t.RedoCount, t.CancelManualFlag, t.SendTime, t.DispatchTime, t.FinishTime, t.ErrorMsg)
+    {
+        RcsRemoteId = t.RcsRemoteId
+    };
 }

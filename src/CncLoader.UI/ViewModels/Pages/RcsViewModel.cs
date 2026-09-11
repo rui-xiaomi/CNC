@@ -1134,7 +1134,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
             var rows = await _rcs.GetRecentTasksAsync(100);
             ReplaceOnUi(Tasks, rows);
             if (!string.IsNullOrWhiteSpace(keepId))
-                SelectedTask = Tasks.FirstOrDefault(t => t.RcsTaskId == keepId);
+                SelectedTask = Tasks.FirstOrDefault(t =>
+                    t.RcsTaskId == keepId || t.RcsRemoteId == keepId);
         }
         catch (Exception ex) { StatusMessage = $"任务加载失败：{ex.Message}"; }
     }

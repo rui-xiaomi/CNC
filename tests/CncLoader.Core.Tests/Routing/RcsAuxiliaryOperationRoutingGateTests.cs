@@ -1,6 +1,7 @@
 using CncLoader.Communication.Rcs;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.Tests.Rcs;
 using CncLoader.Data.Repositories;
 using Microsoft.Extensions.Logging.Abstractions;
 using static CncLoader.Core.Tests.Routing.TypedEndpointSeedShapes;
@@ -77,6 +78,45 @@ public sealed class RcsAuxiliaryOperationRoutingGateTests
     }
 
     // ─── Grab：合法基线 PASS（业务成功）+ 门禁缺口 RED ───────────
+
+    [Test]
+    public async Task Grab_Ack带task_id_保存回包号_取消用回包号()
+    {
+        _client.NextRawResponse = RcsFieldAck.GrabAck();
+        var result = await DispatchGrabAsync(LoadAreaCode, UnloadAreaCode);
+        const string remote = RcsFieldAck.TaskId;
+        var local = _tasks.Created.Single().RcsTaskId;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.TaskId, Is.EqualTo(local));
+            Assert.That(local, Is.Not.EqualTo(remote));
+            Assert.That(_tasks.Snapshot(local)?.TaskState, Is.EqualTo(RcsTaskState.Dispatched));
+            Assert.That(_tasks.Snapshot(local)?.RcsRemoteId, Is.EqualTo(remote));
+            Assert.That(_tasks.GetByTaskIdAsync(remote).Result?.RcsTaskId, Is.EqualTo(local));
+        });
+
+        var cancel = await _svc.CancelAsync(local);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cancel.Success, Is.True);
+            Assert.That(_client.CancelTaskIds, Is.EqualTo(new[] { remote }));
+        });
+    }
+
+    [Test]
+    public async Task Grab_Ack无Data_仍用本地号()
+    {
+        var result = await DispatchGrabAsync(LoadAreaCode, UnloadAreaCode);
+        var local = _tasks.Created.Single().RcsTaskId;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.TaskId, Is.EqualTo(local));
+            Assert.That(_tasks.Snapshot(local)?.TaskState, Is.EqualTo(RcsTaskState.Dispatched));
+        });
+    }
 
     [Test]
     public async Task Grab_AllActive_AreaToArea_Baseline_Succeeds()

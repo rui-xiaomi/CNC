@@ -844,19 +844,11 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         if (unfinished.Count == 0)
             return (ReconcilePhaseResult.Ok(ReconcilePhase.OneB), settled);
 
-        var req = new QueryTaskRequest
-        {
-            Condition = new QueryCondition
-            {
-                Relation = "AND",
-                Conditions =
-                {
-                    new QueryConditionItem { Key = "taskId", Value = string.Join(",", unfinished), Operator = "IN", Order = "None" }
-                }
-            },
-            PageIndex = 1,
-            PageSize = Math.Max(10, unfinished.Count)
-        };
+        var queryIds = unfinished.Where(id => !RcsTaskId.IsAssignedRemoteId(id)).ToList();
+        if (queryIds.Count == 0)
+            return (ReconcilePhaseResult.Ok(ReconcilePhase.OneB), settled);
+
+        var req = QueryTaskRequest.ForLocalIds(queryIds);
         var result = await _taskSvc.QueryAsync(req, ct);
         var queryPhase = StartupReconcileCoordinator.MapQueryResult(
             result.Success, result.Message ?? result.Error);
@@ -866,13 +858,14 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return (queryPhase, settled);
         }
 
-        foreach (var (taskId, rcsStatus) in ParseQueryItems(result.RawResponse, _logger))
+        foreach (var (rawId, rcsStatus) in ParseQueryItems(result.RawResponse, _logger))
         {
             var state = RcsStatusMapper.ToTaskState(rcsStatus);
             if (state is null || !RcsStatusMapper.IsTerminal(state)) continue;
 
-            var row = await _taskStore.GetByTaskIdAsync(taskId, ct);
+            var row = await _taskStore.GetByTaskIdAsync(rawId, ct);
             if (row is null) continue;
+            var taskId = row.RcsTaskId ?? rawId;
             if (row.TaskState != state)
             {
                 if (!await _taskStore.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct))
@@ -2070,10 +2063,11 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
 
             if (prepared.Status == ReservationFirstDispatchStatus.Dispatched
                 && d.Target == UnloadTarget.NextMachineCell
-                && !TryMarkInboundDispatched(d, taskId))
+                && !TryMarkInboundDispatched(d, taskId, prepared.DispatchResult?.TaskId ?? taskId))
             {
-                await CloseOrphanTaskAsync(taskId, "UNLOAD_HANDOFF_RESERVATION_LOST", ct);
-                result = RcsResult.Fail("", "直接交接预登记在下发窗口内丢失，任务已收口") with { TaskId = taskId };
+                var orphanId = prepared.DispatchResult?.TaskId ?? taskId;
+                await CloseOrphanTaskAsync(orphanId, "UNLOAD_HANDOFF_RESERVATION_LOST", ct);
+                result = RcsResult.Fail("", "直接交接预登记在下发窗口内丢失，任务已收口") with { TaskId = orphanId };
             }
             else
             {
@@ -2269,7 +2263,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         return false;
     }
 
-    private bool TryMarkInboundDispatched(UnloadDecision decision, string taskId)
+    private bool TryMarkInboundDispatched(UnloadDecision decision, string localTaskId, string assignedTaskId)
     {
         if (decision.DestEquipmentId is not long dstEq || decision.DestPositionId is not long dstPos)
             return false;
@@ -2277,9 +2271,17 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
         var key = (dstEq, dstPos);
         while (_expectedInbound.TryGetValue(key, out var current))
         {
-            if (!string.Equals(current.SourceTaskId, taskId, StringComparison.Ordinal)) return false;
-            if (current.IsDispatched) return true;
-            if (_expectedInbound.TryUpdate(key, current with { IsDispatched = true }, current)) return true;
+            if (current.IsDispatched
+                && string.Equals(current.SourceTaskId, assignedTaskId, StringComparison.Ordinal))
+                return true;
+            if (!string.Equals(current.SourceTaskId, localTaskId, StringComparison.Ordinal))
+                return false;
+            var next = current with
+            {
+                SourceTaskId = assignedTaskId,
+                IsDispatched = true
+            };
+            if (_expectedInbound.TryUpdate(key, next, current)) return true;
         }
         return false;
     }
@@ -2291,7 +2293,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
     {
         var reason = exception?.Message
             ?? (dispatchResult?.Success == true
-                ? "RCS 返回 taskId 与预生成 taskId 不一致"
+                ? "RCS 下发成功但未带回任务号"
                 : dispatchResult?.Error ?? dispatchResult?.Message ?? "RCS 下发失败");
         return rollbackSucceeded ? reason : $"{reason}；预记回滚失败，需人工核账";
     }

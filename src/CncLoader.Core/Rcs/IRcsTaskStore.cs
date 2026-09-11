@@ -8,6 +8,13 @@ public interface IRcsTaskStore
     /// <summary>先落库（TASK_STATE=CREATED），返回主键 ID1。</summary>
     Task<long> CreateAsync(RcsTaskRecord record, CancellationToken ct = default);
 
+    /// <summary>
+    /// 保存 RCS ACK 回包号到 <c>RCS_REMOTE_ID</c>，不改 <c>RCS_TASK_ID</c>（本地号）。
+    /// 目标回包号已被其它行占用或源行不存在返回 false。同号或已绑定同一回包号视为成功。
+    /// </summary>
+    Task<bool> BindRemoteIdAsync(string localTaskId, string remoteTaskId, CancellationToken ct = default)
+        => Task.FromResult(!string.IsNullOrWhiteSpace(localTaskId) && !string.IsNullOrWhiteSpace(remoteTaskId));
+
     /// <summary>下发成功：置 DISPATCHED + DISPATCH_TIME。</summary>
     Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default);
 
@@ -31,13 +38,13 @@ public interface IRcsTaskStore
     /// <summary>标记取消后人工处理已确认。仅 TASK_STATE=CANCELED 允许；任务不存在或状态不符抛 InvalidOperationException。</summary>
     Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);
 
-    /// <summary>按 taskId 取一行（不存在返回 null）。</summary>
+    /// <summary>按本地号或回包号取一行（不存在返回 null）。</summary>
     Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default);
 
     /// <summary>最近 N 条任务（倒序），供 UI 展示。</summary>
     Task<IReadOnlyList<RcsTaskRow>> GetRecentAsync(int limit = 100, CancellationToken ct = default);
 
-    /// <summary>全部未完结（CREATED/DISPATCHED/EXECUTING）任务的 taskId，供 queryTask 兜底轮询。</summary>
+    /// <summary>全部未完结（CREATED/DISPATCHED/EXECUTING）任务的本地 taskId，供 queryTask(key=Id) 兜底轮询。</summary>
     Task<IReadOnlyList<string>> GetUnfinishedTaskIdsAsync(CancellationToken ct = default);
 }
 
@@ -83,4 +90,8 @@ public sealed record RcsTaskRow(
     DateTime SendTime,
     DateTime? DispatchTime,
     DateTime? FinishTime,
-    string? ErrorMsg);
+    string? ErrorMsg)
+{
+    /// <summary>RCS ACK 回包号（<c>cancelTask</c> 用）。空则取消仍用 <see cref="RcsTaskId"/>。</summary>
+    public string? RcsRemoteId { get; init; }
+}

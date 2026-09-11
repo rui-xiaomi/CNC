@@ -87,4 +87,78 @@ public sealed class RcsAckParserTests
         var r = RcsResult.Fail("{}", "连接拒绝", 0, 5);
         Assert.That(RcsAckParser.IsHttpReachable(r), Is.False);
     }
+
+    [Test]
+    public void 现场回包_优先取Data里的task_id()
+    {
+        var id = RcsAckParser.TryReadAssignedTaskId(RcsFieldAck.GrabAck());
+        Assert.That(id, Is.EqualTo(RcsFieldAck.TaskId));
+    }
+
+    [Test]
+    public void 现场回包_不取request_id()
+    {
+        var id = RcsAckParser.TryReadAssignedTaskId(RcsFieldAck.GrabAck());
+        Assert.Multiple(() =>
+        {
+            Assert.That(id, Is.EqualTo(RcsFieldAck.TaskId));
+            Assert.That(id, Is.Not.EqualTo(RcsFieldAck.RequestId));
+        });
+    }
+
+    [Test]
+    public void Data为对象时取task_id()
+    {
+        var id = RcsAckParser.TryReadAssignedTaskId(
+            """{"Success":true,"Data":{"values":[{"json_msg":{"success":true,"state":{"booking":{"id":"BOOK-1"},"detail":{"phases":[{"activity":{"description":{"activities":[{"description":{"task_id":"TASK-FROM-NEST"}}]}}}]}}}}]}}""");
+        Assert.That(id, Is.EqualTo("TASK-FROM-NEST"));
+    }
+
+    [Test]
+    public void 无task_id时回退booking_id()
+    {
+        var id = RcsAckParser.TryReadAssignedTaskId(
+            """{"Success":true,"Data":{"values":[{"json_msg":{"success":true,"state":{"booking":{"id":"BOOK-ONLY"}}}}]}}""");
+        Assert.That(id, Is.EqualTo("BOOK-ONLY"));
+    }
+
+    [Test]
+    public void json_msg失败不取task_id()
+    {
+        var id = RcsAckParser.TryReadAssignedTaskId(
+            """{"Success":true,"Data":{"values":[{"json_msg":{"success":false,"state":{"booking":{"id":"NOPE"},"detail":{"task_id":"NOPE"}}}}]}}""");
+        Assert.That(id, Is.Null);
+    }
+
+    [Test]
+    public void 空Data不取号()
+    {
+        Assert.That(RcsAckParser.TryReadAssignedTaskId("""{"Success":true,"Message":"发送成功！","Data":null}"""), Is.Null);
+    }
+
+    [Test]
+    public void queryTask按本地ID批量IN()
+    {
+        var req = QueryTaskRequest.ForLocalIds(new[] { "L1-GB-20260911142538-9209", "L1-GB-20260911142539-9210" });
+        var item = req.Condition.Conditions.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(item.Key, Is.EqualTo("Id"));
+            Assert.That(item.Operator, Is.EqualTo("IN"));
+            Assert.That(item.Value, Is.EqualTo("L1-GB-20260911142538-9209,L1-GB-20260911142539-9210"));
+            Assert.That(req.PageSize, Is.EqualTo(10));
+        });
+    }
+
+    [Test]
+    public void 回包号与本地号可区分()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RcsTaskId.IsAssignedRemoteId("CNC_WMS_TASK_2_2026-09-11_0416355691"), Is.True);
+            Assert.That(RcsTaskId.IsAssignedRemoteId("L1-GB-20260911142538-9209"), Is.False);
+            Assert.That(RcsTaskId.IsAssignedRemoteId(null), Is.False);
+        });
+    }
+
 }

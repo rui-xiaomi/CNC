@@ -34,8 +34,10 @@ public class AgvTask
     [Key, Column("ID1"), DatabaseGenerated(DatabaseGeneratedOption.Identity)]
     public long Id { get; set; }
 
-    /// <summary>RCS 全局唯一 taskId（先落库后发送）。</summary>
+    /// <summary>本地下发 taskId（先落库后发送，queryTask key=Id）。</summary>
     [Column("RCS_TASK_ID")] public string? RcsTaskId { get; set; }
+    /// <summary>RCS ACK 回包号（cancelTask 用，形如 CNC_WMS_TASK_2_…）。</summary>
+    [Column("RCS_REMOTE_ID")] public string? RcsRemoteId { get; set; }
     /// <summary>RCS 接口种类 transit/grab/identify/pallet_return/change_frame。</summary>
     [Column("RCS_KIND")] public string? RcsKind { get; set; }
     [Column("WORKLINE_ID")] public long WorkLineId { get; set; }

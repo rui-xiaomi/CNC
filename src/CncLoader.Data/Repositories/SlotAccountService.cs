@@ -53,6 +53,18 @@ public sealed class SlotAccountService : ISlotAccountService
         return reserved;
     }
 
+    public async Task<bool> RebindTaskIdAsync(string fromTaskId, string toTaskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(fromTaskId) || string.IsNullOrWhiteSpace(toTaskId))
+            return false;
+        if (string.Equals(fromTaskId, toTaskId, StringComparison.Ordinal))
+            return true;
+        var ok = await _slotStore.RebindReservedTaskIdAsync(fromTaskId, toTaskId, ct);
+        if (ok)
+            _logger.LogInformation("预记 taskId 回写 {From} → {To}", fromTaskId, toTaskId);
+        return ok;
+    }
+
     public async Task<ReservedSlot?> FindReservedAsync(string taskId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return null;

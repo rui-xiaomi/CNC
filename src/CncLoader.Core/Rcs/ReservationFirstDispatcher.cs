@@ -58,13 +58,14 @@ public sealed class ReservationFirstDispatcher
             };
         }
 
+        string? assignedTaskId = null;
         try
         {
             RoutingAvailabilityResult route;
             try { route = await validateFinalAsync(taskId, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                await TryRollbackAsync(taskId, rollbackAsync, CancellationToken.None);
+                await TryRollbackAsync(taskId, null, rollbackAsync, CancellationToken.None);
                 throw;
             }
             catch (Exception ex)
@@ -77,7 +78,7 @@ public sealed class ReservationFirstDispatcher
                     RouteResult = RoutingAvailabilityResult.Unavailable(
                         RoutingUnavailableReason.ConfigurationUnavailable,
                         "Configuration", null, "最终路由校验异常，拒绝下发"),
-                    RollbackSucceeded = await TryRollbackAsync(taskId, rollbackAsync, ct)
+                    RollbackSucceeded = await TryRollbackAsync(taskId, null, rollbackAsync, ct)
                 };
             }
 
@@ -88,12 +89,14 @@ public sealed class ReservationFirstDispatcher
                     Status = ReservationFirstDispatchStatus.RouteUnavailable,
                     Reservation = reservation,
                     RouteResult = route,
-                    RollbackSucceeded = await TryRollbackAsync(taskId, rollbackAsync, ct)
+                    RollbackSucceeded = await TryRollbackAsync(taskId, null, rollbackAsync, ct)
                 };
             }
 
             var dispatch = await dispatchAsync(taskId, ct);
-            if (dispatch.Success && string.Equals(dispatch.TaskId, taskId, StringComparison.Ordinal))
+            assignedTaskId = dispatch.TaskId;
+            // 下发成功后 TaskId 可能被回写成 RCS Data.task_id，与预记用的本地号不同。
+            if (dispatch.Success && !string.IsNullOrWhiteSpace(dispatch.TaskId))
             {
                 return new ReservationFirstDispatchResult<TReservation>
                 {
@@ -110,12 +113,12 @@ public sealed class ReservationFirstDispatcher
                 Reservation = reservation,
                 DispatchResult = dispatch,
                 RouteResult = route,
-                RollbackSucceeded = await TryRollbackAsync(taskId, rollbackAsync, ct)
+                RollbackSucceeded = await TryRollbackAsync(taskId, assignedTaskId, rollbackAsync, ct)
             };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryRollbackAsync(taskId, rollbackAsync, CancellationToken.None);
+            await TryRollbackAsync(taskId, assignedTaskId, rollbackAsync, CancellationToken.None);
             throw;
         }
         catch (Exception ex)
@@ -125,12 +128,25 @@ public sealed class ReservationFirstDispatcher
                 Status = ReservationFirstDispatchStatus.DispatchFailed,
                 Reservation = reservation,
                 Exception = ex,
-                RollbackSucceeded = await TryRollbackAsync(taskId, rollbackAsync, ct)
+                RollbackSucceeded = await TryRollbackAsync(taskId, assignedTaskId, rollbackAsync, ct)
             };
         }
     }
 
     private static async Task<bool> TryRollbackAsync(
+        string localTaskId,
+        string? assignedTaskId,
+        Func<string, CancellationToken, Task<bool>> rollbackAsync,
+        CancellationToken ct)
+    {
+        var ok = await TryRollbackOneAsync(localTaskId, rollbackAsync, ct);
+        if (!string.IsNullOrWhiteSpace(assignedTaskId)
+            && !string.Equals(assignedTaskId, localTaskId, StringComparison.Ordinal))
+            ok = await TryRollbackOneAsync(assignedTaskId, rollbackAsync, ct) || ok;
+        return ok;
+    }
+
+    private static async Task<bool> TryRollbackOneAsync(
         string taskId,
         Func<string, CancellationToken, Task<bool>> rollbackAsync,
         CancellationToken ct)

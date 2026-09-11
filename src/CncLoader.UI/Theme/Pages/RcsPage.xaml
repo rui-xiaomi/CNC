@@ -31,10 +31,17 @@
                             <DataGrid ItemsSource="{Binding Tasks}" SelectedItem="{Binding SelectedTask}"
                                       Style="{StaticResource DataGridCompact}" RowHeight="26">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="任务号" Binding="{Binding RcsTaskId}" Width="280" MinWidth="200">
+                                    <DataGridTextColumn Header="任务号" Binding="{Binding RcsTaskId}" Width="240" MinWidth="180">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
                                                 <Setter Property="ToolTip" Value="{Binding RcsTaskId}"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="240" MinWidth="180">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
+                                                <Setter Property="ToolTip" Value="{Binding RcsRemoteId}"/>
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>

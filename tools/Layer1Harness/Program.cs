@@ -106,7 +106,7 @@ internal static class Program
         {
             Condition = new QueryCondition
             {
-                Conditions = [new QueryConditionItem { Key = "TaskId", Value = transitId, Operator = "IN" }]
+                Conditions = [new QueryConditionItem { Key = QueryTaskRequest.IdKey, Value = transitId, Operator = "IN" }]
             }
         });
         Assert(log, "queryTask 应答 OK", query.Ok, ref failed);

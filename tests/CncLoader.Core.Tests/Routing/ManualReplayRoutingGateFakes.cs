@@ -104,6 +104,9 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public List<string>? OrderSink { get; set; }
     /// <summary>下一次 Transit 返回失败（非路由；FailureKind=SendFailed）。</summary>
     public bool FailNextTransit { get; set; }
+    /// <summary>出站 ACK 原文；空则 <c>{}</c>。用于解析并保存 RCS <c>task_id</c> 到 <c>RCS_REMOTE_ID</c>。</summary>
+    public string? NextRawResponse { get; set; }
+    public List<string> CancelTaskIds { get; } = new();
 
     public Task<RcsResult> TransitTaskAsync(TransitTaskRequest req, CancellationToken ct = default)
     {
@@ -116,7 +119,7 @@ internal sealed class FakeRcsHttpClient : IRcsClient
             FailNextTransit = false;
             return Task.FromResult(RcsResult.Fail(req.TaskId ?? "", "rcs-send-failed"));
         }
-        return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "{}", null, 1)
+        return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", NextRawResponse ?? "{}", null, 1)
         {
             TaskId = req.TaskId
         });
@@ -126,7 +129,7 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     {
         ExcuteCount++;
         OrderSink?.Add("RcsExcute");
-        return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "{}", null, 1)
+        return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", NextRawResponse ?? "{}", null, 1)
         {
             TaskId = req.TaskId
         });
@@ -138,14 +141,18 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public Task<RcsResult> CancelTaskAsync(CancelTaskRequest req, CancellationToken ct = default)
     {
         CancelCount++;
+        CancelTaskIds.Add(req.TaskId ?? "");
         if (CancelFailMessage is { } msg)
             return Task.FromResult(new RcsResult(true, 200, false, msg, "{}", "{}", null, 1));
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "{}", null, 1));
     }
 
+    public QueryTaskRequest? LastQuery { get; private set; }
+
     public Task<RcsResult> QueryTaskAsync(QueryTaskRequest req, CancellationToken ct = default)
     {
         QueryCount++;
+        LastQuery = req;
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", "[]", null, 1));
     }
 
@@ -222,13 +229,36 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
         }
     }
 
+    public Task<bool> BindRemoteIdAsync(string localTaskId, string remoteTaskId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(localTaskId) || string.IsNullOrWhiteSpace(remoteTaskId))
+                return Task.FromResult(false);
+            if (!TryResolve(localTaskId, out var key, out var r))
+                return Task.FromResult(false);
+            if (_rows.Values.Any(x =>
+                    !string.Equals(x.RcsTaskId, key, StringComparison.Ordinal)
+                    && (string.Equals(x.RcsRemoteId, remoteTaskId, StringComparison.Ordinal)
+                        || string.Equals(x.RcsTaskId, remoteTaskId, StringComparison.Ordinal))))
+                return Task.FromResult(false);
+            _rows[key] = r with
+            {
+                RcsRemoteId = remoteTaskId,
+                TaskState = RcsTaskState.Dispatched,
+                DispatchTime = DateTime.Now
+            };
+            return Task.FromResult(true);
+        }
+    }
+
     public Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default)
     {
         lock (_gate)
         {
             SetDispatchedCount++;
-            if (_rows.TryGetValue(rcsTaskId, out var r))
-                _rows[rcsTaskId] = r with { TaskState = RcsTaskState.Dispatched, DispatchTime = DateTime.Now };
+            if (TryResolve(rcsTaskId, out var key, out var r))
+                _rows[key] = r with { TaskState = RcsTaskState.Dispatched, DispatchTime = DateTime.Now };
             return Task.CompletedTask;
         }
     }
@@ -239,8 +269,8 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
         lock (_gate)
         {
             UpdateStateCount++;
-            if (!_rows.TryGetValue(rcsTaskId, out var r)) return Task.FromResult(false);
-            _rows[rcsTaskId] = r with
+            if (!TryResolve(rcsTaskId, out var key, out var r)) return Task.FromResult(false);
+            _rows[key] = r with
             {
                 TaskState = taskState,
                 RcsStatus = rcsStatus,
@@ -256,8 +286,8 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
         lock (_gate)
         {
             IncrementRedoCount++;
-            if (_rows.TryGetValue(rcsTaskId, out var r))
-                _rows[rcsTaskId] = r with
+            if (TryResolve(rcsTaskId, out var key, out var r))
+                _rows[key] = r with
                 {
                     RedoCount = r.RedoCount + 1,
                     TaskState = RcsTaskState.Dispatched,
@@ -283,14 +313,14 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
 
         lock (_gate)
         {
-            if (!_rows.TryGetValue(rcsTaskId, out var r))
+            if (!TryResolve(rcsTaskId, out var key, out var r))
                 return AutoRedoClaimResult.NotFound;
             if (r.RedoCount >= maxRedo)
                 return AutoRedoClaimResult.LimitReached;
             if (!AutoRedoClaimRules.IsClaimableState(r.TaskState))
                 return AutoRedoClaimResult.NotClaimable;
 
-            _rows[rcsTaskId] = r with
+            _rows[key] = r with
             {
                 RedoCount = r.RedoCount + 1,
                 TaskState = RcsTaskState.Dispatched,
@@ -312,7 +342,30 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
     public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
     {
         lock (_gate)
-            return Task.FromResult(_rows.TryGetValue(rcsTaskId, out var r) ? r : null);
+            return Task.FromResult(TryResolve(rcsTaskId, out _, out var r) ? r : null);
+    }
+
+    private bool TryResolve(string id, out string key, out RcsTaskRow row)
+    {
+        if (_rows.TryGetValue(id, out row!))
+        {
+            key = id;
+            return true;
+        }
+
+        foreach (var kv in _rows)
+        {
+            if (string.Equals(kv.Value.RcsRemoteId, id, StringComparison.Ordinal))
+            {
+                key = kv.Key;
+                row = kv.Value;
+                return true;
+            }
+        }
+
+        key = "";
+        row = null!;
+        return false;
     }
 
     public Task<IReadOnlyList<RcsTaskRow>> GetRecentAsync(int limit = 100, CancellationToken ct = default)

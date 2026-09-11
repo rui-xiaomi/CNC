@@ -66,6 +66,10 @@ public interface ISlotAccountStore
     /// <summary>取料回滚（TAKE）。</summary>
     Task<bool> RollbackTakeAsync(string taskId, CancellationToken ct = default)
         => throw new NotSupportedException("此 Store 未实现预记状态机接缝");
+
+    /// <summary>Reserved 槽 REMARK 从本地 taskId 改到 RCS <c>task_id</c>。无匹配行仍返回 true。</summary>
+    Task<bool> RebindReservedTaskIdAsync(string fromTaskId, string toTaskId, CancellationToken ct = default)
+        => Task.FromResult(true);
 }
 
 /// <summary>条件更新尝试结果：affected + 只读重查快照；InvalidTargetState 表示目标态非法未执行 UPDATE。</summary>

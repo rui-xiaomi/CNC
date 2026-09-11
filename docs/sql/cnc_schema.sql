@@ -327,7 +327,8 @@ CREATE TABLE MAS_AUTO_WORK_RECORD (
 -- 12. AGV/RCS 任务记录（第四阶段扩展：承载 RCS 任务全生命周期）
 CREATE TABLE MAS_AUTO_AGV_TASK (
   ID1             BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
-  RCS_TASK_ID     VARCHAR(50) NULL COMMENT 'RCS 全局唯一 taskId（先落库后发送）',
+  RCS_TASK_ID     VARCHAR(50) NULL COMMENT '本地下发 taskId（L1-GB-…），queryTask key=Id',
+  RCS_REMOTE_ID   VARCHAR(50) NULL COMMENT 'RCS ACK 回包号（CNC_WMS_TASK_2_…），cancelTask 用',
   RCS_KIND        VARCHAR(20) NULL COMMENT 'RCS 接口种类 transit/grab/identify/pallet_return/change_frame',
   WORKLINE_ID     BIGINT      NOT NULL COMMENT '关联线体',
   TASK_TYPE       CHAR(1)     NOT NULL COMMENT '0=上料 1=下料 2=转序',
@@ -354,6 +355,7 @@ CREATE TABLE MAS_AUTO_AGV_TASK (
   PRIMARY KEY (ID1),
   KEY idx_agv_line (WORKLINE_ID),
   KEY idx_agv_rcs_task (RCS_TASK_ID),
+  KEY idx_agv_rcs_remote (RCS_REMOTE_ID),
   KEY idx_agv_task_state (TASK_STATE),
   KEY idx_agv_txn (TXN_ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AGV/RCS任务记录';

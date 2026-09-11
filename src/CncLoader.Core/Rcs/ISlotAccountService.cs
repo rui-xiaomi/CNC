@@ -24,6 +24,13 @@ public interface ISlotAccountService
     /// 返回选中的槽位（含 materialId）；无占用槽或并发冲突返回 null。用于上料/中转架回流从料架取件。</summary>
     Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default);
 
+    /// <summary>
+    /// 预记 REMARK 从本地 taskId 改到 RCS <c>task_id</c>。无预记视为成功。
+    /// 默认空实现供旧 fake 编译。
+    /// </summary>
+    Task<bool> RebindTaskIdAsync(string fromTaskId, string toTaskId, CancellationToken ct = default)
+        => Task.FromResult(true);
+
     /// <summary>按 taskId 查仍有效的预记；无则 null。默认空实现供旧 fake 编译。</summary>
     Task<ReservedSlot?> FindReservedAsync(string taskId, CancellationToken ct = default)
         => Task.FromResult<ReservedSlot?>(null);

@@ -507,6 +507,43 @@ public sealed class RcsTaskTrackerRoutingGateTests
         Assert.That(unfinished, Does.Not.Contain(orphanId), "FAILED 后不得再进未完结轮询列表");
     }
 
+    [Test]
+    public async Task Poll_QueryUsesIdKeyAndLocalTaskId()
+    {
+        const string local = "L1-GB-20260911142538-9209";
+        _tasks.Seed(new RcsTaskRow(
+            3, local, "grab", "0", RcsTaskState.Dispatched, null, 5,
+            LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
+            0, "0", DateTime.Now, DateTime.Now, null, null)
+        {
+            RcsRemoteId = "CNC_WMS_TASK_2_2026-09-11_0416355691"
+        });
+
+        await _tracker.ProbePollOnceAsync();
+
+        var cond = _client.LastQuery?.Condition.Conditions.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(_client.LastQuery, Is.Not.Null);
+            Assert.That(cond?.Key, Is.EqualTo(QueryTaskRequest.IdKey));
+            Assert.That(cond?.Operator, Is.EqualTo("IN"));
+            Assert.That(cond?.Value, Is.EqualTo(local));
+            Assert.That(cond?.Value, Does.Not.Contain("CNC_WMS_"));
+        });
+    }
+
+    [Test]
+    public async Task Poll_SkipsAlreadyReboundRemoteIds()
+    {
+        _tasks.Seed(new RcsTaskRow(
+            4, "CNC_WMS_TASK_2_2026-09-11_0214329453", "grab", "0", RcsTaskState.Dispatched, null, 5,
+            LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
+            0, "0", DateTime.Now, DateTime.Now, null, null));
+
+        await _tracker.ProbePollOnceAsync();
+        Assert.That(_client.QueryCount, Is.EqualTo(0), "已回写成回包号的历史行不得再按 ID 去查");
+    }
+
     // ─── helpers ─────────────────────────────────────────────────
 
     private void AssertDisabledNoConsume(RcsTaskRow before, RcsTaskRow after, string label)

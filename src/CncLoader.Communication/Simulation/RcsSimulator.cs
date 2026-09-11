@@ -132,7 +132,7 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
         app.MapPost("/api/ExternalInterfaces/queryTask", async (HttpContext ctx) =>
         {
             var raw = await ReadBodyAsync(ctx);
-            // 查询兜底：按 condition IN 的 taskId 列表从内存表回真实 status。
+            // 查询兜底：按 condition IN 的 ID 列表（本地 taskId）从内存表回真实 status。
             var asked = ParseQueryTaskIds(raw);
             var items = new List<object>();
             foreach (var id in asked)
@@ -341,7 +341,7 @@ public sealed class RcsSimulator : IHostedService, IAsyncDisposable
         catch { return null; }
     }
 
-    /// <summary>解析 queryTask 请求 condition.conditions 中 IN 的 taskId 列表（逗号分隔）。</summary>
+    /// <summary>解析 queryTask 请求 condition.conditions 中 IN 的 ID 列表（逗号分隔）。</summary>
     private static IReadOnlyList<string> ParseQueryTaskIds(string raw)
     {
         var list = new List<string>();

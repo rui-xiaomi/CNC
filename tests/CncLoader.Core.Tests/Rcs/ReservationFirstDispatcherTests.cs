@@ -97,6 +97,29 @@ public sealed class ReservationFirstDispatcherTests
     }
 
     [Test]
+    public async Task Rcs失败且带回包号时本地与回包都回滚()
+    {
+        var dispatcher = new ReservationFirstDispatcher();
+        var rolled = new List<string>();
+
+        var result = await dispatcher.ExecuteAsync(
+            "task-local",
+            (_, _) => Task.FromResult<object?>(new object()),
+            AlwaysAvailable,
+            (_, _) => Task.FromResult(new RcsResult(true, 200, false, "拒绝", "", "{}", null, 1)
+            {
+                TaskId = "CNC_WMS_TASK_2_FAIL"
+            }),
+            (id, _) => { rolled.Add(id); return Task.FromResult(true); });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(ReservationFirstDispatchStatus.DispatchFailed));
+            Assert.That(rolled, Is.EqualTo(new[] { "task-local", "CNC_WMS_TASK_2_FAIL" }));
+        });
+    }
+
+    [Test]
     public async Task Rcs明确失败时应回滚预记()
     {
         var dispatcher = new ReservationFirstDispatcher();
@@ -165,7 +188,7 @@ public sealed class ReservationFirstDispatcherTests
     }
 
     [Test]
-    public async Task Rcs返回不同TaskId时应按失败回滚()
+    public async Task Rcs回包换成task_id时应视为下发成功()
     {
         var dispatcher = new ReservationFirstDispatcher();
         var rolledBack = false;
@@ -174,7 +197,48 @@ public sealed class ReservationFirstDispatcherTests
             "task-expected",
             (_, _) => Task.FromResult<object?>(new object()),
             AlwaysAvailable,
-            (_, _) => Task.FromResult(Success("task-other")),
+            (_, _) => Task.FromResult(Success("CNC_WMS_TASK_2_2026-09-11_0225134113")),
+            (_, _) => { rolledBack = true; return Task.FromResult(true); });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(ReservationFirstDispatchStatus.Dispatched));
+            Assert.That(rolledBack, Is.False);
+            Assert.That(result.DispatchResult!.TaskId, Is.EqualTo("CNC_WMS_TASK_2_2026-09-11_0225134113"));
+        });
+    }
+
+    [Test]
+    public async Task 下发抛异常时本地号与回包号都要尝试回滚()
+    {
+        var dispatcher = new ReservationFirstDispatcher();
+        var rolled = new List<string>();
+
+        var result = await dispatcher.ExecuteAsync(
+            "task-local",
+            (_, _) => Task.FromResult<object?>(new object()),
+            AlwaysAvailable,
+            (_, _) => throw new InvalidOperationException("回写后失败"),
+            (id, _) => { rolled.Add(id); return Task.FromResult(true); });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(ReservationFirstDispatchStatus.DispatchFailed));
+            Assert.That(rolled, Is.EqualTo(new[] { "task-local" }));
+        });
+    }
+
+    [Test]
+    public async Task Rcs成功但TaskId为空时应回滚()
+    {
+        var dispatcher = new ReservationFirstDispatcher();
+        var rolledBack = false;
+
+        var result = await dispatcher.ExecuteAsync(
+            "task-expected",
+            (_, _) => Task.FromResult<object?>(new object()),
+            AlwaysAvailable,
+            (_, _) => Task.FromResult(new RcsResult(true, 200, true, "ok", "", "{}", null, 1)),
             (_, _) => { rolledBack = true; return Task.FromResult(true); });
 
         Assert.Multiple(() =>

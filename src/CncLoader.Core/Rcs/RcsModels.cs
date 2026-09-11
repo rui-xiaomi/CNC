@@ -150,9 +150,37 @@ public sealed class CancelTaskRequest : RcsRequestBase
 /// <summary>3.4 查询任务 queryTask（无公共字段，仅条件 + 分页）。</summary>
 public sealed class QueryTaskRequest
 {
+    /// <summary>现场契约查询字段。值为下发时的本地 taskId（<c>L1-GB-…</c>），不是回包号。</summary>
+    public const string IdKey = "Id";
+
     [JsonPropertyName("condition")] public QueryCondition Condition { get; set; } = new();
     [JsonPropertyName("pageIndex")] public int PageIndex { get; set; } = 1;
     [JsonPropertyName("pageSize")] public int PageSize { get; set; } = 100;
+
+    /// <summary>按本地 taskId 批量 IN 查询（对账 / 轮询兜底）。</summary>
+    public static QueryTaskRequest ForLocalIds(IReadOnlyList<string> localIds)
+    {
+        var ids = localIds ?? Array.Empty<string>();
+        return new QueryTaskRequest
+        {
+            Condition = new QueryCondition
+            {
+                Relation = "AND",
+                Conditions =
+                {
+                    new QueryConditionItem
+                    {
+                        Key = IdKey,
+                        Value = string.Join(",", ids),
+                        Operator = "IN",
+                        Order = "None"
+                    }
+                }
+            },
+            PageIndex = 1,
+            PageSize = Math.Max(10, ids.Count)
+        };
+    }
 }
 
 public sealed class QueryCondition

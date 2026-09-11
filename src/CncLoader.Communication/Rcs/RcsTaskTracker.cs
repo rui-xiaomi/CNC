@@ -14,7 +14,7 @@ namespace CncLoader.Communication.Rcs;
 /// <summary>
 /// RCS 任务跟踪器（第四阶段④，<see cref="IHostedService"/>）。
 /// 三职责：
-/// 1) 兜底轮询——按 <see cref="RcsOptions.PollIntervalMs"/> 取未完结 taskId 批量 queryTask（IN），
+/// 1) 兜底轮询——按 <see cref="RcsOptions.PollIntervalMs"/> 取未完结本地 taskId 批量 queryTask（key=Id IN），
 ///    按 §4.5 11→5 映射推进态；RCS 查无此任务 → 告警人工。
 /// 2) 自动 redo——订阅 <see cref="IRcsCallbackNotifier.TaskStatusReceived"/>，FAILED 态调用
 ///    <see cref="IRcsTaskService.AutoRedispatchAsync"/>（门禁后原子 Claim 再发送），
@@ -100,23 +100,13 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
 
     private async Task PollOnceAsync(CancellationToken ct)
     {
-        var ids = await _store.GetUnfinishedTaskIdsAsync(ct);
+        var ids = (await _store.GetUnfinishedTaskIdsAsync(ct))
+            .Where(id => !RcsTaskId.IsAssignedRemoteId(id))
+            .ToList();
         if (ids.Count == 0) return;
 
-        // 批量 queryTask：condition IN taskId 列表。
-        var req = new QueryTaskRequest
-        {
-            Condition = new QueryCondition
-            {
-                Relation = "AND",
-                Conditions =
-                {
-                    new QueryConditionItem { Key = "taskId", Value = string.Join(",", ids), Operator = "IN", Order = "None" }
-                }
-            },
-            PageIndex = 1,
-            PageSize = Math.Max(10, ids.Count)
-        };
+        // 批量 queryTask：key=Id IN 本地 taskId（L1-GB-…），不是回包号。
+        var req = QueryTaskRequest.ForLocalIds(ids);
 
         var result = await _taskSvc.QueryAsync(req, ct);
         if (!result.Success)
@@ -131,8 +121,10 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         {
             foreach (var (taskId, status) in ParseItems(result.RawResponse, _logger))
             {
-                found.Add(taskId);
-                await ApplyPollStateAsync(taskId, status, ct);
+                var row = await _store.GetByTaskIdAsync(taskId, ct);
+                var local = row?.RcsTaskId ?? taskId;
+                found.Add(local);
+                await ApplyPollStateAsync(local, status, ct);
             }
         }
 

@@ -112,8 +112,7 @@ public sealed class RcsTaskService : IRcsTaskService
         };
 
         var result = await _client.TransitTaskAsync(req, ct);
-        await FinishAsync(taskId, result, ct);
-        return result with { TaskId = taskId };
+        return await CompleteDispatchAsync(taskId, result, ct);
     }
 
     public async Task<RcsResult> DispatchGrabAsync(GrabDispatchArgs args, CancellationToken ct = default)
@@ -159,8 +158,7 @@ public sealed class RcsTaskService : IRcsTaskService
         };
 
         var result = await _client.ExcuteTaskAsync(req, ct);
-        await FinishAsync(taskId, result, ct);
-        return result with { TaskId = taskId };
+        return await CompleteDispatchAsync(taskId, result, ct);
     }
 
     public async Task<RcsResult> DispatchIdentifyAsync(IdentifyDispatchArgs args, CancellationToken ct = default)
@@ -197,30 +195,33 @@ public sealed class RcsTaskService : IRcsTaskService
         };
 
         var result = await _client.ExcuteTaskAsync(req, ct);
-        await FinishAsync(taskId, result, ct);
-        return result with { TaskId = taskId };
+        return await CompleteDispatchAsync(taskId, result, ct);
     }
 
     public async Task<RcsResult> CancelAsync(string rcsTaskId, CancellationToken ct = default)
     {
-        var req = new CancelTaskRequest { TaskId = rcsTaskId };
+        var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
+        var localId = row?.RcsTaskId ?? rcsTaskId;
+        var cancelId = string.IsNullOrWhiteSpace(row?.RcsRemoteId) ? localId : row.RcsRemoteId;
+
+        var req = new CancelTaskRequest { TaskId = cancelId };
         var result = await _client.CancelTaskAsync(req, ct);
         if (result.Success)
         {
-            var current = await _store.GetByTaskIdAsync(rcsTaskId, ct);
+            var current = await _store.GetByTaskIdAsync(localId, ct);
             if (current?.TaskState == RcsTaskState.Completed)
-                return result with { TaskId = rcsTaskId };
-            return await ApplyLocalCanceledAsync(rcsTaskId, "canceled", null, result, ct);
+                return result with { TaskId = localId };
+            return await ApplyLocalCanceledAsync(localId, "canceled", null, result, ct);
         }
 
-        var row = await _store.GetByTaskIdAsync(rcsTaskId, ct);
+        row = await _store.GetByTaskIdAsync(localId, ct);
         if (row?.TaskState == RcsTaskState.Canceled)
             return result with
             {
                 Success = true,
                 Ok = true,
                 FailureKind = RcsFailureKind.None,
-                TaskId = rcsTaskId,
+                TaskId = localId,
                 Message = result.Message ?? "任务已取消"
             };
 
@@ -229,13 +230,14 @@ public sealed class RcsTaskService : IRcsTaskService
             && RcsCancelSemantics.IsAlreadyCanceledOrGone(result.Message, result.Error))
         {
             _logger.LogInformation("取消任务 {TaskId} RCS 已无此任务/已取消，按本地取消收口：{Msg}",
-                rcsTaskId, result.Message ?? result.Error);
+                localId, result.Message ?? result.Error);
             return await ApplyLocalCanceledAsync(
-                rcsTaskId, "canceled", result.Message ?? result.Error, result, ct);
+                localId, "canceled", result.Message ?? result.Error, result, ct);
         }
 
-        _logger.LogWarning("取消任务 {TaskId} 失败：{Msg}", rcsTaskId, result.Message ?? result.Error);
-        return result;
+        _logger.LogWarning("取消任务 {TaskId}（cancel={CancelId}）失败：{Msg}",
+            localId, cancelId, result.Message ?? result.Error);
+        return result with { TaskId = localId };
     }
 
     private async Task<RcsResult> ApplyLocalCanceledAsync(
@@ -284,9 +286,7 @@ public sealed class RcsTaskService : IRcsTaskService
         var result = await BuildAndSendAsync(row, "redo", ct);
         if (!result.Success)
             await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
-        await FinishAsync(rcsTaskId, result, ct);
-        if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
-        return result;
+        return await CompleteDispatchAsync(rcsTaskId, result, ct, forgetOnSuccess: true);
     }
 
     /// <summary>
@@ -307,9 +307,7 @@ public sealed class RcsTaskService : IRcsTaskService
         var result = await BuildAndSendAsync(row, "redo", ct);
         if (!result.Success)
             await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
-        await FinishAsync(rcsTaskId, result, ct);
-        if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
-        return result;
+        return await CompleteDispatchAsync(rcsTaskId, result, ct, forgetOnSuccess: true);
     }
 
     /// <summary>
@@ -360,9 +358,7 @@ public sealed class RcsTaskService : IRcsTaskService
         var result = await BuildAndSendAsync(row, "redo", ct);
         if (!result.Success)
             await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
-        await FinishAsync(rcsTaskId, result, ct);
-        if (result.Success) _callbackProcessor.ForgetTask(rcsTaskId);
-        return result;
+        return await CompleteDispatchAsync(rcsTaskId, result, ct, forgetOnSuccess: true);
     }
 
     public Task<RcsResult> QueryAsync(QueryTaskRequest req, CancellationToken ct = default)
@@ -564,12 +560,52 @@ public sealed class RcsTaskService : IRcsTaskService
                && to.Kind == ManagedEndpointKind.Frame;
     }
 
-    private async Task FinishAsync(string taskId, RcsResult result, CancellationToken ct)
+    private async Task<RcsResult> CompleteDispatchAsync(
+        string localTaskId, RcsResult result, CancellationToken ct, bool forgetOnSuccess = false)
     {
-        if (result.Success)
-            await _store.SetDispatchedAsync(taskId, ct);
-        else if (!await _store.UpdateStateAsync(taskId, RcsTaskState.Failed, null, result.Message ?? result.Error, ct))
-            _logger.LogWarning("下发失败后落库 FAILED 未生效（任务不存在）：{TaskId}", taskId);
+        await FinishAsync(localTaskId, result, ct);
+        if (forgetOnSuccess && result.Success)
+        {
+            _callbackProcessor.ForgetTask(localTaskId);
+            var assigned = RcsAckParser.TryReadAssignedTaskId(result.RawResponse);
+            if (!string.IsNullOrWhiteSpace(assigned)
+                && !string.Equals(assigned, localTaskId, StringComparison.Ordinal))
+                _callbackProcessor.ForgetTask(assigned);
+        }
+        return result with { TaskId = localTaskId };
+    }
+
+    private async Task FinishAsync(string localTaskId, RcsResult result, CancellationToken ct)
+    {
+        if (!result.Success)
+        {
+            if (!await _store.UpdateStateAsync(localTaskId, RcsTaskState.Failed, null, result.Message ?? result.Error, ct))
+                _logger.LogWarning("下发失败后落库 FAILED 未生效（任务不存在）：{TaskId}", localTaskId);
+            return;
+        }
+
+        var assigned = RcsAckParser.TryReadAssignedTaskId(result.RawResponse);
+        if (!string.IsNullOrWhiteSpace(assigned)
+            && !string.Equals(assigned, localTaskId, StringComparison.Ordinal))
+        {
+            if (assigned.Length > RcsTaskId.MaxLength)
+            {
+                _logger.LogWarning("RCS task_id 超长 {Len}，仍用本地 {Local}，取消可能失败", assigned.Length, localTaskId);
+            }
+            else if (!await _store.BindRemoteIdAsync(localTaskId, assigned, ct))
+            {
+                _logger.LogWarning(
+                    "RCS 回包号保存失败，取消仍用本地 {Local} remote={Remote}",
+                    localTaskId, assigned);
+            }
+            else
+            {
+                _logger.LogInformation("RCS 回包号已保存 {Local} → {Remote}", localTaskId, assigned);
+                return;
+            }
+        }
+
+        await _store.SetDispatchedAsync(localTaskId, ct);
     }
 
     private async Task<RcsResult> BuildAndSendAsync(RcsTaskRow row, string? commandType, CancellationToken ct)

@@ -250,6 +250,20 @@ public sealed class SlotAccountStore : ISlotAccountStore
         return affected == 1;
     }
 
+    public async Task<bool> RebindReservedTaskIdAsync(string fromTaskId, string toTaskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(fromTaskId) || string.IsNullOrWhiteSpace(toTaskId))
+            return false;
+        if (string.Equals(fromTaskId, toTaskId, StringComparison.Ordinal))
+            return true;
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.FrameSlots
+            .Where(s => s.Remark == fromTaskId && s.SlotState == SlotStates.Reserved)
+            .ExecuteUpdateAsync(set => set.SetProperty(s => s.Remark, toTaskId), ct);
+        return true;
+    }
+
     private static bool IsForbiddenExternalTarget(string? targetState) =>
         string.Equals((targetState ?? string.Empty).Trim(), SlotStates.Reserved, StringComparison.Ordinal);
 
