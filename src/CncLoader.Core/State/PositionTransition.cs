@@ -216,18 +216,25 @@ public static class PositionTransition
 
     private static TransitionOutcome DoneOutcome(in PositionInputs i, PositionState next)
     {
-        // 出结果 → 下料（仅一次：阶段还是 Upload 时触发）+ 写加工结果
+        // 出结果 → 先关启动再下料（仅一次：阶段还是 Upload 时触发）。
+        // 启动是电平：1 保持则机台会反复测，必须在入下料队前写 2。
         if (i.Phase != PositionPhase.Upload) return TransitionOutcome.To(next);
 
         var isOk = next == PositionState.DoneOk;
         var actions = new List<PositionAction>();
         if (i.HasOpenWorkRecord) actions.Add(PositionAction.RecordWorkResult(isOk));
+        actions.Add(PositionAction.WriteTestStart(2));
 
         if (i.AutoDispatchPaused)
         {
             // 保持 Done*，恢复自动派工后再入下料队；清零 WorkRecordId 避免每 tick 重复写结果日志
             if (i.HasOpenWorkRecord) actions.Add(new PositionAction(PositionActionKind.ClearWorkRecord));
-            return new TransitionOutcome { Target = next, Actions = actions };
+            return new TransitionOutcome
+            {
+                Target = next,
+                Actions = actions,
+                OnActionFailure = PositionState.Alarm
+            };
         }
 
         actions.Add(PositionAction.EnqueueUnload(isOk));

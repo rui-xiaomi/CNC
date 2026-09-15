@@ -57,6 +57,40 @@ public sealed class RcsAckParserTests
     }
 
     [Test]
+    public void 现场_queryTask外层Success假_Data内成功()
+    {
+        const string body =
+            """{"Data":{"pageIndex":1,"items":[{"id":"LINE01-GR-1","status":"completed"}],"Success":true,"Message":null},"Success":false,"Message":"成功"}""";
+        var (ok, msg) = RcsAckParser.Parse(body);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.True);
+            Assert.That(msg, Is.EqualTo("成功"));
+        });
+    }
+
+    [Test]
+    public void 现场_queryTask从Data取items()
+    {
+        const string body =
+            """{"Data":{"pageIndex":1,"items":[{"id":"LINE01-GR-1","status":"canceled"},{"id":"LINE01-GR-2","status":"completed"}],"Success":true},"Success":false,"Message":"成功"}""";
+        var items = RcsAckParser.ParseQueryItems(body);
+        Assert.That(items, Is.EqualTo(new[]
+        {
+            ("LINE01-GR-1", "canceled"),
+            ("LINE01-GR-2", "completed")
+        }));
+    }
+
+    [Test]
+    public void 文档事例_queryTask根级items()
+    {
+        var items = RcsAckParser.ParseQueryItems(
+            """{"pageIndex":1,"items":[{"id":"T1","status":"underway"}],"success":true}""");
+        Assert.That(items, Is.EqualTo(new[] { ("T1", "underway") }));
+    }
+
+    [Test]
     public void code0视为成功()
     {
         var (ok, _) = RcsAckParser.Parse("""{"code":0,"message":"成功"}""");

@@ -21,56 +21,139 @@
                             <Grid DockPanel.Dock="Top" Height="40" Background="{StaticResource Surface2Brush}">
                                 <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
                                     <TextBlock Text="RCS 任务" Style="{StaticResource PanelTitle}" VerticalAlignment="Center"/>
-                                    <TextBlock Text="点选一行可回填任务号，供取消 / 重试 / 确认取消" Style="{StaticResource MutedText}"
+                                    <TextBlock Text="点选一行可回填任务号，并在下方查看完整编号与错误" Style="{StaticResource MutedText}"
                                                FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <Button Content="刷新" Style="{StaticResource GhostButton}" HorizontalAlignment="Right" Margin="0,0,12,0"
                                         Height="26" Padding="12,0" FontSize="12" Command="{Binding RefreshTasksCommand}"/>
                             </Grid>
                             <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
+                            <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
+                                    Background="{StaticResource Surface2Brush}" Padding="12,8" MinHeight="96" MaxHeight="168">
+                                <Grid>
+                                    <TextBlock Text="点选一行查看完整任务号、回包号与错误"
+                                               Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                               Visibility="{Binding HasSelectedTask, Converter={StaticResource BoolVisInvConv}}"/>
+                                    <DockPanel Visibility="{Binding HasSelectedTask, Converter={StaticResource BoolVisConv}}">
+                                        <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="48"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="48"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="36"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="任务号" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <TextBox Grid.Column="1" Text="{Binding SelectedTask.RcsTaskId, Mode=OneWay}"
+                                                     IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                                     Foreground="{StaticResource FgBrush}" FontFamily="{StaticResource FontMono}"
+                                                     FontSize="11" TextWrapping="NoWrap" Margin="0,0,12,0"
+                                                     VerticalAlignment="Center"
+                                                     AutomationProperties.Name="选中任务号"/>
+                                            <TextBlock Grid.Column="2" Text="回包号" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <TextBox Grid.Column="3" Text="{Binding SelectedTask.RcsRemoteId, Mode=OneWay}"
+                                                     IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                                     Foreground="{StaticResource FgBrush}" FontFamily="{StaticResource FontMono}"
+                                                     FontSize="11" TextWrapping="NoWrap" Margin="0,0,12,0"
+                                                     VerticalAlignment="Center"
+                                                     AutomationProperties.Name="选中回包号"/>
+                                            <TextBlock Grid.Column="4" Text="状态" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="5" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource FgBrush}"
+                                                       Text="{Binding SelectedTask.TaskState, Converter={StaticResource RcsStateZhConv}}"/>
+                                        </Grid>
+                                        <DockPanel>
+                                            <TextBlock DockPanel.Dock="Top" Text="错误" Style="{StaticResource MutedText}"
+                                                       FontSize="11" Margin="0,0,0,4"/>
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                                <TextBox Text="{Binding SelectedTask.ErrorMsg, Mode=OneWay, TargetNullValue=—}"
+                                                         IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0"
+                                                         Background="Transparent" Foreground="{StaticResource FgBrush}"
+                                                         FontFamily="{StaticResource FontMono}" FontSize="11"
+                                                         AcceptsReturn="True"
+                                                         AutomationProperties.Name="任务错误详情"/>
+                                            </ScrollViewer>
+                                        </DockPanel>
+                                    </DockPanel>
+                                </Grid>
+                            </Border>
                             <DataGrid ItemsSource="{Binding Tasks}" SelectedItem="{Binding SelectedTask}"
                                       Style="{StaticResource DataGridCompact}" RowHeight="26">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="任务号" Binding="{Binding RcsTaskId}" Width="240" MinWidth="180">
+                                    <DataGridTextColumn Header="任务号" Binding="{Binding RcsTaskId}" Width="180" MinWidth="140">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
                                                 <Setter Property="ToolTip" Value="{Binding RcsTaskId}"/>
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="240" MinWidth="180">
+                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="160" MinWidth="120">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
                                                 <Setter Property="ToolTip" Value="{Binding RcsRemoteId}"/>
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="种类" Binding="{Binding Kind, Converter={StaticResource RcsKindZhConv}}" Width="72" MinWidth="56"/>
-                                    <DataGridTextColumn Header="状态" Binding="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}" Width="72" MinWidth="56"/>
-                                    <DataGridTextColumn Header="优先级" Binding="{Binding Priority}" Width="80" MinWidth="72"/>
-                                    <DataGridTextColumn Header="起点" Binding="{Binding FromCode}" Width="100" MinWidth="80"/>
-                                    <DataGridTextColumn Header="终点" Binding="{Binding ToCode}" Width="100" MinWidth="80"/>
-                                    <DataGridTextColumn Header="重试次数" Binding="{Binding RedoCount}" Width="100" MinWidth="96"/>
-                                    <DataGridTextColumn Header="创建时间" Binding="{Binding SendTime, StringFormat=HH:mm:ss}" Width="88" MinWidth="80"/>
-                                    <DataGridTemplateColumn Header="取消处理" Width="96" MinWidth="88">
+                                    <DataGridTextColumn Header="种类" Binding="{Binding Kind, Converter={StaticResource RcsKindZhConv}}" Width="64" MinWidth="56"/>
+                                    <DataGridTextColumn Header="状态" Binding="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}" Width="88" MinWidth="80">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}">
+                                                <Setter Property="ToolTip" Value="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+                                    <DataGridTextColumn Header="优先级" Binding="{Binding Priority}" Width="56" MinWidth="48"/>
+                                    <DataGridTextColumn Header="起点" Binding="{Binding FromCode}" Width="80" MinWidth="64"/>
+                                    <DataGridTextColumn Header="终点" Binding="{Binding ToCode}" Width="80" MinWidth="64"/>
+                                    <DataGridTextColumn Header="重试次数" Binding="{Binding RedoCount}" Width="72" MinWidth="64"/>
+                                    <DataGridTextColumn Header="创建时间" Binding="{Binding SendTime, StringFormat=HH:mm:ss}" Width="80" MinWidth="72"/>
+                                    <DataGridTemplateColumn Header="取消处理" Width="80" MinWidth="72">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <TextBlock>
+                                                <TextBlock VerticalAlignment="Center" Foreground="{StaticResource FgBrush}">
                                                     <TextBlock.Text>
                                                         <MultiBinding Converter="{StaticResource CancelFlagConv}">
                                                             <Binding Path="TaskState"/>
                                                             <Binding Path="CancelManualFlag"/>
                                                         </MultiBinding>
                                                     </TextBlock.Text>
+                                                    <TextBlock.ToolTip>
+                                                        <MultiBinding Converter="{StaticResource CancelFlagConv}">
+                                                            <Binding Path="TaskState"/>
+                                                            <Binding Path="CancelManualFlag"/>
+                                                        </MultiBinding>
+                                                    </TextBlock.ToolTip>
                                                 </TextBlock>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTextColumn Header="错误" Binding="{Binding ErrorMsg}" Width="*" MinWidth="100">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
-                                        </DataGridTextColumn.ElementStyle>
-                                    </DataGridTextColumn>
+                                    <DataGridTemplateColumn Header="错误" Width="*" MinWidth="160">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding ErrorMsg}"
+                                                           VerticalAlignment="Center"
+                                                           AutomationProperties.Name="任务错误">
+                                                    <TextBlock.InputBindings>
+                                                        <MouseBinding MouseAction="LeftClick"
+                                                                      Command="{Binding DataContext.ShowTaskErrorCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                      CommandParameter="{Binding}"/>
+                                                    </TextBlock.InputBindings>
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                    <Setter Property="ToolTip" Value="{Binding ErrorMsg}"/>
+                                                                    <Setter Property="Cursor" Value="Hand"/>
+                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>
@@ -106,7 +189,13 @@
                             <!-- 选中行详情：完整请求/响应 -->
                             <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
                                     Background="{StaticResource Surface2Brush}" Padding="12,8" MinHeight="140" MaxHeight="220">
-                                <Grid>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Top"
+                                               Text="{Binding SelectedMessage.Error}"
+                                               Foreground="{StaticResource AlarmBrush}"
+                                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"
+                                               Visibility="{Binding SelectedMessage.HasError, Converter={StaticResource BoolVisConv}}"/>
+                                    <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="12"/>
@@ -131,6 +220,7 @@
                                         </ScrollViewer>
                                     </DockPanel>
                                 </Grid>
+                                </DockPanel>
                             </Border>
 
                             <DataGrid ItemsSource="{Binding Messages}" SelectedItem="{Binding SelectedMessage}"
@@ -156,11 +246,32 @@
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="错误" Binding="{Binding Error}" Width="120" MinWidth="80">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
-                                        </DataGridTextColumn.ElementStyle>
-                                    </DataGridTextColumn>
+                                    <DataGridTemplateColumn Header="错误" Width="160" MinWidth="100">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Error}"
+                                                           VerticalAlignment="Center"
+                                                           AutomationProperties.Name="报文错误">
+                                                    <TextBlock.InputBindings>
+                                                        <MouseBinding MouseAction="LeftClick"
+                                                                      Command="{Binding DataContext.ShowMessageErrorCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                      CommandParameter="{Binding}"/>
+                                                    </TextBlock.InputBindings>
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                    <Setter Property="ToolTip" Value="{Binding Error}"/>
+                                                                    <Setter Property="Cursor" Value="Hand"/>
+                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>

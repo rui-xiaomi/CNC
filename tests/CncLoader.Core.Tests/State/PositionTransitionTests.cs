@@ -245,10 +245,12 @@ public sealed class PositionTransitionTests
         Assert.That(Kinds(outcome), Is.EqualTo(new[]
         {
             PositionActionKind.RecordWorkResult,
+            PositionActionKind.WriteTestStart,
             PositionActionKind.EnqueueUnload
         }));
         Assert.That(outcome.Actions[0].IsOk, Is.EqualTo(expectOk), "加工结果须与信号一致");
-        Assert.That(outcome.Actions[1].IsOk, Is.EqualTo(expectOk), "下料分流须与结果一致（NG 走 NG 架）");
+        Assert.That(outcome.Actions[1].TestStartValue, Is.EqualTo(2), "出结果必须先关启动，否则机台反复测");
+        Assert.That(outcome.Actions[2].IsOk, Is.EqualTo(expectOk), "下料分流须与结果一致（NG 走 NG 架）");
     }
 
     [TestCase(PositionState.DoneOk, true)]
@@ -266,10 +268,12 @@ public sealed class PositionTransitionTests
         Assert.That(Kinds(outcome), Is.EqualTo(new[]
         {
             PositionActionKind.RecordWorkResult,
+            PositionActionKind.WriteTestStart,
             PositionActionKind.EnqueueUnload
-        }), "先写加工结果再入下料队");
+        }), "先写结果、关启动，再入下料队");
         Assert.That(outcome.Actions[0].IsOk, Is.EqualTo(expectOk));
-        Assert.That(outcome.Actions[1].IsOk, Is.EqualTo(expectOk));
+        Assert.That(outcome.Actions[1].TestStartValue, Is.EqualTo(2));
+        Assert.That(outcome.Actions[2].IsOk, Is.EqualTo(expectOk));
         Assert.That(outcome.OnActionFailure, Is.EqualTo(PositionState.Alarm));
     }
 
@@ -288,8 +292,11 @@ public sealed class PositionTransitionTests
         Assert.That(Kinds(outcome), Is.EqualTo(new[]
         {
             PositionActionKind.RecordWorkResult,
+            PositionActionKind.WriteTestStart,
             PositionActionKind.ClearWorkRecord
-        }), "结果仍要落，但清 WorkRecordId 防每 tick 重复写");
+        }), "暂停派工也须关启动，结果仍要落，清 WorkRecordId 防每 tick 重复写");
+        Assert.That(outcome.Actions[1].TestStartValue, Is.EqualTo(2));
+        Assert.That(outcome.OnActionFailure, Is.EqualTo(PositionState.Alarm));
         Assert.That(Kinds(outcome), Does.Not.Contain(PositionActionKind.EnqueueUnload));
     }
 

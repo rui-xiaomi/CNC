@@ -341,10 +341,14 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _statusMessage = "";
 
+    /// <summary>任务列表已点选一行，底部详情区可见。</summary>
+    public bool HasSelectedTask => SelectedTask is not null;
+
     partial void OnSelectedTaskChanged(RcsTaskRow? value)
     {
         if (!string.IsNullOrWhiteSpace(value?.RcsTaskId))
             OperateTaskId = value.RcsTaskId!;
+        OnPropertyChanged(nameof(HasSelectedTask));
     }
 
     // 报文流水筛选（服务端查询）+ 自动刷新开关
@@ -1123,6 +1127,20 @@ public sealed partial class RcsViewModel : PageViewModelBase
             ReportResult(r);
         }
         finally { IsBusy = false; await RefreshMessagesAsync(); }
+    }
+
+    [RelayCommand]
+    private void ShowTaskError(RcsTaskRow? row)
+    {
+        if (string.IsNullOrWhiteSpace(row?.ErrorMsg)) return;
+        _notify.Alert(row.ErrorMsg, "任务错误");
+    }
+
+    [RelayCommand]
+    private void ShowMessageError(RcsMsgRow? row)
+    {
+        if (string.IsNullOrWhiteSpace(row?.Error)) return;
+        _notify.Alert(row.Error, "报文错误");
     }
 
     [RelayCommand]

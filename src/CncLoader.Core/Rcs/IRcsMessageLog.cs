@@ -51,4 +51,8 @@ public sealed record RcsMsgRow(
     string? ResponseBody,
     int? CostMs,
     bool Success,
-    string? Error);
+    string? Error)
+{
+    /// <summary>有错误文案，供表格强调 / 详情区展示。</summary>
+    public bool HasError => !string.IsNullOrWhiteSpace(Error);
+}

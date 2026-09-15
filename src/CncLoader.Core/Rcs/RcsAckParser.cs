@@ -4,6 +4,7 @@ namespace CncLoader.Core.Rcs;
 
 /// <summary>
 /// 解析 RCS 出站应答。文档事例 Success 为字符串 "true"；现场还可能是数字 1、缺字段只回 Message「成功」。
+/// queryTask 现场会再包一层：外层 Success=false + Message「成功」，分页 items 与内层 Success 在 Data 里。
 /// </summary>
 public static class RcsAckParser
 {
@@ -38,6 +39,8 @@ public static class RcsAckParser
             var root = doc.RootElement;
             var message = ReadMessage(root);
             var success = ReadTruthy(root, "Success") ?? ReadTruthy(root, "success");
+            if (success != true && TryReadInnerSuccess(root) == true)
+                success = true;
             if (success is null)
             {
                 var code = ReadCode(root);
@@ -54,6 +57,54 @@ public static class RcsAckParser
         {
             return (false, null);
         }
+    }
+
+    /// <summary>
+    /// 解析 queryTask 的 <c>items[]</c>。兼容文档根级 items，以及现场 <c>Data.items</c> 外包。
+    /// </summary>
+    public static IReadOnlyList<(string TaskId, string Status)> ParseQueryItems(string? raw)
+    {
+        var list = new List<(string, string)>();
+        if (string.IsNullOrWhiteSpace(raw)) return list;
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!TryFindItems(doc.RootElement, out var items)) return list;
+            foreach (var it in items.EnumerateArray())
+            {
+                if (it.ValueKind != JsonValueKind.Object) continue;
+                var id = it.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
+                    ? idEl.GetString() : null;
+                var st = it.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String
+                    ? stEl.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(st))
+                    list.Add((id!, st!));
+            }
+        }
+        catch (JsonException)
+        {
+            return list;
+        }
+
+        return list;
+    }
+
+    private static bool? TryReadInnerSuccess(JsonElement root)
+    {
+        if (!TryGetData(root, out var data) || data.ValueKind != JsonValueKind.Object)
+            return null;
+        return ReadTruthy(data, "Success") ?? ReadTruthy(data, "success");
+    }
+
+    private static bool TryFindItems(JsonElement root, out JsonElement items)
+    {
+        if (root.TryGetProperty("items", out items) && items.ValueKind == JsonValueKind.Array)
+            return true;
+        if (TryGetData(root, out var data) && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("items", out items) && items.ValueKind == JsonValueKind.Array)
+            return true;
+        items = default;
+        return false;
     }
 
     private static string? ReadMessage(JsonElement root)

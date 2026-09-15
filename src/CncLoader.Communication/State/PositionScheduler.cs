@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text.Json;
 using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
@@ -858,7 +857,7 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             return (queryPhase, settled);
         }
 
-        foreach (var (rawId, rcsStatus) in ParseQueryItems(result.RawResponse, _logger))
+        foreach (var (rawId, rcsStatus) in RcsAckParser.ParseQueryItems(result.RawResponse))
         {
             var state = RcsStatusMapper.ToTaskState(rcsStatus);
             if (state is null || !RcsStatusMapper.IsTerminal(state)) continue;
@@ -962,28 +961,6 @@ public sealed class PositionScheduler : IHostedService, IPositionScheduler
             SlotSettlementAction.RollbackPut => await _slots.RollbackAsync(taskId, ct),
             _ => false
         };
-
-    /// <summary>解析 queryTask 应答 items[] → (taskId, status)。</summary>
-    private static IReadOnlyList<(string taskId, string status)> ParseQueryItems(string? raw, ILogger<PositionScheduler> logger)
-    {
-        var list = new List<(string, string)>();
-        if (string.IsNullOrWhiteSpace(raw)) return list;
-        try
-        {
-            using var doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) return list;
-            foreach (var it in items.EnumerateArray())
-            {
-                if (it.ValueKind != JsonValueKind.Object) continue;
-                var id = it.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String ? idEl.GetString() : null;
-                var st = it.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : null;
-                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(st))
-                    list.Add((id!, st!));
-            }
-        }
-        catch (Exception ex) { logger.LogDebug(ex, "RCS queryTask 响应解析失败，本轮跳过"); }
-        return list;
-    }
 
     private async Task LoopAsync(CancellationToken ct)
     {

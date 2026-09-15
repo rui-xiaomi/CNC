@@ -75,6 +75,8 @@
         <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         <Setter Property="TextWrapping" Value="NoWrap"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
+        <!-- 自定义 ElementStyle 会丢掉 HandyControl 默认前景，不继承则深色表里字会隐掉 -->
+        <Setter Property="Foreground" Value="{Binding RelativeSource={RelativeSource AncestorType=DataGridCell}, Path=Foreground}"/>
     </Style>
 
     <Style x:Key="DataGridCellEllipsisMono" TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}">

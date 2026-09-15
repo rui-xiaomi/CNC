@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text.Json;
 using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
@@ -119,7 +118,7 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         var found = new HashSet<string>(StringComparer.Ordinal);
         if (!string.IsNullOrWhiteSpace(result.RawResponse))
         {
-            foreach (var (taskId, status) in ParseItems(result.RawResponse, _logger))
+            foreach (var (taskId, status) in RcsAckParser.ParseQueryItems(result.RawResponse))
             {
                 var row = await _store.GetByTaskIdAsync(taskId, ct);
                 var local = row?.RcsTaskId ?? taskId;
@@ -255,28 +254,6 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         _canceledAlarmed.TryRemove(taskId, out _);
         _notFoundAlarmed.TryRemove(taskId, out _);
         _redoLimitAlarmed.TryRemove(taskId, out _);
-    }
-
-    /// <summary>解析 queryTask 应答 items[]：返回 (taskId, status) 列表。</summary>
-    private static IReadOnlyList<(string taskId, string status)> ParseItems(string? raw, ILogger<RcsTaskTracker> logger)
-    {
-        var list = new List<(string, string)>();
-        if (string.IsNullOrWhiteSpace(raw)) return list;
-        try
-        {
-            using var doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) return list;
-            foreach (var it in items.EnumerateArray())
-            {
-                if (it.ValueKind != JsonValueKind.Object) continue;
-                var id = it.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String ? idEl.GetString() : null;
-                var st = it.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : null;
-                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(st))
-                    list.Add((id!, st!));
-            }
-        }
-        catch (Exception ex) { logger.LogDebug(ex, "RCS queryTask 响应解析失败，忽略本次，下一轮重试"); }
-        return list;
     }
 
     public async ValueTask DisposeAsync()

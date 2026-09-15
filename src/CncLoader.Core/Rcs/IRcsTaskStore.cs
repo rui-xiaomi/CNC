@@ -94,4 +94,7 @@ public sealed record RcsTaskRow(
 {
     /// <summary>RCS ACK 回包号（<c>cancelTask</c> 用）。空则取消仍用 <see cref="RcsTaskId"/>。</summary>
     public string? RcsRemoteId { get; init; }
+
+    /// <summary>有错误文案，供表格强调 / 详情区展示。</summary>
+    public bool HasError => !string.IsNullOrWhiteSpace(ErrorMsg);
 }
