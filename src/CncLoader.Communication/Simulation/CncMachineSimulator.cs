@@ -275,8 +275,10 @@ public sealed class CncMachineSimulator : IHostedService, IAsyncDisposable, IPlc
 
     public ValueTask DisposeAsync()
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
+        // 单例 + HostedService 工厂双注册，容器会释放两次；取走置空保证幂等，否则第二次 Cancel 抛 ObjectDisposedException 中断 Host.Dispose。
+        var cts = Interlocked.Exchange(ref _cts, null);
+        cts?.Cancel();
+        cts?.Dispose();
         return ValueTask.CompletedTask;
     }
 

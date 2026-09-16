@@ -40,6 +40,24 @@ public sealed class FrameViewModelSlotMutationTests
     }
 
     [Test]
+    public async Task 预记槽取消确认_不得调用Clear()
+    {
+        var slots = new FakeSlots { NextResult = Result(SlotMutationStatus.Updated) };
+        var notify = new FakeNotify { ConfirmAnswer = false };
+        var vm = CreateVm(slots, notify);
+        PrepareSelection(vm, correctState: "空(0)", material: "MAT-R");
+
+        await vm.ClearSelectedSlotCommand.ExecuteAsync(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(slots.CallCount, Is.EqualTo(0));
+            Assert.That(notify.Confirmations, Has.Some.Contain("仍被任务预记"));
+            Assert.That(notify.SuccessCount, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
     public async Task R7_清槽ReservationConflict_不得Success且须Warning()
     {
         var slots = new FakeSlots { NextResult = Conflict("task-clear-secret") };

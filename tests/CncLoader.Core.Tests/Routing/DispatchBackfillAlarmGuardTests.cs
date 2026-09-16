@@ -91,6 +91,41 @@ public sealed class DispatchBackfillAlarmGuardTests
         });
     }
 
+    [Test]
+    public async Task 上料下发窗口内状态漂移且取消失败_不回滚预记交跟踪器收敛()
+    {
+        var trace = new CallTrace();
+        var store = new MutableEquipmentRoutingStore();
+        store.SeedActiveChain(DispatchGateHarness.LineId, DispatchGateHarness.LineCode,
+            DispatchGateHarness.CraftId, craftNode: 1, DispatchGateHarness.Eq);
+        store.BindFrame(DispatchGateHarness.Eq, DispatchGateHarness.UploadFrame, FrameRole.Upload);
+
+        var equipment = new TracingEquipmentConfigService(store, trace);
+        var slots = new TracingSlots(trace, DispatchGateHarness.UploadFrame,
+            equipment: equipment, store: store);
+        var tasks = new HangingTaskService { CancelSucceeds = false };
+        var plc = new TracingPlcOps(trace);
+        var scheduler = DispatchGateHarness.CreateScheduler(
+            equipment, slots, tasks, plc, routingStore: store);
+
+        scheduler.ProbeMarkReconciled();
+        scheduler.ProbeSeedUploadCandidate(DispatchGateHarness.Eq, DispatchGateHarness.Pos);
+
+        var dispatchTask = scheduler.ProbeDispatchOnceAsync();
+        await tasks.DispatchEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        scheduler.ProbeSetContext(DispatchGateHarness.Eq, DispatchGateHarness.Pos, PositionState.Alarm);
+        tasks.ReleaseSuccess();
+        await dispatchTask;
+
+        var ctx = scheduler.ProbeGetContext(DispatchGateHarness.Eq, DispatchGateHarness.Pos);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ctx.CurrentTaskId, Is.Null, "状态漂移后不得绑定任务");
+            Assert.That(tasks.CancelCount, Is.EqualTo(1), "仍须尝试收口");
+            Assert.That(slots.RollbackTakeCount, Is.EqualTo(0), "取消失败车可能仍在取料，不得回滚取料预记");
+        });
+    }
+
     /// <summary>RCS 下发挂起至显式释放，模拟真实下发耗时窗口。</summary>
     private sealed class HangingTaskService : IRcsTaskService
     {
@@ -99,6 +134,8 @@ public sealed class DispatchBackfillAlarmGuardTests
         private string? _capturedTaskId;
         public int DispatchTransitCount { get; private set; }
         public int CancelCount { get; private set; }
+        /// <summary>false 时 cancelTask 回业务失败（模拟车已在执行、RCS 拒绝取消）。</summary>
+        public bool CancelSucceeds { get; init; } = true;
 
         public async Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
         {
@@ -117,7 +154,7 @@ public sealed class DispatchBackfillAlarmGuardTests
         public Task<RcsResult> CancelAsync(string rcsTaskId, CancellationToken ct = default)
         {
             CancelCount++;
-            return Task.FromResult(new RcsResult(true, 200, true, "ok", "", "{}", null, 1) { TaskId = rcsTaskId });
+            return Task.FromResult(new RcsResult(true, 200, CancelSucceeds, CancelSucceeds ? "ok" : "任务执行中不可取消", "", "{}", null, 1) { TaskId = rcsTaskId });
         }
 
         public Task<RcsResult> DispatchGrabAsync(GrabDispatchArgs args, CancellationToken ct = default) => Fail();

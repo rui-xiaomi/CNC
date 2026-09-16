@@ -81,6 +81,9 @@ public static class CommunicationServiceCollectionExtensions
         // Phase 4 步骤③：本机 RCS 模拟器（收任务→延时→按失败率/取消率回推 push/scan）。仅 UseSimulator=true 生效。
         services.AddHostedService<RcsSimulator>();
 
+        // P1-4：重启接续换架/盘点内存事务；须先于跟踪器与调度器启动（二者首轮轮询/对账会发出终态事件）
+        services.AddHostedService<InFlightTransactionRecoveryService>();
+
         // Phase 4 步骤④：任务跟踪器（queryTask 兜底轮询 + 11→5 映射 + 自动 redo + 取消工单告警）
         services.AddHostedService<RcsTaskTracker>();
 

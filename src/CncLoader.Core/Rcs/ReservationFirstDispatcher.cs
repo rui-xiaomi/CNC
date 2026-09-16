@@ -6,7 +6,9 @@ public enum ReservationFirstDispatchStatus
     /// <summary>预记成功后权威路由校验失败；已尝试回滚，未调用 RCS。</summary>
     RouteUnavailable,
     DispatchFailed,
-    Dispatched
+    Dispatched,
+    /// <summary>已发出但结果未知（超时/断连/5xx）：RCS 可能已建任务，保留预记不回滚，交跟踪器按 queryTask 收敛。</summary>
+    DispatchUnknown
 }
 
 /// <summary>一次“先预记、后下发”的补偿式派工结果。</summary>
@@ -23,7 +25,8 @@ public sealed record ReservationFirstDispatchResult<TReservation>
 
 /// <summary>
 /// 统一执行「原子预记 → 最终路由门禁 → RCS 下发」；
-/// 预记失败不触碰 RCS；最终门禁失败走既有补偿回滚且不下发；下发失败同样回滚。
+/// 预记失败不触碰 RCS；最终门禁失败走既有补偿回滚且不下发；下发明确失败同样回滚；
+/// 下发结果未知（<see cref="RcsFailureKind.OutcomeUnknown"/>）不回滚。
 /// </summary>
 public sealed class ReservationFirstDispatcher
 {
@@ -101,6 +104,18 @@ public sealed class ReservationFirstDispatcher
                 return new ReservationFirstDispatchResult<TReservation>
                 {
                     Status = ReservationFirstDispatchStatus.Dispatched,
+                    Reservation = reservation,
+                    DispatchResult = dispatch,
+                    RouteResult = route
+                };
+            }
+
+            if (dispatch.FailureKind == RcsFailureKind.OutcomeUnknown)
+            {
+                // RCS 可能已按预记槽位执行：回滚会造成双占/双放。
+                return new ReservationFirstDispatchResult<TReservation>
+                {
+                    Status = ReservationFirstDispatchStatus.DispatchUnknown,
                     Reservation = reservation,
                     DispatchResult = dispatch,
                     RouteResult = route

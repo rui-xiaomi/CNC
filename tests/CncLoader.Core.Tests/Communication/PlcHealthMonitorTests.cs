@@ -9,7 +9,7 @@ using NUnit.Framework;
 
 namespace CncLoader.Core.Tests.Communication;
 
-/// <summary>P0-5：PLC 持续失联超阈值 → 大声告警（级别严重）；恢复后下次失联重新告警；不负责重连。</summary>
+/// <summary>P0-5：PLC 持续失联超阈值 → 大声告警（级别严重）；恢复后下次失联重新告警。重连由 PlcReconnectService 负责。</summary>
 [TestFixture]
 public sealed class PlcHealthMonitorTests
 {

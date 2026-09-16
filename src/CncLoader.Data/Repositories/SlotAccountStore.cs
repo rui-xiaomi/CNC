@@ -1,4 +1,5 @@
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using CncLoader.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -263,6 +264,62 @@ public sealed class SlotAccountStore : ISlotAccountStore
             .ExecuteUpdateAsync(set => set.SetProperty(s => s.Remark, toTaskId), ct);
         return true;
     }
+
+    public async Task<string?> FindBoundTaskStateAsync(string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return null;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.AgvTasks.AsNoTracking()
+            .Where(t => t.RcsTaskId == taskId || t.RcsRemoteId == taskId)
+            .Select(t => t.TaskState)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<ExternalSlotWriteAttempt> TryForceClearReservedAsync(
+        long frameId, int slotNo, string? expectedRemark, DateTime updateTime, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var slot = await db.FrameSlots.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.FrameId == frameId && s.SlotNo == slotNo, ct);
+        if (slot is null)
+            return new ExternalSlotWriteAttempt(0, null);
+        if (slot.SlotState != SlotStates.Reserved || !RemarkEquals(slot.Remark, expectedRemark))
+            return new ExternalSlotWriteAttempt(0, FromEntity(slot));
+
+        string? taskState = null;
+        if (!string.IsNullOrWhiteSpace(slot.Remark))
+        {
+            var remark = slot.Remark;
+            taskState = await db.AgvTasks.AsNoTracking()
+                .Where(t => t.RcsTaskId == remark || t.RcsRemoteId == remark)
+                .Select(t => t.TaskState)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        if (!ManualSlotClearPolicy.AllowsForceClearReserved(slot.Remark, taskState))
+            return new ExternalSlotWriteAttempt(0, FromEntity(slot));
+
+        var expected = slot.Remark;
+        var affected = await db.FrameSlots
+            .Where(s => s.Id == slot.Id
+                        && s.SlotState == SlotStates.Reserved
+                        && s.Remark == expected)
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(s => s.SlotState, SlotStates.Empty)
+                .SetProperty(s => s.MaterialId, (string?)null)
+                .SetProperty(s => s.Remark, (string?)null)
+                .SetProperty(s => s.BindSource, (string?)null)
+                .SetProperty(s => s.BindTime, (DateTime?)null)
+                .SetProperty(s => s.UpdateTime, (DateTime?)updateTime), ct);
+        var current = await db.FrameSlots.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.FrameId == frameId && s.SlotNo == slotNo, ct);
+        return new ExternalSlotWriteAttempt(affected, current is null ? null : FromEntity(current));
+    }
+
+    private static bool RemarkEquals(string? actual, string? expected) =>
+        string.IsNullOrWhiteSpace(actual)
+            ? string.IsNullOrWhiteSpace(expected)
+            : string.Equals(actual, expected, StringComparison.Ordinal);
 
     private static bool IsForbiddenExternalTarget(string? targetState) =>
         string.Equals((targetState ?? string.Empty).Trim(), SlotStates.Reserved, StringComparison.Ordinal);

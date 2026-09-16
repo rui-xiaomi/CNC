@@ -35,6 +35,14 @@ public interface ISlotAccountService
     Task<ReservedSlot?> FindReservedAsync(string taskId, CancellationToken ct = default)
         => Task.FromResult<ReservedSlot?>(null);
 
+    /// <summary>
+    /// 仍有预记则原子刷新 BIND_TIME（重启陈旧宽限）并返回 true；无预记返回 false。
+    /// 重发复用旧预记时必须用它代替「查到即视为持有」，否则旧 BIND_TIME 在 Claim/下发窗口内被陈旧清扫回滚。
+    /// 默认实现仅查询，供旧 fake 编译。
+    /// </summary>
+    async Task<bool> TouchReservationAsync(string taskId, CancellationToken ct = default)
+        => await FindReservedAsync(taskId, ct) is not null;
+
     /// <summary>取料预记：只锁指定物料所在占用槽；找不到该物料返回 null（不改抢其它件）。</summary>
     Task<ReservedSlot?> ReserveTakeByMaterialAsync(long frameId, string taskId, string materialId, CancellationToken ct = default)
         => ReserveTakeAsync(frameId, taskId, ct);
@@ -50,6 +58,11 @@ public interface ISlotAccountService
     /// 其余按方向回滚（PUT→空、TAKE→占用）。返回回滚槽位数。</summary>
     Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default);
 
+    /// <summary>同上，但只回滚 BIND_TIME 早于 now-<paramref name="minAge"/> 的预记（条件原子 UPDATE）。
+    /// 预记先于任务落库，未满宽限的预记可能属于在途派工。默认实现供旧 fake 编译。</summary>
+    Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, TimeSpan minAge, CancellationToken ct = default)
+        => RollbackStaleReservationsAsync(activeTaskIds, ct);
+
     /// <summary>列出「不在 active、任务已 COMPLETED、槽位仍为预记」的项（TaskId + 是否 TAKE 方向），供调度器按 PLC 复核后 Confirm。</summary>
     Task<IReadOnlyList<CompletedPendingConfirm>> ListCompletedPendingConfirmAsync(
         IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default);
@@ -62,6 +75,13 @@ public interface ISlotAccountService
     /// 遇 Reserved 返回 <see cref="SlotMutationStatus.ReservationConflict"/>，不得覆盖预记字段。
     /// </summary>
     Task<SlotMutationResult> SetSlotAsync(long frameId, int slotNo, string? materialId, string slotState, string author, CancellationToken ct = default);
+
+    /// <summary>
+    /// 置空释放：非预记走 <see cref="SetSlotAsync"/> 置空；
+    /// 预记仅当绑定任务已 COMPLETED 或 REMARK 为空时强制清空。在途/FAILED 仍拒绝。
+    /// </summary>
+    Task<SlotMutationResult> ClearSlotAsync(long frameId, int slotNo, string author, CancellationToken ct = default)
+        => SetSlotAsync(frameId, slotNo, null, SlotStates.Empty, author, ct);
 
     /// <summary>物料反查：按物料码找所在料架+槽位（UI 高亮 + NG 处理定位）。</summary>
     Task<SlotLocation?> LocateMaterialAsync(string materialId, CancellationToken ct = default);

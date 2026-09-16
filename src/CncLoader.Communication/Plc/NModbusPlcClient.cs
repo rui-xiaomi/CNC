@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
 using Microsoft.Extensions.Logging;
 using NModbus;
@@ -48,10 +49,12 @@ public sealed class NModbusPlcClient : IPlcClient
 
     public async Task ConnectAsync(CancellationToken ct = default)
     {
-        SetState(PlcConnectionState.Connecting);
+        // 与读写/断开同一 IO 闸：避免自动重连 Dispose 在途套接字。
+        await _ioGate.WaitAsync(ct).ConfigureAwait(false);
         var sw = Stopwatch.StartNew();
         try
         {
+            SetState(PlcConnectionState.Connecting);
             lock (_sync)
             {
                 _master?.Dispose();
@@ -85,14 +88,18 @@ public sealed class NModbusPlcClient : IPlcClient
         }
         catch (Exception ex)
         {
-            SetState(PlcConnectionState.Faulted, ex.Message);
+            SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(ex));
             _deviceLogger.Log(new DeviceLogEntry
             {
                 DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Connect,
-                Request = $"{Endpoint.Host}:{Endpoint.Port}", Success = false, Error = ex.Message,
+                Request = $"{Endpoint.Host}:{Endpoint.Port}", Success = false, Error = PlcLinkError.Describe(ex),
                 CostMs = (int)sw.ElapsedMilliseconds
             });
             throw;
+        }
+        finally
+        {
+            _ioGate.Release();
         }
     }
 
@@ -221,12 +228,12 @@ public sealed class NModbusPlcClient : IPlcClient
         if (ex is SocketException or IOException)
         {
             if (_linkFaults.NoteHardFailure())
-                SetState(PlcConnectionState.Faulted, ex.Message);
+                SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(ex));
             return;
         }
 
         if (ex is TimeoutException && _linkFaults.NoteTimeout())
-            SetState(PlcConnectionState.Faulted, ex.Message);
+            SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(ex));
     }
 
     private void SetState(PlcConnectionState state, string? message = null)

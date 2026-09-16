@@ -92,6 +92,15 @@
                     AutomationProperties.Name="启动对账状态"
                     ToolTip="{Binding ReconcileDetailToolTip}">
                 <DockPanel LastChildFill="True">
+                    <!-- P2-6：UI 线程拦截过未处理异常时常驻提示（计数 + ToolTip 最近一次摘要） -->
+                    <Border DockPanel.Dock="Right" Margin="12,0,0,0" Padding="8,3" CornerRadius="3" VerticalAlignment="Center"
+                            Background="{StaticResource SoftWarnBrush}"
+                            Visibility="{Binding HasUiExceptions, Converter={StaticResource BoolVisConv}}"
+                            ToolTip="{Binding UiExceptionToolTip}"
+                            AutomationProperties.Name="界面异常计数">
+                        <TextBlock Text="{Binding UiExceptionText}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{StaticResource WarnBrush}"/>
+                    </Border>
                     <Ellipse DockPanel.Dock="Left" Width="9" Height="9" Margin="0,0,10,0" VerticalAlignment="Center"
                              Fill="{Binding ReconcileBrushKey, Converter={StaticResource BrushConv}}"/>
                     <StackPanel VerticalAlignment="Center">
@@ -436,28 +445,47 @@
                                                                   Data="{Binding StateBadge, Converter={StaticResource StateBadgeIconConv}}"
                                                                   Fill="{Binding StateBadge, Converter={StaticResource DashStateBadgeBrushConv}}"/>
                                                             <TextBlock Text="{Binding StateDisplay}" FontSize="13" FontWeight="SemiBold"
-                                                                       VerticalAlignment="Center"
-                                                                       Foreground="{StaticResource FgBrush}"/>
+                                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{StaticResource FgBrush}"
+                                                                       ToolTip="{Binding StateDisplay}"/>
                                                         </StackPanel>
                                                         <TextBlock DockPanel.Dock="Right" Text="{Binding MaterialText, StringFormat=物料 {0}}"
                                                                    FontFamily="{StaticResource FontMono}" FontSize="12"
                                                                    Foreground="{StaticResource FgMutedBrush}" VerticalAlignment="Center"/>
                                                     </DockPanel>
-                                                    <Button Grid.Column="2" Content="恢复" Height="26" Padding="12,0" FontSize="12"
-                                                            Margin="0,0,12,0" VerticalAlignment="Center"
-                                                            Command="{Binding DataContext.ResetAlarmCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
-                                                            CommandParameter="{Binding}">
-                                                        <Button.Style>
-                                                            <Style TargetType="Button" BasedOn="{StaticResource DashDangerButton}">
-                                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsAlarm}" Value="True">
-                                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Button.Style>
-                                                    </Button>
+                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,12,0"
+                                                                VerticalAlignment="Center">
+                                                        <Button Content="去确认" Height="26" Padding="10,0" FontSize="12"
+                                                                Command="{Binding DataContext.OpenCancelHoldCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
+                                                                CommandParameter="{Binding}"
+                                                                ToolTip="{Binding StateDisplay}"
+                                                                AutomationProperties.Name="去确认取消任务">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding HasCancelHold}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+                                                        <Button Content="恢复" Height="26" Padding="12,0" FontSize="12"
+                                                                Command="{Binding DataContext.ResetAlarmCommand, RelativeSource={RelativeSource AncestorType=ItemsControl, AncestorLevel=2}}"
+                                                                CommandParameter="{Binding}">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button" BasedOn="{StaticResource DashDangerButton}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsAlarm}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+                                                    </StackPanel>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>

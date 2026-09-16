@@ -1,3 +1,5 @@
+using CncLoader.Common.Configuration;
+
 namespace CncLoader.Core.Rcs;
 
 /// <summary>
@@ -44,22 +46,23 @@ public static class LocationDisplayLabels
 
     public static string AreaNameToZh(string? code) => code switch
     {
-        "LOAD_AREA" => "上料区",
-        "UNLOAD_AREA" => "下料区",
-        "FULL_BUFFER" => "满架缓存区",
-        "EMPTY_BUFFER" => "空架缓存区",
-        "PALLET_RETURN" => "托盘回收区",
+        LocationAreaNames.LoadArea => "上料区",
+        LocationAreaNames.UnloadArea => "下料区",
+        LocationAreaNames.FullBuffer => "满架缓存区",
+        LocationAreaNames.EmptyBuffer => "空架缓存区",
+        LocationAreaNames.PalletReturn => "托盘回收区",
         _ => code ?? ""
     };
 
     public static string AreaNameFromZh(string? zh) => zh switch
     {
-        "上料区" => "LOAD_AREA",
-        "下料区" => "UNLOAD_AREA",
-        "满架缓存区" => "FULL_BUFFER",
-        "空架缓存区" => "EMPTY_BUFFER",
-        "托盘回收区" => "PALLET_RETURN",
-        "LOAD_AREA" or "UNLOAD_AREA" or "FULL_BUFFER" or "EMPTY_BUFFER" or "PALLET_RETURN" => zh!,
+        "上料区" => LocationAreaNames.LoadArea,
+        "下料区" => LocationAreaNames.UnloadArea,
+        "满架缓存区" => LocationAreaNames.FullBuffer,
+        "空架缓存区" => LocationAreaNames.EmptyBuffer,
+        "托盘回收区" => LocationAreaNames.PalletReturn,
+        LocationAreaNames.LoadArea or LocationAreaNames.UnloadArea or LocationAreaNames.FullBuffer
+            or LocationAreaNames.EmptyBuffer or LocationAreaNames.PalletReturn => zh!,
         _ => zh ?? ""
     };
 

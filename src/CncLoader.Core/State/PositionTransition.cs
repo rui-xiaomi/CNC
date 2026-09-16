@@ -50,8 +50,8 @@ public static class PositionTransition
     public static InboundReclaim DecideInboundReclaim(
         bool sourceRowMissing, string? sourceTaskState, TimeSpan age)
     {
-        // FAILED/CANCELED/缺失 → 清并回收
-        if (sourceRowMissing || sourceTaskState is RcsTaskState.Failed or RcsTaskState.Canceled)
+        // CANCELED/缺失 → 清并回收；FAILED 可能被自动 redo 重发、车仍会送达，保留登记走 TTL 或放弃收口（v2.6 修订）
+        if (sourceRowMissing || sourceTaskState is RcsTaskState.Canceled)
             return new InboundReclaim(InboundReclaimKind.Clear, $"STALE:{sourceTaskState ?? "missing"}");
 
         // COMPLETED 只等 PLC，超宽限仅告警不清（防误退回中转）
@@ -64,6 +64,19 @@ public static class PositionTransition
         return age > InboundHandoffTtl
             ? new InboundReclaim(InboundReclaimKind.Clear, "TTL")
             : InboundReclaim.Keep;
+    }
+
+    private static bool IsTimedOut(TimeSpan? age, int timeoutMs)
+        => timeoutMs > 0 && age is TimeSpan a && a >= TimeSpan.FromMilliseconds(timeoutMs);
+
+    private static string? TimeoutAlarmReason(in PositionInputs i)
+    {
+        if (i.Current == PositionState.Processing && IsTimedOut(i.StateAge, i.ProcessTimeoutMs))
+            return $"加工超时（{i.ProcessTimeoutMs}ms），机台未给出 OK/NG";
+        if (i.Current is PositionState.Dispatching or PositionState.Transporting
+            && IsTimedOut(i.TaskAge, i.TaskExecutionTimeoutMs))
+            return $"搬运任务执行超时（{i.TaskExecutionTimeoutMs}ms）";
+        return null;
     }
 
     /// <summary>HasMat 复核不过时的告警归因文案（阈值耗尽 / 方向不符）。</summary>
@@ -93,10 +106,13 @@ public static class PositionTransition
                 if (i.RcsState == RcsTaskState.Failed) return PositionState.Dispatching; // tracker 自动 redo
                 if (i.RcsState == RcsTaskState.Completed) return PositionState.Transporting; // 复核见动作清单
                 if (i.RcsState == RcsTaskState.Dispatched) return PositionState.Transporting;
+                if (IsTimedOut(i.TaskAge, i.TaskExecutionTimeoutMs)) return PositionState.Alarm;
                 return PositionState.Dispatching;
             case PositionState.Transporting:
                 if (i.RcsState == RcsTaskState.Canceled) return PositionState.Alarm;
-                // COMPLETED → 复核交动作清单（需 fresh PLC 读，避免信号仓滞后）
+                // COMPLETED 优先于超时：否则 15min 后 RCS 已完成也会跳过 HasMat 复核
+                if (i.RcsState == RcsTaskState.Completed) return PositionState.Transporting;
+                if (IsTimedOut(i.TaskAge, i.TaskExecutionTimeoutMs)) return PositionState.Alarm;
                 if (i.RcsState == RcsTaskState.Failed) return PositionState.Transporting; // redo
                 return PositionState.Transporting;
             case PositionState.Loaded:
@@ -104,6 +120,7 @@ public static class PositionTransition
             case PositionState.Processing:
                 if (i.Ok == true) return PositionState.DoneOk;
                 if (i.Ng == true) return PositionState.DoneNg;
+                if (IsTimedOut(i.StateAge, i.ProcessTimeoutMs)) return PositionState.Alarm;
                 return PositionState.Processing;
             case PositionState.DoneOk:
             case PositionState.DoneNg:
@@ -175,7 +192,8 @@ public static class PositionTransition
                     : new TransitionOutcome
                     {
                         Target = PositionState.Alarm,
-                        Actions = new[] { new PositionAction(PositionActionKind.RaiseAlarm) }
+                        Actions = new[] { new PositionAction(PositionActionKind.RaiseAlarm) },
+                        AlarmReason = TimeoutAlarmReason(i)
                     };
 
             case PositionState.DoneOk:
@@ -272,6 +290,14 @@ public readonly record struct PositionInputs
     public bool HasOpenWorkRecord { get; init; }
     /// <summary>Alarm 告警包是否已落过（粘滞期间不重复落库）。</summary>
     public bool AlarmAlreadyRaised { get; init; }
+    /// <summary>当前态已持续时长；null 表示未知，不参与超时判定。</summary>
+    public TimeSpan? StateAge { get; init; }
+    /// <summary>当前绑定任务已执行时长（自 DISPATCH_TIME / 绑定时刻）；null 不参与超时。</summary>
+    public TimeSpan? TaskAge { get; init; }
+    /// <summary>加工超时（毫秒）；≤0 关闭。</summary>
+    public int ProcessTimeoutMs { get; init; }
+    /// <summary>搬运执行超时（毫秒）；≤0 关闭。</summary>
+    public int TaskExecutionTimeoutMs { get; init; }
 }
 
 /// <summary>状态机产出：目标态 + 有序动作清单。</summary>

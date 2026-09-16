@@ -3,6 +3,7 @@ using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Config;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -20,6 +21,7 @@ public sealed class WaterMonitorService : IHostedService, IWaterMonitorService, 
     private readonly IFrameService _frames;
     private readonly ISlotAccountService _slots;
     private readonly IChangeFrameOrchestrator _changeFrame;
+    private readonly IPositionScheduler _scheduler;
     private readonly RcsOptions _options;
     private readonly ILogger<WaterMonitorService> _logger;
     private CancellationTokenSource? _cts;
@@ -27,12 +29,14 @@ public sealed class WaterMonitorService : IHostedService, IWaterMonitorService, 
     private readonly ConcurrentDictionary<(long Eq, FrameRole Role), byte> _inFlight = new();
 
     public WaterMonitorService(IEquipmentConfigService equipment, IFrameService frames, ISlotAccountService slots,
-        IChangeFrameOrchestrator changeFrame, IOptions<AppOptions> options, ILogger<WaterMonitorService> logger)
+        IChangeFrameOrchestrator changeFrame, IPositionScheduler scheduler,
+        IOptions<AppOptions> options, ILogger<WaterMonitorService> logger)
     {
         _equipment = equipment;
         _frames = frames;
         _slots = slots;
         _changeFrame = changeFrame;
+        _scheduler = scheduler;
         _options = options.Value.Rcs;
         _logger = logger;
         _changeFrame.ProgressChanged += OnChangeFrameProgress;
@@ -88,6 +92,9 @@ public sealed class WaterMonitorService : IHostedService, IWaterMonitorService, 
 
             var key = (binding.Value.EquipmentId, binding.Value.Role);
             if (_inFlight.ContainsKey(key)) continue;
+            if (_changeFrame.IsRoleLocked(binding.Value.EquipmentId, binding.Value.Role)
+                || _scheduler.IsEquipmentDispatchHeld(binding.Value.EquipmentId))
+                continue;
             if (_changeFrame.GetActiveTransactions().Any(t => t.EquipmentId == binding.Value.EquipmentId && t.Role == binding.Value.Role))
                 continue;
 

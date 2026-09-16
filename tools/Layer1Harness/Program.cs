@@ -49,6 +49,8 @@ internal static class Program
         Environment.SetEnvironmentVariable("App__Rcs__SchedulerEnabled", "false");
         Environment.SetEnvironmentVariable("App__Plc__UseSimulator", "false");
         Environment.SetEnvironmentVariable("App__Plc__PollingEnabled", "false");
+        // 回调用例从本机 127.0.0.1 推报文：来源白名单只放行环回，否则被 RCS 回调来源白名单 403。
+        Environment.SetEnvironmentVariable("App__Rcs__CallbackAllowedRemoteIps__0", "127.0.0.1");
 
         var configuration = new ConfigurationBuilder()
             .SetBasePath(baseDir)

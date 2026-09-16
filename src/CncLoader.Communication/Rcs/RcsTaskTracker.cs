@@ -115,44 +115,93 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
             return;
         }
 
+        var queryItems = string.IsNullOrWhiteSpace(result.RawResponse)
+            ? Array.Empty<(string TaskId, string Status)>()
+            : RcsAckParser.ParseQueryItems(result.RawResponse).ToArray();
+
+        var lookupIds = new List<string>(ids.Count + queryItems.Length);
+        lookupIds.AddRange(ids);
+        foreach (var (taskId, _) in queryItems)
+            lookupIds.Add(taskId);
+        var rows = await _store.GetByTaskIdsAsync(lookupIds, ct);
+
         var found = new HashSet<string>(StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(result.RawResponse))
+        foreach (var (taskId, status) in queryItems)
         {
-            foreach (var (taskId, status) in RcsAckParser.ParseQueryItems(result.RawResponse))
-            {
-                var row = await _store.GetByTaskIdAsync(taskId, ct);
-                var local = row?.RcsTaskId ?? taskId;
-                found.Add(local);
-                await ApplyPollStateAsync(local, status, ct);
-            }
+            rows.TryGetValue(taskId, out var row);
+            var local = row?.RcsTaskId ?? taskId;
+            found.Add(local);
+            await ApplyPollStateAsync(local, status, ct, row);
         }
 
         // RCS 侧未返回的 taskId → 查无此任务告警 + 工位收口 Alarm（可点恢复）。
+        // 先落库后下发，下发最长持续「超时×次数+退避」：未满宽限的任务可能尚未送达 RCS，不判查无（P0-3）。
         foreach (var id in ids)
         {
-            if (found.Contains(id) || !_notFoundAlarmed.TryAdd(id, true)) continue;
+            if (found.Contains(id) || _notFoundAlarmed.ContainsKey(id)) continue;
+            rows.TryGetValue(id, out var pending);
+            if (pending is not null && !IsNotFoundDue(pending)) continue;
+            if (!_notFoundAlarmed.TryAdd(id, true)) continue;
             await _alarms.RaiseRcsTaskNotFoundAsync(id, "轮询 queryTask 未返回该任务（RCS 侧查无），工位已收口可点恢复", ct);
             // P0-3：RCS 查无任务 → 落 FAILED 终态，移出未完结列表。否则该 taskId 每 3s 都进 queryTask IN 列表
             // 且只增不减，月级积累导致请求体膨胀。直接落库不走 notifier，故不触发 auto-redo（任务已判定不存在，重发无意义）。
             if (!await _store.UpdateStateAsync(id, RcsTaskState.Failed, null, "RCS 侧查无此任务，已落 FAILED 收口", ct))
                 _logger.LogWarning("RCS 查无任务 {TaskId} 落 FAILED 未生效（任务不存在）", id);
             await NotifySchedulerAbandonedAsync(id, "RCS_NOT_FOUND", ct);
+            await NotifyOperationsAbandonedAsync(id, "RCS_NOT_FOUND", ct);
         }
     }
 
-    private async Task ApplyPollStateAsync(string taskId, string rcsStatus, CancellationToken ct)
+    /// <summary>
+    /// 查无收口通知换架编排与盘点：二者只靠状态事件推进，查无直接落库不发事件，不通知会一直挂在进行中
+    /// （结果未知保留的事务尤甚）。redo 达上限走 FAILED 事件，已由二者自行收口，不经此处。
+    /// </summary>
+    private async Task NotifyOperationsAbandonedAsync(string taskId, string reason, CancellationToken ct)
+    {
+        try
+        {
+            if (_services.GetService<IChangeFrameOrchestrator>() is { } changeFrame)
+                await changeFrame.NotifyTaskAbandonedAsync(taskId, reason, ct);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "通知换架编排任务放弃失败 {TaskId} {Reason}", taskId, reason); }
+
+        try
+        {
+            if (_services.GetService<IInventoryService>() is { } inventory)
+                await inventory.NotifyTaskAbandonedAsync(taskId, reason, ct);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "通知盘点任务放弃失败 {TaskId} {Reason}", taskId, reason); }
+    }
+
+    /// <summary>RCS 现场确认：新建任务约 3s 后 queryTask 可查到。</summary>
+    private static readonly TimeSpan RcsQueryVisibilityDelay = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 是否已可判「查无」（P0-3）。该次下发已回写 DISPATCH_TIME（≥ SEND_TIME）：从该时刻起等可见延迟 + 一个轮询周期；
+    /// 下发中或刚 Claim/重发（SEND_TIME 已刷新、DISPATCH_TIME 仍是旧值）：按整段下发耗时宽限从 SEND_TIME 算。
+    /// </summary>
+    private bool IsNotFoundDue(RcsTaskRow row)
+        => StaleReservationPolicy.IsQueryNotFoundDue(
+            DateTime.Now,
+            row.SendTime,
+            row.DispatchTime,
+            RcsQueryVisibilityDelay + TimeSpan.FromMilliseconds(_runtime.PollIntervalMs),
+            StaleReservationPolicy.ComputeGrace(_runtime.RequestTimeoutMs, _runtime.MaxRetries));
+
+    private async Task ApplyPollStateAsync(
+        string taskId, string rcsStatus, CancellationToken ct, RcsTaskRow? row = null)
     {
         var state = RcsStatusMapper.ToTaskState(rcsStatus);
         if (state is null) return; // 未知态：等下一次
 
-        var row = await _store.GetByTaskIdAsync(taskId, ct);
+        row ??= await _store.GetByTaskIdAsync(taskId, ct);
         if (row is null) return;
         if (row.TaskState == state) return; // 未变化
 
         // 与回调冲突时以 queryTask 为准：直接覆盖。
         if (!await _store.UpdateStateAsync(taskId, state, rcsStatus, row.ErrorMsg, ct))
         {
-            _logger.LogWarning("跟踪器轮询更新任务态未生效（任务不存在）{TaskId} → {State}", taskId, state);
+            _logger.LogWarning("跟踪器轮询更新任务态未生效（任务不存在或终态不可回退）{TaskId} → {State}", taskId, state);
             return;
         }
 
@@ -204,8 +253,10 @@ public sealed class RcsTaskTracker : IHostedService, IAsyncDisposable
         if (result.FailureKind is RcsFailureKind.RouteUnavailable
             or RcsFailureKind.ConfigurationUnavailable)
         {
-            _logger.LogWarning("跟踪器自动 redo 路由拒发 {TaskId}（来源 {Source}）：{Msg}",
+            _logger.LogWarning("跟踪器自动 redo 路由拒发 {TaskId}（来源 {Source}），收口工位：{Msg}",
                 taskId, source, result.Message ?? result.Error);
+            await NotifySchedulerAbandonedAsync(taskId, "AUTO_REDO_ROUTE_UNAVAILABLE", CancellationToken.None);
+            await NotifyOperationsAbandonedAsync(taskId, "AUTO_REDO_ROUTE_UNAVAILABLE", CancellationToken.None);
             return;
         }
 

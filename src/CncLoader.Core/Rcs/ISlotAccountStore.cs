@@ -70,6 +70,18 @@ public interface ISlotAccountStore
     /// <summary>Reserved 槽 REMARK 从本地 taskId 改到 RCS <c>task_id</c>。无匹配行仍返回 true。</summary>
     Task<bool> RebindReservedTaskIdAsync(string fromTaskId, string toTaskId, CancellationToken ct = default)
         => Task.FromResult(true);
+
+    /// <summary>按预记 REMARK 查任务态；无行返回 null。</summary>
+    Task<string?> FindBoundTaskStateAsync(string taskId, CancellationToken ct = default)
+        => throw new NotSupportedException("此 Store 未实现预记任务态查询");
+
+    /// <summary>
+    /// 人工置空：同一上下文复核任务态后，仅当仍为 Reserved 且 REMARK 与
+    /// <paramref name="expectedRemark"/> 一致（空对空）才清空。
+    /// </summary>
+    Task<ExternalSlotWriteAttempt> TryForceClearReservedAsync(
+        long frameId, int slotNo, string? expectedRemark, DateTime updateTime, CancellationToken ct = default)
+        => throw new NotSupportedException("此 Store 未实现终态预记强制清空");
 }
 
 /// <summary>条件更新尝试结果：affected + 只读重查快照；InvalidTargetState 表示目标态非法未执行 UPDATE。</summary>

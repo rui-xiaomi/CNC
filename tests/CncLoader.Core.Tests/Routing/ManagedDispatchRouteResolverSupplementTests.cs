@@ -87,7 +87,8 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
         var taskStore = new MutableRcsTaskStore();
         var svc = new global::CncLoader.Communication.Rcs.RcsTaskService(
             client, taskStore, new NoopMsg(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            resolver, validator, NullLogger<global::CncLoader.Communication.Rcs.RcsTaskService>.Instance, new TrackingSlotsForClosure(),
+            new RcsCallbackNotifier());
 
         var result = await svc.DispatchTransitAsync(new TransitDispatchArgs
         {

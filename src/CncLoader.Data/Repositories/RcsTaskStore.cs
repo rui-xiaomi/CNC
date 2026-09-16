@@ -83,22 +83,27 @@ public sealed class RcsTaskStore : IRcsTaskStore
         string? error = null, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var t = await FindAsync(db, rcsTaskId, ct);
-        if (t is null) return false;
-        t.TaskState = taskState;
-        if (rcsStatus is not null) t.RcsStatus = rcsStatus;
-        if (error is not null) t.ErrorMsg = error.Length > 500 ? error[..500] : error;
-        t.TaskStatus = taskState switch
+        // 条件原子更新：终态不被迟到的回调/轮询旧态覆盖（P1-1）。affected=0 → 行不存在或迁移被拒。
+        var blocked = RcsTaskStateTransition.BlockedFrom(taskState).ToArray();
+        var truncatedError = error is null ? null : (error.Length > 500 ? error[..500] : error);
+        string? taskStatus = taskState switch
         {
             RcsTaskState.Completed => "2",
             RcsTaskState.Failed => "3",
             RcsTaskState.Executing => "1",
-            _ => t.TaskStatus
+            _ => null
         };
-        if (taskState is RcsTaskState.Completed or RcsTaskState.Canceled)
-            t.FinishTime = DateTime.Now;
-        await db.SaveChangesAsync(ct);
-        return true;
+        DateTime? finishTime = taskState is RcsTaskState.Completed or RcsTaskState.Canceled ? DateTime.Now : null;
+
+        var affected = await db.AgvTasks
+            .Where(x => (x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId) && !blocked.Contains(x.TaskState))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.TaskState, taskState)
+                .SetProperty(t => t.RcsStatus, t => rcsStatus ?? t.RcsStatus)
+                .SetProperty(t => t.ErrorMsg, t => truncatedError ?? t.ErrorMsg)
+                .SetProperty(t => t.TaskStatus, t => taskStatus ?? t.TaskStatus)
+                .SetProperty(t => t.FinishTime, t => finishTime ?? t.FinishTime), ct);
+        return affected > 0;
     }
 
     public async Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default)
@@ -109,12 +114,14 @@ public sealed class RcsTaskStore : IRcsTaskStore
         t.RedoCount += 1;
         t.TaskState = RcsTaskState.Dispatched;
         t.ErrorMsg = null;
+        t.SendTime = DateTime.Now;
         await db.SaveChangesAsync(ct);
     }
 
     public async Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = DateTime.Now;
         var affected = await db.AgvTasks
             .Where(x => (x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId)
                         && x.TaskState == RcsTaskState.Failed
@@ -123,13 +130,23 @@ public sealed class RcsTaskStore : IRcsTaskStore
                 .SetProperty(t => t.RedoCount, t => t.RedoCount + 1)
                 .SetProperty(t => t.TaskState, RcsTaskState.Dispatched)
                 .SetProperty(t => t.TaskStatus, "1")
-                .SetProperty(t => t.ErrorMsg, (string?)null), ct);
+                .SetProperty(t => t.ErrorMsg, (string?)null)
+                .SetProperty(t => t.SendTime, now), ct);
         if (affected > 0) return AutoRedoClaimResult.Claimed;
 
         var row = await db.AgvTasks.AsNoTracking()
             .FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId, ct);
         return AutoRedoClaimRules.ClassifyMiss(
             row is not null, row?.TaskState, row?.RedoCount ?? 0, maxRedo);
+    }
+
+    public async Task MarkResendAttemptAsync(string rcsTaskId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var t = await FindAsync(db, rcsTaskId, ct);
+        if (t is null) return;
+        t.SendTime = DateTime.Now;
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)
@@ -151,6 +168,51 @@ public sealed class RcsTaskStore : IRcsTaskStore
         var t = await db.AgvTasks.AsNoTracking()
             .FirstOrDefaultAsync(x => x.RcsTaskId == rcsTaskId || x.RcsRemoteId == rcsTaskId, ct);
         return t is null ? null : Map(t);
+    }
+
+    public async Task<IReadOnlyDictionary<string, RcsTaskRow>> GetByTaskIdsAsync(
+        IReadOnlyList<string> ids, CancellationToken ct = default)
+    {
+        var unique = ids.Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal).ToList();
+        var map = new Dictionary<string, RcsTaskRow>(StringComparer.Ordinal);
+        if (unique.Count == 0) return map;
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.AgvTasks.AsNoTracking()
+            .Where(x => (x.RcsTaskId != null && unique.Contains(x.RcsTaskId))
+                        || (x.RcsRemoteId != null && unique.Contains(x.RcsRemoteId)))
+            .ToListAsync(ct);
+        foreach (var t in rows)
+        {
+            var mapped = Map(t);
+            if (!string.IsNullOrEmpty(t.RcsTaskId)) map[t.RcsTaskId] = mapped;
+            if (!string.IsNullOrEmpty(t.RcsRemoteId)) map[t.RcsRemoteId] = mapped;
+        }
+        return map;
+    }
+
+    public async Task<bool> HasUnconfirmedCanceledAsync(long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.AgvTasks.AsNoTracking().AnyAsync(x =>
+            x.EquipmentId == equipmentId && x.PositionId == positionId
+            && x.TaskState == RcsTaskState.Canceled
+            && x.CancelManualFlag != "1", ct);
+    }
+
+    public async Task<IReadOnlyList<string>> ListUnconfirmedCanceledTaskIdsAsync(
+        long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.AgvTasks.AsNoTracking()
+            .Where(x => x.EquipmentId == equipmentId && x.PositionId == positionId
+                        && x.TaskState == RcsTaskState.Canceled
+                        && x.CancelManualFlag != "1"
+                        && x.RcsTaskId != null && x.RcsTaskId != "")
+            .OrderByDescending(x => x.Id)
+            .Select(x => x.RcsTaskId!)
+            .ToListAsync(ct);
     }
 
     public async Task<IReadOnlyList<RcsTaskRow>> GetRecentAsync(int limit = 100, CancellationToken ct = default)

@@ -53,7 +53,7 @@ public sealed class RcsTaskServiceTypedEndpointTests
         _tasks = new MutableRcsTaskStore();
         _svc = new RcsTaskService(
             _client, _tasks, new NoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
     }
 
     // ─── RED 6｜AREA→POSITION ────────────────────────────────────

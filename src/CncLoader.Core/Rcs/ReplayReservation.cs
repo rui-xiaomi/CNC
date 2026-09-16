@@ -54,8 +54,8 @@ public static class ReplayReservation
         if (string.IsNullOrWhiteSpace(taskId) || frameId <= 0)
             return ReplayReservationHold.Reject("槽位预记失败，拒绝重发");
 
-        var existing = await slots.FindReservedAsync(taskId, ct);
-        if (existing is not null)
+        // 原子「确认仍持有 + 刷新 BIND_TIME」：旧预记时间可能已超陈旧宽限，Claim/下发窗口内会被清扫回滚。
+        if (await slots.TouchReservationAsync(taskId, ct))
             return ReplayReservationHold.AlreadyHeld(plan == ReplayReservationPlan.Take);
 
         ReservedSlot? reserved = plan switch

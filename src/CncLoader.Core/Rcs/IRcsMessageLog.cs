@@ -22,10 +22,12 @@ public sealed record RcsMsgQuery
     public string? Direction { get; init; }
     /// <summary>接口名（精确）；null 或空=全部。</summary>
     public string? Interface { get; init; }
-    /// <summary>taskId 模糊匹配；null 或空=不限。</summary>
+    /// <summary>taskId 精确匹配；null 或空=不限。</summary>
     public string? TaskId { get; init; }
-    /// <summary>返回条数上限。</summary>
+    /// <summary>返回条数上限（实现侧钳到 1~500）。</summary>
     public int Limit { get; init; } = 100;
+    /// <summary>是否拉 REQUEST/RESPONSE 正文。列表默认 false，避免 TEXT 进 DataGrid。</summary>
+    public bool IncludeBodies { get; init; }
 }
 
 /// <summary>报文流水写入项。</summary>

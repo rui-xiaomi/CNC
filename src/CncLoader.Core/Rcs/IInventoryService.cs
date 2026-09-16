@@ -14,6 +14,19 @@ public interface IInventoryService
 
     /// <summary>当前进行中的盘点任务（UI 展示）。</summary>
     IReadOnlyList<InventoryTaskInfo> GetActiveInventories();
+
+    /// <summary>
+    /// 重启接续（P1-4）：从未完结任务里的识别任务重建进行中盘点，使随后到达的扫码结果照常回写槽位。
+    /// 须在回调与跟踪器开始派发事件之前调用。返回恢复的盘点数。
+    /// </summary>
+    Task<int> RecoverInFlightAsync(IReadOnlyList<RcsTaskRow> unfinished, CancellationToken ct = default)
+        => Task.FromResult(0);
+
+    /// <summary>
+    /// 任务被跟踪器判定放弃（如 RCS 侧查无）时收口进行中盘点：移出并发 FAILED 结果事件。非盘点任务忽略。
+    /// </summary>
+    Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+        => Task.CompletedTask;
 }
 
 /// <summary>盘点结果事件。</summary>

@@ -81,25 +81,64 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
         var points = await _pointSource.GetAllAsync(ct);
         var readCount = 0;
 
-        // 按（机台，PLC）分组：机台点位可能跨 PLC，各自用对应 PLC client 读，避免把一台 PLC 的地址发到另一台（P1-5）。
-        foreach (var eqGroup in points.GroupBy(p => (p.EquipmentId, p.PlcId)))
+        // 同 plcId 仍串行（客户端闸只保证单连接互斥）；不同 plcId 并行，避免多机一轮变成各机耗时之和。
+        var plcGroups = points
+            .GroupBy(p => (p.EquipmentId, p.PlcId))
+            .GroupBy(g => g.Key.PlcId)
+            .ToList();
+
+        await Task.WhenAll(plcGroups.Select(async plcGroup =>
         {
-            var equipmentId = eqGroup.Key.EquipmentId;
-            var plcId = eqGroup.Key.PlcId;
-            var client = _connections.Get(plcId);
-            var online = client?.IsConnected ?? false;
+            var local = 0;
+            foreach (var eqGroup in plcGroup)
+                local += await PollEquipmentAsync(eqGroup.Key.EquipmentId, eqGroup.Key.PlcId, eqGroup, ct);
+            Interlocked.Add(ref readCount, local);
+        }));
 
-            // 读值缓存：(signal, positionId) → On
-            var reads = new Dictionary<(SignalKey, long?), bool?>();
+        return readCount;
+    }
 
-            if (online)
+    private async Task<int> PollEquipmentAsync(
+        long equipmentId, long plcId, IEnumerable<PlcPointDefinition> eqGroup, CancellationToken ct)
+    {
+        var client = _connections.Get(plcId);
+        var attemptedReads = false;
+        var succeededReads = 0;
+        var readCount = 0;
+
+        // 读值缓存：(signal, positionId) → On
+        var reads = new Dictionary<(SignalKey, long?), bool?>();
+
+        if (client?.IsConnected == true)
+        {
+            // P2-3：相邻读点位合并为一次读，减少逐点往返；批量读失败（如夹带字不可读）退回该块逐点读，不比原来差。
+            foreach (var block in RegisterReadPlanner.Plan(eqGroup.Where(p => !p.IsWrite)))
             {
-                foreach (var point in eqGroup.Where(p => !p.IsWrite))
+                int[]? blockValues = null;
+                if (block.Points.Count > 1)
                 {
+                    try { blockValues = await client.ReadRegistersAsync(block.Address, block.Length, ct); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogDebug(ex, "批量读失败 EQ{Eq} {Addr}×{Len}，退回逐点读", equipmentId, block.Address, block.Length);
+                    }
+                }
+
+                foreach (var (point, index) in block.Points)
+                {
+                    attemptedReads = true;
                     try
                     {
-                        var raw = await client!.ReadRegistersAsync(point.RegisterAddress, point.DataLength, ct);
-                        var value = raw.Length > 0 ? raw[0] : 0;
+                        int value;
+                        if (blockValues is not null && index < blockValues.Length)
+                        {
+                            value = blockValues[index];
+                        }
+                        else
+                        {
+                            var raw = await client.ReadRegistersAsync(point.RegisterAddress, point.DataLength, ct);
+                            value = raw.Length > 0 ? raw[0] : 0;
+                        }
                         var on = SignalConventions.Interpret(value, point);
                         reads[(point.Signal, point.PositionId)] = on;
                         _store.UpdateReading(equipmentId, new SignalReading
@@ -107,6 +146,7 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
                             Signal = point.Signal, PositionId = point.PositionId,
                             RegisterAddress = point.RegisterAddress, RawValue = value, On = on
                         });
+                        succeededReads++;
                         readCount++;
                     }
                     catch (Exception ex)
@@ -115,20 +155,22 @@ public sealed class PlcPollingService : IPlcPollingService, IHostedService
                     }
                 }
             }
-
-            // 机台级
-            var doorOpen = reads.GetValueOrDefault((SignalKey.Door, null));
-            var safe = reads.GetValueOrDefault((SignalKey.MachineSafe, null));
-            _store.UpdateMachine(new MachineStatus
-            {
-                EquipmentId = equipmentId, PlcId = plcId, DoorOpen = doorOpen, Safe = safe, PlcOnline = online
-            });
-
-            // 工位级状态合成由 PositionScheduler（第四阶段⑤）统一驱动，轮询只负责信号采集。
-            // 调度器按 §7 状态机（含 DISPATCHING/TRANSPORTING/PLC复核）写 PositionStatus。
-            // 未启用调度器时，UI 看不到工位态——由调度器兜底置 Offline/WaitLoad。
         }
 
+        // 机台级：必须以本轮结束时的链路为准。组开始时还 Connected、读到一半 Faulted
+        // 若仍写 PlcOnline=true，调度器会把 Offline 推回 WaitLoad，看板上显示「等待上料」。
+        var stillConnected = client?.IsConnected ?? false;
+        var online = stillConnected && (!attemptedReads || succeededReads > 0);
+        var doorOpen = reads.GetValueOrDefault((SignalKey.Door, null));
+        var safe = reads.GetValueOrDefault((SignalKey.MachineSafe, null));
+        _store.UpdateMachine(new MachineStatus
+        {
+            EquipmentId = equipmentId, PlcId = plcId, DoorOpen = doorOpen, Safe = safe, PlcOnline = online
+        });
+
+        // 工位级状态合成由 PositionScheduler（第四阶段⑤）统一驱动，轮询只负责信号采集。
+        // 调度器按 §7 状态机（含 DISPATCHING/TRANSPORTING/PLC复核）写 PositionStatus。
+        // 未启用调度器时，UI 看不到工位态——由调度器兜底置 Offline/WaitLoad。
         return readCount;
     }
 }

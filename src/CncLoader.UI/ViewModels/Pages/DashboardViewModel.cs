@@ -8,6 +8,7 @@ using CncLoader.Core.Abstractions;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Rcs;
 using CncLoader.Core.State;
+using CncLoader.UI.Navigation;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -29,6 +30,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private readonly IUserNotificationService _notify;
     private readonly IUiDispatcher _ui;
     private readonly ReconciliationStatusBinder _reconcileBinder;
+    private readonly IUiExceptionMonitor? _uiExceptions;
+    private readonly IRcsTaskNavigator? _rcsNav;
 
     private readonly Dictionary<long, MachineCardVm> _machines = new();
     private readonly Dictionary<(long Eq, long Pos), PositionCardVm> _positions = new();
@@ -43,8 +46,11 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     public DashboardViewModel(ISignalStateStore store, IWorkRecordService workRecords, IAlarmEventService alarms,
         IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user,
         IUserNotificationService notify, IUiDispatcher ui,
-        IEquipmentConfigService? equipment = null, ICraftworkService? crafts = null)
+        IEquipmentConfigService? equipment = null, ICraftworkService? crafts = null,
+        IUiExceptionMonitor? uiExceptions = null, IRcsTaskNavigator? rcsNav = null)
     {
+        _uiExceptions = uiExceptions;
+        _rcsNav = rcsNav;
         _store = store;
         _workRecords = workRecords;
         _alarms = alarms;
@@ -70,6 +76,11 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         _reconcileBinder = new ReconciliationStatusBinder(_scheduler, MarshalToUi);
         SyncReconcileUiFromBinder();
         _reconcileBinder.Changed += OnReconcileBinderChanged;
+        if (_uiExceptions is not null)
+        {
+            SyncUiExceptions();
+            _uiExceptions.Changed += OnUiExceptionsChanged;
+        }
 
         _throttle = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(200) };
         _throttle.Tick += (_, _) => { if (_positionsDirty) { _positionsDirty = false; UpdateMachinesUi(); } };
@@ -121,6 +132,24 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     /// <summary>对账是否已开闸（自动派工已开启）。</summary>
     [ObservableProperty] private bool _isReconcileGateOpen;
 
+    /// <summary>UI 线程拦截过未处理异常（P2-6）：看板常驻提示界面状态可能不一致。</summary>
+    [ObservableProperty] private bool _hasUiExceptions;
+    [ObservableProperty] private string _uiExceptionText = "";
+    [ObservableProperty] private string? _uiExceptionToolTip;
+
+    private void OnUiExceptionsChanged(object? sender, EventArgs e) => MarshalToUi(SyncUiExceptions);
+
+    private void SyncUiExceptions()
+    {
+        if (_uiExceptions is null) return;
+        var count = _uiExceptions.Count;
+        HasUiExceptions = count > 0;
+        UiExceptionText = count > 0 ? $"界面异常 {count}" : "";
+        UiExceptionToolTip = count > 0
+            ? $"UI 线程已拦截 {count} 次未处理异常，界面显示可能与实际不一致，请核对后择机重启客户端。最近一次 {_uiExceptions.LastAt:HH:mm:ss}：{_uiExceptions.LastMessage}"
+            : null;
+    }
+
     private void OnReconcileBinderChanged(object? sender, EventArgs e) => SyncReconcileUiFromBinder();
 
     private void SyncReconcileUiFromBinder()
@@ -143,6 +172,7 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         _statsTimer.Stop();
         _reconcileBinder.Changed -= OnReconcileBinderChanged;
         _reconcileBinder.Dispose();
+        if (_uiExceptions is not null) _uiExceptions.Changed -= OnUiExceptionsChanged;
         _store.PositionChanged -= OnStoreChanged;
         _store.MachineChanged -= OnStoreChanged;
         _alarms.AlarmRaised -= OnAlarmRaised;
@@ -249,6 +279,23 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     {
         await RefreshStatsAsync();
         await RefreshRecordsAsync();
+    }
+
+    [RelayCommand]
+    private void OpenCancelHold(PositionCardVm? card)
+    {
+        var id = CancelHoldDisplay.TryParseTaskId(card?.StatusDetail);
+        if (id is null)
+        {
+            _notify.Warning("该工位没有待确认取消任务。");
+            return;
+        }
+        if (_rcsNav is null)
+        {
+            _notify.Warning("无法打开 RCS 页。");
+            return;
+        }
+        _rcsNav.OpenTask(id);
     }
 
     [RelayCommand]
@@ -769,7 +816,10 @@ public sealed partial class PositionCardVm : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StateDisplay))]
+    [NotifyPropertyChangedFor(nameof(HasCancelHold))]
     private string? _statusDetail;
+
+    public bool HasCancelHold => CancelHoldDisplay.IsHold(StatusDetail);
 
     public bool IsAlarm => State == PositionState.Alarm;
     /// <summary>判定态（OK/NG/报警）用大号等宽展示——看板签名元素。</summary>

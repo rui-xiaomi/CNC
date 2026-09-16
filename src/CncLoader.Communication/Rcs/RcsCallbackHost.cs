@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
+using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
 using Microsoft.AspNetCore.Builder;
@@ -7,6 +9,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace CncLoader.Communication.Rcs;
 
@@ -14,26 +17,41 @@ namespace CncLoader.Communication.Rcs;
 /// RCS 回调服务端（内嵌 Kestrel 自宿主）。监听 <c>RcsOptions.CallbackHost:CallbackPort</c>，
 /// 提供 <c>/externalApi/pushTaskStatus|scanTaskStatus|warnCallback</c> 三个 POST 端点，
 /// 收到即交 <see cref="IRcsCallbackProcessor"/> 处理并应答 <c>{"taskId":"..."}</c>。
+/// 来源须在 <c>RcsOptions.CallbackAllowedRemoteIps</c> 内，否则 403（白名单为空 fail-closed 拒绝全部来源）。
 /// 作为 <see cref="IHostedService"/> 随主机启动；端口占用等启动失败记日志并落严重告警（不阻断主程序，但操作员须知晓回调不可用）。
 /// </summary>
 public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsyncDisposable
 {
+    private static readonly TimeSpan RejectLogThrottle = TimeSpan.FromSeconds(30);
+
     private readonly IRcsRuntimeConfig _runtime;
     private readonly IRcsCallbackProcessor _processor;
     private readonly IAlarmEventService _alarms;
     private readonly ILogger<RcsCallbackHost> _logger;
+    private readonly bool _useSimulator;
+    private readonly IReadOnlyList<IPAddress> _allowedSources;
+    private readonly IReadOnlyList<string> _invalidSources;
+    /// <summary>拒绝日志限频（按来源 IP），防伪造请求刷爆日志。</summary>
+    private readonly ConcurrentDictionary<string, DateTime> _rejectLogStamp = new();
     private WebApplication? _app;
     private volatile bool _isListening;
     private volatile string? _listenError;
     private string _boundHost = "0.0.0.0";
     private int _boundPort = 9080;
 
-    public RcsCallbackHost(IRcsRuntimeConfig runtime, IRcsCallbackProcessor processor, IAlarmEventService alarms, ILogger<RcsCallbackHost> logger)
+    public RcsCallbackHost(IRcsRuntimeConfig runtime, IRcsCallbackProcessor processor, IAlarmEventService alarms,
+        IOptions<AppOptions> options, ILogger<RcsCallbackHost> logger)
     {
         _runtime = runtime;
         _processor = processor;
         _alarms = alarms;
         _logger = logger;
+        var rcs = options.Value.Rcs;
+        _useSimulator = rcs.UseSimulator;
+        var (allowed, invalid) = CallbackSourceFilter.Parse(rcs.CallbackAllowedRemoteIps);
+        // 现场白名单通常只有 RCS IP；本机「测试本机监听」与模拟器回推都走 127.0.0.1，必须补环回。
+        _allowedSources = CallbackSourceFilter.EnsureLocalProbeAllowed(allowed);
+        _invalidSources = invalid;
     }
 
     public bool IsListening => _isListening;
@@ -54,6 +72,9 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
             builder.Logging.ClearProviders();
             builder.WebHost.ConfigureKestrel(k =>
             {
+                // 回调报文为小 JSON：限制请求体与请求头时长，防大包/慢速请求耗尽内存与连接（P0-4）。
+                k.Limits.MaxRequestBodySize = 1024 * 1024;
+                k.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(10);
                 if (IPAddress.TryParse(host, out var ip))
                 {
                     k.Listen(ip, port);
@@ -99,7 +120,10 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
             {
                 _logger.LogWarning(alarmEx, "回调启动失败告警落库失败");
             }
+            return;
         }
+
+        await WarnIfSourceFilterWeakAsync(port);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -115,6 +139,19 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
 
     private void MapEndpoints(WebApplication app)
     {
+        // 来源白名单：非名单来源 403，不进处理器、不落库（防伪造回调改写槽位账 / 触发自动 redo；P0-4）。
+        app.Use(async (HttpContext ctx, RequestDelegate next) =>
+        {
+            var remote = ctx.Connection.RemoteIpAddress;
+            if (CallbackSourceFilter.IsRejected(remote, _allowedSources))
+            {
+                LogRejectedThrottled(remote, ctx.Request.Path);
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+            await next(ctx);
+        });
+
         app.MapPost(RcsCallbackInterfaces.PushTaskStatusPath, async (HttpContext ctx) =>
         {
             var raw = await ReadBodyAsync(ctx);
@@ -135,6 +172,44 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
             var ack = await _processor.HandleWarnCallbackAsync(raw, ctx.RequestAborted);
             return RcsCallbackAckResults.FromAckBody(ack);
         });
+    }
+
+    /// <summary>白名单为空（fail-closed 拒全部）或含非法项时，启动即记错误日志并落严重告警（模拟器模式只记日志）。</summary>
+    private async Task WarnIfSourceFilterWeakAsync(int port)
+    {
+        var problems = new List<string>();
+        if (_invalidSources.Count > 0)
+            problems.Add($"RCS 回调来源白名单含非法项 [{string.Join(", ", _invalidSources)}]，已忽略，请改为点分 IPv4 或 IPv6");
+        if (_allowedSources.Count == 0)
+            problems.Add($"RCS 回调来源白名单为空，端口 {port} 的回调已 fail-closed 拒绝全部来源，请配置 App:Rcs:CallbackAllowedRemoteIps");
+
+        if (problems.Count == 0)
+        {
+            _logger.LogInformation("RCS 回调来源白名单：{Ips}", string.Join(", ", _allowedSources));
+            return;
+        }
+
+        var message = string.Join("；", problems);
+        _logger.LogError("{Msg}", message);
+        if (_useSimulator) return;
+        try
+        {
+            await _alarms.RaiseRcsWarnAsync("CALLBACK", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                message, null, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "回调来源白名单告警落库失败");
+        }
+    }
+
+    private void LogRejectedThrottled(IPAddress? remote, PathString path)
+    {
+        var key = remote?.ToString() ?? "unknown";
+        var now = DateTime.UtcNow;
+        if (_rejectLogStamp.TryGetValue(key, out var last) && now - last < RejectLogThrottle) return;
+        _rejectLogStamp[key] = now;
+        _logger.LogWarning("拒绝非白名单来源的 RCS 回调：{Remote} {Path}（30s 内同来源不再记录）", key, path.Value);
     }
 
     private static async Task<string> ReadBodyAsync(HttpContext ctx)

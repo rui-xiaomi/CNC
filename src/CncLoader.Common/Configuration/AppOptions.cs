@@ -41,6 +41,12 @@ public sealed class RcsOptions
     /// <summary>内嵌回调服务端监听端口。</summary>
     public int CallbackPort { get; set; } = 9080;
 
+    /// <summary>
+    /// 允许调用回调端点的来源 IP（RCS 服务器地址，点分 IPv4 或 IPv6）。回调端点无鉴权，
+    /// 不在名单内的请求一律 403（P0-4）。只在 appsettings 配置，不入库、不可在界面修改。
+    /// </summary>
+    public string[] CallbackAllowedRemoteIps { get; set; } = Array.Empty<string>();
+
     /// <summary>兜底轮询间隔（毫秒，2~5s）。</summary>
     public int PollIntervalMs { get; set; } = 3000;
 
@@ -61,6 +67,12 @@ public sealed class RcsOptions
     /// <summary>RCS 完成后 HasMat fresh 连续读取未知的告警阈值。</summary>
     public int HasMatRecheckFailThreshold { get; set; } = 6;
 
+    /// <summary>加工（PROCESSING）超时（毫秒）。≤0 关闭。超时 → Alarm，不自动复位启动电平。</summary>
+    public int ProcessTimeoutMs { get; set; } = 600_000;
+
+    /// <summary>搬运任务执行超时（毫秒，DISPATCHING/TRANSPORTING）。≤0 关闭。超时 → Alarm。</summary>
+    public int TaskExecutionTimeoutMs { get; set; } = 900_000;
+
     /// <summary>是否启用加工位状态机调度器。关闭时不对账、不开自动派工，看板显示「调度器未启用」；轮询不再合成工位态。</summary>
     public bool SchedulerEnabled { get; set; } = true;
 
@@ -72,13 +84,13 @@ public sealed class RcsOptions
     public int WaterFullThreshold { get; set; } = 2;
 
     /// <summary>满架缓存区命名点（LOCATION_MAP LOC_NAME），换架时旧架拉到此 cell。</summary>
-    public string FullBufferArea { get; set; } = "FULL_BUFFER";
+    public string FullBufferArea { get; set; } = LocationAreaNames.FullBuffer;
 
     /// <summary>空架缓存区命名点（换架时空架拉走/新架送来）。</summary>
-    public string EmptyBufferArea { get; set; } = "EMPTY_BUFFER";
+    public string EmptyBufferArea { get; set; } = LocationAreaNames.EmptyBuffer;
 
     /// <summary>托盘回收区命名点（空托盘回收任务终点）。</summary>
-    public string PalletReturnArea { get; set; } = "PALLET_RETURN";
+    public string PalletReturnArea { get; set; } = LocationAreaNames.PalletReturn;
 
     /// <summary>是否启用定期后台盘点（班前/班后自动扫码核账）。默认关：盘点期间搬运任务排队，需运维明确开启。</summary>
     public bool InventoryAutoEnabled { get; set; }

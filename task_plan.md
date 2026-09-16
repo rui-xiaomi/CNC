@@ -164,7 +164,7 @@ AGV / 扫码枪连通性测试（仅测试，不纳入调度/来料校验）。
 **代码侧已就绪、勿在现场误跑**
 - 审查高危修复已合入（队列/PLC 串行/Dispose 占闸/水位/_redo/删架校验/设备流水收敛）
 - P0/P1 安全门禁已合入并完成代码级验收（见下方「安全门禁」）；单测工程 `tests/CncLoader.Core.Tests`
-- 禁止现场执行 `refill_upload_frame_electrodes.sql` / `FrameSeedReset`
+- 禁止现场重跑 `cnc_schema.sql`（会 DROP 全表）或执行 `FrameSeedReset`
 
 ### 安全门禁 P0/P1（2026-08-05）　Status: 代码级验收通过（非生产验收）
 归档：`.scratch/final-acceptance/2026-08-05-cnc-loader-safety-hardening-acceptance.md`  

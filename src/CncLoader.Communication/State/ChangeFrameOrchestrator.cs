@@ -28,6 +28,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
     private readonly ILogger<ChangeFrameOrchestrator> _logger;
 
     private readonly ConcurrentDictionary<string, ChangeFrameContext> _active = new();
+    private readonly ConcurrentDictionary<(long Eq, FrameRole Role), byte> _roleLocks = new();
     private static long _seq;
 
     public ChangeFrameOrchestrator(
@@ -110,6 +111,17 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             TxnId = txnId, Author = author
         }, ct);
 
+        if (pull.FailureKind == RcsFailureKind.OutcomeUnknown && !string.IsNullOrEmpty(pull.TaskId))
+        {
+            // 请求已发出未拿到应答：RCS 可能已建任务、车可能在拉架——保留事务交跟踪器按 queryTask 确认，
+            // 完成事件照常推进第二发；RCS 实无此任务时由 NotifyTaskAbandonedAsync 收口。
+            ctx.PullTaskId = pull.TaskId;
+            Raise(txnId, equipmentId, role, ChangeFrameStep.PullOld, ctx.PullTaskId, null, "RUNNING",
+                $"第一发下发结果未知，等待 RCS 确认：{pull.Error ?? pull.Message ?? "—"}");
+            _logger.LogWarning("换架 {Txn} 第一发 {Pull} 下发结果未知，保留事务等待 RCS 确认", txnId, ctx.PullTaskId);
+            return txnId;
+        }
+
         if (!pull.Success || string.IsNullOrEmpty(pull.TaskId))
         {
             var pullErr = pull.Error ?? pull.Message ?? "未知错误";
@@ -169,8 +181,17 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                         ctx.PushTaskId = push.TaskId;
                         Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.PushNew, ctx.PullTaskId, ctx.PushTaskId, "RUNNING", "已下发送新架");
                     }
+                    else if (push.FailureKind == RcsFailureKind.OutcomeUnknown && !string.IsNullOrEmpty(push.TaskId))
+                    {
+                        // 同第一发：可能已在送新架，不得按失败锁工序；保留事务等 RCS 确认
+                        ctx.PushTaskId = push.TaskId;
+                        Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.PushNew, ctx.PullTaskId, ctx.PushTaskId, "RUNNING",
+                            $"第二发下发结果未知，等待 RCS 确认：{push.Error ?? push.Message ?? "—"}");
+                        _logger.LogWarning("换架 {Txn} 第二发 {Push} 下发结果未知，保留事务等待 RCS 确认", ctx.TxnId, ctx.PushTaskId);
+                    }
                     else
                     {
+                        if (!TryBeginTerminal(ctx)) return;
                         var pushErr = push.Error ?? push.Message ?? "未知错误";
                         Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, "FAILED", $"第二发下发失败：{pushErr}");
                         if (IsRoutingFailure(push))
@@ -183,11 +204,13 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                         {
                             await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId, $"换架第二发（送新架）下发失败：{pushErr}");
                         }
+                        LockDispatch(ctx, $"换架第二发下发失败：{pushErr}");
                         _active.TryRemove(ctx.TxnId, out _);
                     }
                 }
                 else if (e.TaskState == RcsTaskState.Canceled || await IsRedoExhausted(e.TaskId))
                 {
+                    if (!TryBeginTerminal(ctx)) return;
                     Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, null, e.TaskState, "第一发失败/取消，绑定不解除，原状保持");
                     await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId,
                         $"换架第一发（拉旧架）{e.TaskState}，绑定不解除、原状保持");
@@ -199,6 +222,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
             {
                 if (e.TaskState == RcsTaskState.Completed)
                 {
+                    if (!TryBeginTerminal(ctx)) return;
                     Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Done, ctx.PullTaskId, ctx.PushTaskId, "COMPLETED", "换架完成");
                     _scheduler.InvalidateFrameBindingCache(ctx.EquipmentId);
                     _logger.LogInformation("换架 {Txn} 完成", ctx.TxnId);
@@ -206,14 +230,104 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
                 }
                 else if (e.TaskState == RcsTaskState.Canceled || await IsRedoExhausted(e.TaskId))
                 {
+                    if (!TryBeginTerminal(ctx)) return;
                     Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, ctx.PushTaskId, e.TaskState, "第二发失败/取消，站点空置，锁定工序+工单");
                     await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId,
                         $"换架第二发（送新架）{e.TaskState}，站点空置，需锁定工序并人工处理");
+                    LockDispatch(ctx, $"换架第二发（送新架）{e.TaskState}，站点空置");
                     _active.TryRemove(ctx.TxnId, out _);
                 }
             }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "换架 {Txn} 处理事件异常", ctx.TxnId); }
+    }
+
+    public async Task<int> RecoverInFlightAsync(IReadOnlyList<RcsTaskRow> unfinished, CancellationToken ct = default)
+    {
+        var kind = RcsTaskKindNames.ToDbKind(RcsTaskKind.ChangeFrame);
+        var groups = unfinished
+            .Where(r => r.Kind == kind && !string.IsNullOrEmpty(r.TxnId) && !string.IsNullOrEmpty(r.RcsTaskId))
+            .GroupBy(r => r.TxnId!, StringComparer.Ordinal)
+            .ToList();
+        if (groups.Count == 0) return 0;
+
+        var emptyBuffer = await _locationMap.ResolveAreaAsync(_options.EmptyBufferArea, ct);
+        var recovered = 0;
+        foreach (var group in groups)
+        {
+            var txnId = group.Key;
+            if (_active.ContainsKey(txnId)) continue;
+            var pull = group.FirstOrDefault(r => r.TaskType == "1");
+            var push = group.FirstOrDefault(r => r.TaskType == "0");
+            var anchor = push ?? pull;
+            if (anchor?.EquipmentId is not long equipmentId) continue;
+
+            var line = await _equipment.GetWorkLineByEquipmentAsync(equipmentId, ct);
+            if (line is null)
+            {
+                _logger.LogWarning("换架 {Txn} 重启后无法接续：机台 {Eq} 线体路由不可用", txnId, equipmentId);
+                await _alarms.RaiseRcsTaskCanceledAsync(txnId, "重启后换架事务无法接续（机台线体路由不可用），请人工核对料架位置并处理", ct);
+                continue;
+            }
+
+            // 拉旧架 = 站点→缓存区；送新架 = 缓存区→站点
+            var frameCell = push?.ToCode ?? pull!.FromCode;
+            var bufferCell = push?.FromCode ?? pull!.ToCode;
+            var frame = await _locationMap.ResolveByRcsCodeAsync(frameCell, ct);
+            var ctx = new ChangeFrameContext
+            {
+                TxnId = txnId, EquipmentId = equipmentId,
+                // 角色未落库，按缓存区反推（上料架换架用空架缓存区）；仅影响进度展示与水位去重
+                Role = string.Equals(bufferCell, emptyBuffer?.RcsCode, StringComparison.Ordinal) ? FrameRole.Upload : FrameRole.Unload,
+                FrameId = frame?.FrameId ?? 0, FrameCell = frameCell, BufferCell = bufferCell,
+                PullTaskId = pull?.RcsTaskId, PushTaskId = push?.RcsTaskId, PushDispatched = push is null ? 0 : 1,
+                Author = "recovery", WorkLineId = line.WorkLineId, LineCode = line.LineCode
+            };
+            _active[txnId] = ctx;
+            recovered++;
+            _logger.LogInformation("换架 {Txn} 重启接续：拉旧架 {Pull} 送新架 {Push}", txnId, ctx.PullTaskId ?? "—", ctx.PushTaskId ?? "—");
+        }
+        return recovered;
+    }
+
+    public async Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+    {
+        var ctx = _active.Values.FirstOrDefault(c =>
+            string.Equals(c.PullTaskId, taskId, StringComparison.Ordinal)
+            || string.Equals(c.PushTaskId, taskId, StringComparison.Ordinal));
+        if (ctx is null || !TryBeginTerminal(ctx) || !_active.TryRemove(ctx.TxnId, out _)) return;
+
+        var isPush = string.Equals(ctx.PushTaskId, taskId, StringComparison.Ordinal);
+        var msg = isPush
+            ? $"换架第二发（送新架）已放弃（{reason}），站点可能空置，需锁定工序并人工处理"
+            : $"换架第一发（拉旧架）已放弃（{reason}），绑定不解除、原状保持，请人工核对料架位置";
+        Raise(ctx.TxnId, ctx.EquipmentId, ctx.Role, ChangeFrameStep.Alarm, ctx.PullTaskId, ctx.PushTaskId, "FAILED", msg);
+        _logger.LogWarning("换架 {Txn} 任务 {Task} 已放弃（{Reason}），事务结束", ctx.TxnId, taskId, reason);
+        if (isPush) LockDispatch(ctx, msg);
+        await _alarms.RaiseRcsTaskCanceledAsync(ctx.TxnId, msg, ct);
+    }
+
+    public Task ConfirmNewFrameInPlaceAsync(long equipmentId, FrameRole role, string author, CancellationToken ct = default)
+    {
+        _roleLocks.TryRemove((equipmentId, role), out _);
+        _scheduler.SetEquipmentDispatchHold(equipmentId, false);
+        _scheduler.InvalidateFrameBindingCache(equipmentId);
+        _logger.LogInformation("换架新架到位确认：机台 {Eq} 角色 {Role} 操作人 {Author}，已解锁派工",
+            equipmentId, role, author);
+        Raise($"CF-UNLOCK-{equipmentId}-{role}", equipmentId, role, ChangeFrameStep.Done, null, null, "COMPLETED",
+            "人工确认新架到位，已解锁派工");
+        return Task.CompletedTask;
+    }
+
+    public bool IsRoleLocked(long equipmentId, FrameRole role) => _roleLocks.ContainsKey((equipmentId, role));
+
+    private static bool TryBeginTerminal(ChangeFrameContext ctx)
+        => Interlocked.CompareExchange(ref ctx.TerminalHandled, 1, 0) == 0;
+
+    private void LockDispatch(ChangeFrameContext ctx, string reason)
+    {
+        _roleLocks[(ctx.EquipmentId, ctx.Role)] = 0;
+        _scheduler.SetEquipmentDispatchHold(ctx.EquipmentId, true, reason);
     }
 
     private async Task<bool> IsRedoExhausted(string taskId)
@@ -249,6 +363,7 @@ public sealed class ChangeFrameOrchestrator : IChangeFrameOrchestrator
         public string? PullTaskId;
         public string? PushTaskId;
         public int PushDispatched;
+        public int TerminalHandled;
         public string? Author;
         public long WorkLineId;
         public string LineCode = "LINE";

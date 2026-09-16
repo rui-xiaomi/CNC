@@ -23,6 +23,8 @@ public sealed class FinsLinkFaultTests
         Assert.That(client.IsConnected, Is.True);
 
         Assert.ThrowsAsync<TimeoutException>(async () => await client.ReadRegistersAsync("D1006", 1));
+        Assert.ThrowsAsync<TimeoutException>(async () => await client.ReadRegistersAsync("D1006", 1),
+            "超时取消后须重建 UDP，第二次读仍是超时而不是 10022");
 
         Assert.Multiple(() =>
         {

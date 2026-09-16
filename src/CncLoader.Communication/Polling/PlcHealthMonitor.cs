@@ -9,7 +9,7 @@ namespace CncLoader.Communication.Polling;
 
 /// <summary>
 /// PLC 失联监测（P0-5）：周期检查机台快照，某 PLC 持续离线/快照过期超阈值即补一声「大声告警」。
-/// 不负责重连（AGENTS.md 已列技术债）；失联期间工位已由 PositionTransition 停派工（Offline），本项只消除「静默停线」。
+/// 重连由 <c>PlcReconnectService</c> 负责；失联期间工位已由 PositionTransition 停派工（Offline），本项只消除「静默停线」。
 /// </summary>
 public sealed class PlcHealthMonitor : IHostedService
 {
@@ -123,7 +123,7 @@ public sealed class PlcHealthMonitor : IHostedService
         foreach (var (plcId, downFor) in toAlarm)
         {
             await _alarms.RaisePlcAlarmAsync(plcId,
-                $"PLC {plcId} 失联已 {downFor.TotalSeconds:0} 秒，相关机台已停止派工。请检查网络/PLC 后手动「全部连接」。", "2", ct);
+                $"PLC {plcId} 失联已 {downFor.TotalSeconds:0} 秒，相关机台已停止派工。客户端正在自动重连，请检查网线与 PLC。", "2", ct);
         }
     }
 }

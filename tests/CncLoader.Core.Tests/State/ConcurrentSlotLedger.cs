@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 
 namespace CncLoader.Core.Tests.State;
 
@@ -300,6 +302,50 @@ internal sealed class ConcurrentSlotLedger : ISlotAccountStore
             slot.BindTime = null;
             TraceEvent("RollbackTakeCommit");
             return Task.FromResult(true);
+        }
+    }
+
+    public Dictionary<string, string?> BoundTaskStates { get; } = new();
+
+    public Task<string?> FindBoundTaskStateAsync(string taskId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(BoundTaskStates.TryGetValue(taskId, out var state) ? state : null);
+    }
+
+    public Task<ExternalSlotWriteAttempt> TryForceClearReservedAsync(
+        long frameId, int slotNo, string? expectedRemark, DateTime updateTime, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            var idx = _slots.FindIndex(s => s.FrameId == frameId && s.SlotNo == slotNo);
+            if (idx < 0)
+                return Task.FromResult(new ExternalSlotWriteAttempt(0, null));
+            var current = _slots[idx];
+            var remarkMatch = string.IsNullOrWhiteSpace(current.Remark)
+                ? string.IsNullOrWhiteSpace(expectedRemark)
+                : string.Equals(current.Remark, expectedRemark, StringComparison.Ordinal);
+            if (current.SlotState != SlotStates.Reserved || !remarkMatch)
+                return Task.FromResult(new ExternalSlotWriteAttempt(0, current.Clone()));
+
+            var taskState = !string.IsNullOrWhiteSpace(current.Remark)
+                            && BoundTaskStates.TryGetValue(current.Remark, out var st)
+                ? st
+                : null;
+            if (!ManualSlotClearPolicy.AllowsForceClearReserved(current.Remark, taskState))
+                return Task.FromResult(new ExternalSlotWriteAttempt(0, current.Clone()));
+
+            var next = current.Clone();
+            next.SlotState = SlotStates.Empty;
+            next.MaterialId = null;
+            next.Remark = null;
+            next.BindSource = null;
+            next.BindTime = null;
+            next.UpdateTime = updateTime;
+            _slots[idx] = next;
+            TraceEvent("ForceClearReserved");
+            return Task.FromResult(new ExternalSlotWriteAttempt(1, next.Clone()));
         }
     }
 

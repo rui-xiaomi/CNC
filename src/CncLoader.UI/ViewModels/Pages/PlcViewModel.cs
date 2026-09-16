@@ -7,6 +7,7 @@ using CncLoader.Common.Identity;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
+using CncLoader.Core.State;
 using CncLoader.UI.Services;
 using Microsoft.Extensions.Options;
 
@@ -29,6 +30,8 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     private readonly IUiDispatcher _ui;
     private readonly IDialogService _dialogs;
     private readonly PlcOptions _plcOptions;
+    private readonly IPositionScheduler _scheduler;
+    private readonly bool _schedulerEnabled;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _heartbeatTimer;
     private long _heartbeat;
@@ -39,8 +42,10 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         IDeviceLogStore logStore, IAlarmEventService alarms, ICurrentUser user,
         PointMappingViewModel pointMapping,
         IUserNotificationService notify, IUiDispatcher ui, IDialogService dialogs,
-        IOptions<AppOptions> options)
+        IOptions<AppOptions> options, IPositionScheduler scheduler)
     {
+        _scheduler = scheduler;
+        _schedulerEnabled = options.Value.Rcs.SchedulerEnabled;
         _catalog = catalog;
         _connections = connections;
         _operations = operations;
@@ -206,8 +211,8 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            StatusMessage = ex.Message;
-            _notify.Warning($"{row.Name} 连接失败：{ex.Message}");
+            StatusMessage = PlcLinkError.Describe(ex);
+            _notify.Warning($"{row.Name} 连接失败：{PlcLinkError.Describe(ex)}");
         }
     }
 
@@ -413,6 +418,15 @@ public sealed partial class PlcViewModel : PageViewModelBase, IDisposable
     private async Task WriteSignalAsync()
     {
         if (SelectedWriteSignal is null || SelectedPlc is null) return;
+
+        // 手动互斥：自动派工运行中禁止手动写 PLC（可直接驱动机台启动/复位，与调度器冲突）
+        if (_schedulerEnabled && !_scheduler.IsAutoDispatchPaused)
+        {
+            const string blocked = "自动派工运行中，禁止手动写 PLC：请先在 RCS 页开启「暂停自动派工」";
+            StatusMessage = blocked;
+            _notify.Warning(blocked);
+            return;
+        }
 
         var msg = $"确认向 {SelectedWriteSignal.DisplayName} 写入值 {WriteValue}？\n此操作将驱动真实机台动作。";
         if (!_notify.Confirm(msg, "写 PLC 二次确认")) return;

@@ -20,26 +20,65 @@ public interface IRcsTaskStore
 
     /// <summary>
     /// 更新任务态（可带 RCS 原始态与错误信息）。COMPLETED/CANCELED 时置 FINISH_TIME。
-    /// 返回 true=已找到行并保存成功；false=任务行不存在（未落库）；异常/取消照常抛出。
+    /// 迁移受 <see cref="RcsTaskStateTransition"/> 约束：终态不被迟到的旧态覆盖。
+    /// 返回 true=已找到行并保存成功；false=任务行不存在（未落库）或迁移被拒；异常/取消照常抛出。
     /// </summary>
     Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null,
         string? error = null, CancellationToken ct = default);
 
-    /// <summary>redo：REDO_COUNT+1，态回到 DISPATCHED（同 taskId 幂等重发）。手动 <c>RedoAsync</c> 用。</summary>
+    /// <summary>redo：REDO_COUNT+1，态回到 DISPATCHED，刷新 SEND_TIME。手动 <c>RedoAsync</c> 用。</summary>
     Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default);
 
     /// <summary>
     /// 自动重派原子 Claim：仅当 taskId 匹配、仍为候选态（FAILED）、REDO_COUNT &lt; maxRedo 时，
-    /// 单条条件更新 REDO_COUNT+1、态→DISPATCHED、清 Error，返回 <see cref="AutoRedoClaimResult.Claimed"/>。
+    /// 单条条件更新 REDO_COUNT+1、态→DISPATCHED、清 Error、刷新 SEND_TIME，返回 <see cref="AutoRedoClaimResult.Claimed"/>。
     /// 并发下最多一个成功；失败不修改行，并区分上限 / 状态已被占 / 不存在。
     /// </summary>
     Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default);
+
+    /// <summary>
+    /// 重发开始：只刷新 SEND_TIME，查无宽限从本次尝试起算。不改 REDO_COUNT / TASK_STATE。
+    /// <see cref="IncrementRedoAsync"/> 与 <see cref="TryClaimAutoRedoAsync"/> 已内含同等刷新。
+    /// </summary>
+    Task MarkResendAttemptAsync(string rcsTaskId, CancellationToken ct = default)
+        => Task.CompletedTask;
 
     /// <summary>标记取消后人工处理已确认。仅 TASK_STATE=CANCELED 允许；任务不存在或状态不符抛 InvalidOperationException。</summary>
     Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default);
 
     /// <summary>按本地号或回包号取一行（不存在返回 null）。</summary>
     Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default);
+
+    /// <summary>批量按本地号或回包号取行（缺行不进字典）。默认逐条回退。</summary>
+    Task<IReadOnlyDictionary<string, RcsTaskRow>> GetByTaskIdsAsync(
+        IReadOnlyList<string> ids, CancellationToken ct = default)
+    {
+        return LoadByTaskIdsFallbackAsync(this, ids, ct);
+
+        static async Task<IReadOnlyDictionary<string, RcsTaskRow>> LoadByTaskIdsFallbackAsync(
+            IRcsTaskStore store, IReadOnlyList<string> keys, CancellationToken token)
+        {
+            var map = new Dictionary<string, RcsTaskRow>(StringComparer.Ordinal);
+            foreach (var id in keys.Where(static x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal))
+            {
+                var row = await store.GetByTaskIdAsync(id, token);
+                if (row is null) continue;
+                map[id] = row;
+                if (!string.IsNullOrEmpty(row.RcsTaskId)) map[row.RcsTaskId] = row;
+                if (!string.IsNullOrEmpty(row.RcsRemoteId)) map[row.RcsRemoteId] = row;
+            }
+            return map;
+        }
+    }
+
+    /// <summary>该工位是否有未人工确认的取消任务（CANCEL_MANUAL_FLAG≠1）。</summary>
+    Task<bool> HasUnconfirmedCanceledAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.FromResult(false);
+
+    /// <summary>该工位未确认取消任务的本地号（新→旧）。看板要展示给操作员去 RCS 页确认。</summary>
+    Task<IReadOnlyList<string>> ListUnconfirmedCanceledTaskIdsAsync(
+        long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
     /// <summary>最近 N 条任务（倒序），供 UI 展示。</summary>
     Task<IReadOnlyList<RcsTaskRow>> GetRecentAsync(int limit = 100, CancellationToken ct = default);

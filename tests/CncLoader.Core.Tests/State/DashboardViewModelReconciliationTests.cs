@@ -4,6 +4,7 @@ using CncLoader.Core.Config;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Rcs;
 using CncLoader.Core.State;
+using CncLoader.UI.Navigation;
 using CncLoader.UI.ViewModels.Pages;
 
 namespace CncLoader.Core.Tests.State;
@@ -106,7 +107,21 @@ public sealed class DashboardViewModelReconciliationTests
         });
     }
 
-    private static DashboardViewModel CreateVm(FakeScheduler scheduler)
+    [Test]
+    public void 去确认_把工位卡任务号交给RCS导航()
+    {
+        var nav = new RecordingRcsNav();
+        using var vm = CreateVm(new FakeScheduler { State = ReconciliationState.Succeeded, IsReconciled = true }, nav);
+        var card = new PositionCardVm(1, 2, PositionState.WaitLoad, null,
+            CancelHoldDisplay.Format(new[] { "LINE01-GR-20260914164312-0001" }),
+            true, true, false);
+
+        vm.OpenCancelHoldCommand.Execute(card);
+
+        Assert.That(nav.Last, Is.EqualTo("LINE01-GR-20260914164312-0001"));
+    }
+
+    private static DashboardViewModel CreateVm(FakeScheduler scheduler, IRcsTaskNavigator? rcsNav = null)
         => new(
             new SignalStateStore(),
             new FakeWorkRecords(),
@@ -116,7 +131,14 @@ public sealed class DashboardViewModelReconciliationTests
             new FakeWorkLines(),
             new FakeUser(),
             new Tests.UI.RecordingNotify(),
-            new Tests.UI.ImmediateUiDispatcher());
+            new Tests.UI.ImmediateUiDispatcher(),
+            rcsNav: rcsNav);
+
+    private sealed class RecordingRcsNav : IRcsTaskNavigator
+    {
+        public string? Last;
+        public void OpenTask(string taskId) => Last = taskId;
+    }
 
     private sealed class FakeScheduler : IPositionScheduler
     {

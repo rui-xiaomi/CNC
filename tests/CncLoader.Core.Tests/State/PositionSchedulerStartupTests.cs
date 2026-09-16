@@ -625,6 +625,30 @@ public sealed class PositionSchedulerReconciliationStartupTests
         Assert.Fail($"等待条件超时（{timeout.TotalSeconds:0.#}s）");
     }
 
+    [Test]
+    public async Task StartAsync_对账阶段二回滚陈旧预记_必须带下发宽限()
+    {
+        var fakes = SchedulerFakes.Create();
+        var scheduler = fakes.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(() => scheduler.IsReconciled, TimeSpan.FromSeconds(2));
+            List<TimeSpan> ages;
+            lock (fakes.Slots.StaleRollbackMinAges) ages = fakes.Slots.StaleRollbackMinAges.ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(ages, Is.Not.Empty, "对账②必须走带宽限的重载，不得无宽限回滚在途派工预记");
+                Assert.That(ages, Has.All.EqualTo(StaleReservationPolicy.ComputeGrace(10_000, 3)));
+            });
+        }
+        finally
+        {
+            await scheduler.StopAsync(CancellationToken.None);
+        }
+    }
+
     private sealed class SchedulerFakes
     {
         public FakeTaskStore TaskStore { get; } = new();
@@ -750,8 +774,15 @@ public sealed class PositionSchedulerReconciliationStartupTests
 
     private sealed class FakeSlots : ISlotAccountService
     {
+        public List<TimeSpan> StaleRollbackMinAges { get; } = new();
+
         public Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
             => Task.FromResult(0);
+        public Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, TimeSpan minAge, CancellationToken ct = default)
+        {
+            lock (StaleRollbackMinAges) StaleRollbackMinAges.Add(minAge);
+            return Task.FromResult(0);
+        }
         public Task<IReadOnlyList<CompletedPendingConfirm>> ListCompletedPendingConfirmAsync(
             IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<CompletedPendingConfirm>>(Array.Empty<CompletedPendingConfirm>());

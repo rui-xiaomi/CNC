@@ -104,6 +104,8 @@ internal sealed class FakeRcsHttpClient : IRcsClient
     public List<string>? OrderSink { get; set; }
     /// <summary>下一次 Transit 返回失败（非路由；FailureKind=SendFailed）。</summary>
     public bool FailNextTransit { get; set; }
+    /// <summary>下一次 Transit 返回「结果未知」（已发出未拿到应答；FailureKind=OutcomeUnknown）。</summary>
+    public bool UnknownNextTransit { get; set; }
     /// <summary>出站 ACK 原文；空则 <c>{}</c>。用于解析并保存 RCS <c>task_id</c> 到 <c>RCS_REMOTE_ID</c>。</summary>
     public string? NextRawResponse { get; set; }
     public List<string> CancelTaskIds { get; } = new();
@@ -119,16 +121,29 @@ internal sealed class FakeRcsHttpClient : IRcsClient
             FailNextTransit = false;
             return Task.FromResult(RcsResult.Fail(req.TaskId ?? "", "rcs-send-failed"));
         }
+        if (UnknownNextTransit)
+        {
+            UnknownNextTransit = false;
+            return Task.FromResult(RcsResult.OutcomeUnknown(req.TaskId ?? "", "rcs-timeout-after-send"));
+        }
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", NextRawResponse ?? "{}", null, 1)
         {
             TaskId = req.TaskId
         });
     }
 
+    /// <summary>下一次 Excute 返回「结果未知」（已发出未拿到应答；FailureKind=OutcomeUnknown）。</summary>
+    public bool UnknownNextExcute { get; set; }
+
     public Task<RcsResult> ExcuteTaskAsync(ExcuteTaskRequest req, CancellationToken ct = default)
     {
         ExcuteCount++;
         OrderSink?.Add("RcsExcute");
+        if (UnknownNextExcute)
+        {
+            UnknownNextExcute = false;
+            return Task.FromResult(RcsResult.OutcomeUnknown(req.TaskId ?? "", "rcs-timeout-after-send"));
+        }
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "{}", NextRawResponse ?? "{}", null, 1)
         {
             TaskId = req.TaskId
@@ -291,7 +306,8 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
                 {
                     RedoCount = r.RedoCount + 1,
                     TaskState = RcsTaskState.Dispatched,
-                    ErrorMsg = null
+                    ErrorMsg = null,
+                    SendTime = DateTime.Now
                 };
             return Task.CompletedTask;
         }
@@ -324,10 +340,21 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
             {
                 RedoCount = r.RedoCount + 1,
                 TaskState = RcsTaskState.Dispatched,
-                ErrorMsg = null
+                ErrorMsg = null,
+                SendTime = DateTime.Now
             };
             TryClaimSuccessCount++;
             return AutoRedoClaimResult.Claimed;
+        }
+    }
+
+    public Task MarkResendAttemptAsync(string rcsTaskId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (TryResolve(rcsTaskId, out var key, out var r))
+                _rows[key] = r with { SendTime = DateTime.Now };
+            return Task.CompletedTask;
         }
     }
 
@@ -337,7 +364,46 @@ internal sealed class MutableRcsTaskStore : IRcsTaskStore
         TryClaimSuccessCount = 0;
     }
 
-    public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
+    public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (!TryResolve(rcsTaskId, out var key, out var r))
+                throw new InvalidOperationException($"任务不存在：{rcsTaskId}");
+            if (r.TaskState != RcsTaskState.Canceled)
+                throw new InvalidOperationException($"仅已取消（CANCELED）任务可确认人工处理，当前状态为 {r.TaskState}");
+            _rows[key] = r with { CancelManualFlag = "1" };
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task<bool> HasUnconfirmedCanceledAsync(long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(_rows.Values.Any(r =>
+                r.EquipmentId == equipmentId && r.PositionId == positionId
+                && r.TaskState == RcsTaskState.Canceled
+                && r.CancelManualFlag != "1"));
+        }
+    }
+
+    public Task<IReadOnlyList<string>> ListUnconfirmedCanceledTaskIdsAsync(
+        long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var ids = _rows.Values
+                .Where(r => r.EquipmentId == equipmentId && r.PositionId == positionId
+                            && r.TaskState == RcsTaskState.Canceled
+                            && r.CancelManualFlag != "1"
+                            && !string.IsNullOrWhiteSpace(r.RcsTaskId))
+                .OrderByDescending(r => r.Id)
+                .Select(r => r.RcsTaskId!)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<string>>(ids);
+        }
+    }
 
     public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
     {
@@ -799,8 +865,8 @@ internal sealed class ManualReplayHarness
     public required CallTrace Trace { get; init; }
     public required StubChangeFrame ChangeFrame { get; init; }
 
-    public static ManualReplayHarness Create(bool seedActiveRoute = true)
-        => CreateCore(seedActiveRoute, seedTypedPalletReturn: false, palletReturnArea: "托盘回收区");
+    public static ManualReplayHarness Create(bool seedActiveRoute = true, bool schedulerEnabled = false)
+        => CreateCore(seedActiveRoute, seedTypedPalletReturn: false, palletReturnArea: "托盘回收区", schedulerEnabled);
 
     /// <summary>空托盘回收 RED 夹具：类型化 AREA/FRAME/POSITION 种子 + 英文 PALLET_RETURN。</summary>
     public static ManualReplayHarness CreateForPalletReturn()
@@ -808,7 +874,7 @@ internal sealed class ManualReplayHarness
             palletReturnArea: TypedEndpointSeedShapes.LocPalletReturn);
 
     private static ManualReplayHarness CreateCore(
-        bool seedActiveRoute, bool seedTypedPalletReturn, string palletReturnArea)
+        bool seedActiveRoute, bool seedTypedPalletReturn, string palletReturnArea, bool schedulerEnabled = false)
     {
         var store = new MutableEquipmentRoutingStore();
         var loc = new FakeLocationMapForRouting();
@@ -868,7 +934,7 @@ internal sealed class ManualReplayHarness
         var taskService = new RcsTaskService(
             client, taskStore, new NoopMsgLog(), callbacks,
             resolver, validator,
-            NullLogger<RcsTaskService>.Instance, slots);
+            NullLogger<RcsTaskService>.Instance, slots, new RcsCallbackNotifier());
 
         var plc = new TracingPlcOps(trace);
         var notify = new FakeNotifyCounter();
@@ -879,7 +945,7 @@ internal sealed class ManualReplayHarness
             Rcs = new RcsOptions
             {
                 UseSimulator = true,
-                SchedulerEnabled = false,
+                SchedulerEnabled = schedulerEnabled,
                 PalletReturnArea = palletReturnArea
             }
         });

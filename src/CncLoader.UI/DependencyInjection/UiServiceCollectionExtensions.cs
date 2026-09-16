@@ -18,6 +18,8 @@ public static class UiServiceCollectionExtensions
         services.AddSingleton<IUserNotificationService, HandyControlUserNotificationService>();
         services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();
         services.AddSingleton<IDialogService, WpfDialogService>();
+        // UI 线程未处理异常计数（App 全局处理器记录，看板提示；P2-6）
+        services.AddSingleton<IUiExceptionMonitor, UiExceptionMonitor>();
 
         // 8 个页面 ViewModel（同时以 PageViewModelBase 暴露给导航服务）
         services.AddSingleton<DashboardViewModel>();
@@ -44,6 +46,7 @@ public static class UiServiceCollectionExtensions
         services.AddSingleton<PageViewModelBase>(sp => sp.GetRequiredService<LogViewModel>());
 
         services.AddSingleton<INavigationService, NavigationService>();
+        services.AddSingleton<IRcsTaskNavigator, RcsTaskNavigator>();
         services.AddSingleton<ShellViewModel>();
         services.AddSingleton<ShellWindow>();
 

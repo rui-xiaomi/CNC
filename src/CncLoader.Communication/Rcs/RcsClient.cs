@@ -10,6 +10,8 @@ namespace CncLoader.Communication.Rcs;
 /// <summary>
 /// RCS 出站 HTTP 客户端。封装公共字段、序列化、超时、网络级重试（指数退避 ≤ MaxRetries），
 /// 每次调用双向报文落 <see cref="IRcsMessageLog"/>。地址/超时/重试读 <see cref="IRcsRuntimeConfig"/>（可热更新）。
+/// 创建类请求（transitTask/excuteTask）只在请求未发出（DNS/建连/TLS 失败）时重试；
+/// 发出后超时、断连或 5xx 返回 <see cref="RcsFailureKind.OutcomeUnknown"/>，不重发同 taskId（P0-2）。
 /// </summary>
 internal sealed class RcsClient : IRcsClient
 {
@@ -43,13 +45,13 @@ internal sealed class RcsClient : IRcsClient
     public Task<RcsResult> TransitTaskAsync(TransitTaskRequest req, CancellationToken ct = default)
     {
         FillCommon(req);
-        return SendAsync("transitTask", TransitPath, req, req.TaskId, ct);
+        return SendAsync("transitTask", TransitPath, req, req.TaskId, ct, createsTask: true);
     }
 
     public Task<RcsResult> ExcuteTaskAsync(ExcuteTaskRequest req, CancellationToken ct = default)
     {
         FillCommon(req);
-        return SendAsync("excuteTask", ExcutePath, req, req.TaskId, ct);
+        return SendAsync("excuteTask", ExcutePath, req, req.TaskId, ct, createsTask: true);
     }
 
     public Task<RcsResult> CancelTaskAsync(CancelTaskRequest req, CancellationToken ct = default)
@@ -80,7 +82,7 @@ internal sealed class RcsClient : IRcsClient
     }
 
     private async Task<RcsResult> SendAsync(string iface, string path, object payload, string? taskId, CancellationToken ct,
-        string? baseUrlOverride = null, int? timeoutMsOverride = null, int? maxRetriesOverride = null)
+        string? baseUrlOverride = null, int? timeoutMsOverride = null, int? maxRetriesOverride = null, bool createsTask = false)
     {
         var url = CombineUrl(baseUrlOverride ?? _runtime.BaseUrl, path);
         var body = JsonSerializer.Serialize(payload, payload.GetType(), JsonOpt);
@@ -108,13 +110,24 @@ internal sealed class RcsClient : IRcsClient
                 await LogAsync(iface, url, taskId, body, respBody, (int)sw.ElapsedMilliseconds, last.Ok, last.Error, ct);
 
                 if (ok) return last;
+                if (createsTask)
+                {
+                    // RCS 已应答：4xx 明确拒绝；5xx 可能已建任务 → 结果未知。均不重发同 taskId。
+                    return (int)resp.StatusCode >= 500
+                        ? last with { FailureKind = RcsFailureKind.OutcomeUnknown }
+                        : last;
+                }
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                last = RcsResult.Fail(body, ex.Message, 0, (int)sw.ElapsedMilliseconds);
+                var unknown = createsTask && !IsNotSent(ex);
+                last = unknown
+                    ? RcsResult.OutcomeUnknown(body, $"RCS 下发结果未知（{ex.Message}），交 queryTask 确认", 0, (int)sw.ElapsedMilliseconds)
+                    : RcsResult.Fail(body, ex.Message, 0, (int)sw.ElapsedMilliseconds);
                 await LogAsync(iface, url, taskId, body, null, (int)sw.ElapsedMilliseconds, false, ex.Message, ct);
                 _logger.LogWarning(ex, "RCS {Iface} 第 {Attempt}/{Max} 次调用失败", iface, attempt, maxAttempts);
+                if (unknown) return last;
             }
 
             if (attempt < maxAttempts)
@@ -125,6 +138,15 @@ internal sealed class RcsClient : IRcsClient
         }
         return last;
     }
+
+    /// <summary>连接建立阶段失败（DNS / 建连 / TLS）：请求未发出，重发安全。</summary>
+    private static bool IsNotSent(Exception ex)
+        => ex is HttpRequestException
+        {
+            HttpRequestError: HttpRequestError.NameResolutionError
+                or HttpRequestError.ConnectionError
+                or HttpRequestError.SecureConnectionError
+        };
 
     private async Task LogAsync(string iface, string url, string? taskId, string reqBody, string? respBody,
         int costMs, bool success, string? error, CancellationToken ct)

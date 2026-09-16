@@ -35,6 +35,8 @@ public sealed record DispatchItem
     public string? MaterialId { get; init; }
     /// <summary>下料结果（true=OK / false=NG）。上料忽略。下料终点（选位/中转/NG/下料架）由单消费者出队后统一决策，故结果随请求入队。</summary>
     public bool IsOk { get; init; } = true;
+    /// <summary>路由暂不可用回队次数；超过上限转 Alarm，避免热循环。</summary>
+    public int RetryCount { get; init; }
 }
 
 /// <summary>上料/下料阶段。</summary>
@@ -94,4 +96,11 @@ public interface IRouteResolver
     /// <summary>解析料架指定槽 cell（货架+层编码10起+位）。缺 LOCATION_MAP 返回 null，禁止假码。</summary>
     Task<string?> ResolveFrameSlotCellAsync(long frameId, int layerNo, int posInLayer, CancellationToken ct = default)
         => ResolveFrameCellAsync(frameId, ct);
+
+    /// <summary>
+    /// 反查工序间交接终点加工位：终点 cell 直接命中加工位，或抓取站码 + ReqParam 抓取孔定位。
+    /// 终点是料架/区域或无法唯一定位返回 null（重启重建交接登记用，P1-4）。
+    /// </summary>
+    Task<(long EquipmentId, long PositionId)?> ResolveHandoffDestinationAsync(string toCode, string? reqParam, CancellationToken ct = default)
+        => Task.FromResult<(long EquipmentId, long PositionId)?>(null);
 }

@@ -45,10 +45,19 @@ public sealed class RcsMessageLog : IRcsMessageLog
         if (!string.IsNullOrWhiteSpace(query.TaskId))
         {
             var t = query.TaskId.Trim();
-            q = q.Where(m => m.TaskId != null && m.TaskId.Contains(t));
+            q = q.Where(m => m.TaskId == t);
         }
 
-        var limit = Math.Clamp(query.Limit, 1, 5000);
+        var limit = Math.Clamp(query.Limit, 1, 500);
+        if (!query.IncludeBodies)
+        {
+            return await q.OrderByDescending(m => m.Id).Take(limit)
+                .Select(m => new RcsMsgRow(
+                    m.Id, m.CreateTime ?? DateTime.MinValue, m.Direction, m.InterfaceName, m.TaskId,
+                    null, null, m.CostMs, m.Result == "0", m.ErrorMsg))
+                .ToListAsync(ct);
+        }
+
         var rows = await q.OrderByDescending(m => m.Id).Take(limit).ToListAsync(ct);
         return rows.Select(m => new RcsMsgRow(
             m.Id, m.CreateTime ?? DateTime.MinValue, m.Direction, m.InterfaceName, m.TaskId,

@@ -1,4 +1,5 @@
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using CncLoader.Data;
 using CncLoader.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -263,6 +264,143 @@ public sealed class SlotAccountReservedProtectionTests
     }
 
     [Test]
+    public async Task ClearSlot_在途预记_仍拒绝()
+    {
+        var initial = ReservedSlot("task-live", "RSV_TAKE", "MAT-LIVE");
+        var (sut, store, _) = CreateSut(initial);
+        store.BoundTaskStates["task-live"] = RcsTaskState.Executing;
+        var before = initial.Clone();
+
+        var result = await sut.ClearSlotAsync(initial.FrameId, initial.SlotNo, "tester");
+
+        var after = store.RequireSlot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.ReservationConflict));
+            Assert.That(after.SlotState, Is.EqualTo(SlotStates.Reserved));
+            Assert.That(after.Remark, Is.EqualTo(before.Remark));
+            Assert.That(after.MaterialId, Is.EqualTo(before.MaterialId));
+            Assert.That(store.ForceClearApplied, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task ClearSlot_COMPLETED预记_强制置空()
+    {
+        var initial = ReservedSlot("task-done", "RSV_TAKE", "MAT-DONE");
+        var (sut, store, _) = CreateSut(initial);
+        store.BoundTaskStates["task-done"] = RcsTaskState.Completed;
+
+        var result = await sut.ClearSlotAsync(initial.FrameId, initial.SlotNo, "tester");
+
+        var after = store.RequireSlot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.Updated));
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(after.SlotState, Is.EqualTo(SlotStates.Empty));
+            Assert.That(after.MaterialId, Is.Null);
+            Assert.That(after.Remark, Is.Null);
+            Assert.That(after.BindSource, Is.Null);
+            Assert.That(after.BindTime, Is.Null);
+            Assert.That(store.ForceClearCount, Is.EqualTo(1));
+            Assert.That(store.ForceClearApplied, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task ClearSlot_无任务行的预记_视为在途拒绝()
+    {
+        var initial = ReservedSlot("task-orphan", "RSV_PUT", "MAT-ORPHAN");
+        var (sut, store, _) = CreateSut(initial);
+
+        var result = await sut.ClearSlotAsync(initial.FrameId, initial.SlotNo, "tester");
+
+        var after = store.RequireSlot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.ReservationConflict));
+            Assert.That(after.SlotState, Is.EqualTo(SlotStates.Reserved));
+            Assert.That(after.Remark, Is.EqualTo("task-orphan"));
+            Assert.That(store.ForceClearCount, Is.EqualTo(1));
+            Assert.That(store.ForceClearApplied, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task ClearSlot_FAILED预记_拒绝以免打断AutoRedo()
+    {
+        var initial = ReservedSlot("task-fail", "RSV_TAKE", "MAT-FAIL");
+        var (sut, store, _) = CreateSut(initial);
+        store.BoundTaskStates["task-fail"] = RcsTaskState.Failed;
+
+        var result = await sut.ClearSlotAsync(initial.FrameId, initial.SlotNo, "tester");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.ReservationConflict));
+            Assert.That(store.RequireSlot().SlotState, Is.EqualTo(SlotStates.Reserved));
+            Assert.That(store.ForceClearApplied, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task ClearSlot_预记已被执行中任务占用_拒绝()
+    {
+        var initial = ReservedSlot("task-done", "RSV_TAKE", "MAT-DONE");
+        var (sut, store, _) = CreateSut(initial);
+        store.BoundTaskStates["task-done"] = RcsTaskState.Completed;
+        store.BoundTaskStates["task-new"] = RcsTaskState.Executing;
+        store.OverwriteRemark("task-new");
+
+        var result = await sut.ClearSlotAsync(initial.FrameId, initial.SlotNo, "tester");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.ReservationConflict));
+            Assert.That(store.RequireSlot().Remark, Is.EqualTo("task-new"));
+            Assert.That(store.RequireSlot().SlotState, Is.EqualTo(SlotStates.Reserved));
+            Assert.That(store.ForceClearApplied, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task ClearSlot_异常预记无REMARK_强制置空()
+    {
+        var initial = ReservedSlot(remark: null, bindSource: "ILLEGAL", materialId: "MAT-ODD");
+        var (sut, store, _) = CreateSut(initial);
+
+        var result = await sut.ClearSlotAsync(initial.FrameId, initial.SlotNo, "tester");
+
+        var after = store.RequireSlot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.Updated));
+            Assert.That(after.SlotState, Is.EqualTo(SlotStates.Empty));
+            Assert.That(store.ForceClearCount, Is.EqualTo(1));
+            Assert.That(store.ForceClearApplied, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task SetSlot_COMPLETED预记_校正仍拒绝()
+    {
+        var initial = ReservedSlot("task-done", "RSV_PUT", "MAT-DONE");
+        var (sut, store, _) = CreateSut(initial);
+        store.BoundTaskStates["task-done"] = RcsTaskState.Completed;
+
+        var result = await sut.SetSlotAsync(
+            initial.FrameId, initial.SlotNo, null, SlotStates.Empty, "tester");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(SlotMutationStatus.ReservationConflict));
+            Assert.That(store.RequireSlot().SlotState, Is.EqualTo(SlotStates.Reserved));
+            Assert.That(store.ForceClearCount, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
     public async Task R6_非Reserved且已等于目标_返回Unchanged且不重复保存()
     {
         var updateTime = new DateTime(2026, 8, 2, 9, 0, 0);
@@ -345,6 +483,15 @@ public sealed class SlotAccountReservedProtectionTests
         public int AtomicUpdateCount { get; private set; }
         public int AppliedMutationCount { get; private set; }
         public int SessionSaveCount { get; private set; }
+        public int ForceClearCount { get; private set; }
+        public int ForceClearApplied { get; private set; }
+        public Dictionary<string, string?> BoundTaskStates { get; } = new();
+
+        public void OverwriteRemark(string? remark)
+        {
+            if (_slot is null) throw new InvalidOperationException("槽位不存在");
+            _slot.Remark = remark;
+        }
         /// <summary>模拟 TOCTOU：条件更新 affected=0，但重查仍为非 Reserved 且与目标不同。</summary>
         public bool SimulateConcurrencyConflict { get; set; }
         public bool HasSlot => _slot is not null;
@@ -393,6 +540,43 @@ public sealed class SlotAccountReservedProtectionTests
             }
             _slot.UpdateTime = updateTime;
             AppliedMutationCount++;
+            return Task.FromResult(new ExternalSlotWriteAttempt(1, _slot.Clone()));
+        }
+
+        public Task<string?> FindBoundTaskStateAsync(string taskId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(BoundTaskStates.TryGetValue(taskId, out var state) ? state : null);
+        }
+
+        public Task<ExternalSlotWriteAttempt> TryForceClearReservedAsync(
+            long frameId, int slotNo, string? expectedRemark, DateTime updateTime, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ForceClearCount++;
+            if (_slot is null || _slot.FrameId != frameId || _slot.SlotNo != slotNo)
+                return Task.FromResult(new ExternalSlotWriteAttempt(0, null));
+            var remarkMatch = string.IsNullOrWhiteSpace(_slot.Remark)
+                ? string.IsNullOrWhiteSpace(expectedRemark)
+                : string.Equals(_slot.Remark, expectedRemark, StringComparison.Ordinal);
+            if (_slot.SlotState != SlotStates.Reserved || !remarkMatch)
+                return Task.FromResult(new ExternalSlotWriteAttempt(0, _slot.Clone()));
+
+            var taskState = !string.IsNullOrWhiteSpace(_slot.Remark)
+                            && BoundTaskStates.TryGetValue(_slot.Remark, out var st)
+                ? st
+                : null;
+            if (!ManualSlotClearPolicy.AllowsForceClearReserved(_slot.Remark, taskState))
+                return Task.FromResult(new ExternalSlotWriteAttempt(0, _slot.Clone()));
+
+            _slot.SlotState = SlotStates.Empty;
+            _slot.MaterialId = null;
+            _slot.Remark = null;
+            _slot.BindSource = null;
+            _slot.BindTime = null;
+            _slot.UpdateTime = updateTime;
+            AppliedMutationCount++;
+            ForceClearApplied++;
             return Task.FromResult(new ExternalSlotWriteAttempt(1, _slot.Clone()));
         }
 

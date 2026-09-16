@@ -18,15 +18,30 @@
                     <!-- 连接 & 下发 -->
                     <TabItem Header="任务列表">
                         <DockPanel>
-                            <Grid DockPanel.Dock="Top" Height="40" Background="{StaticResource Surface2Brush}">
+                            <DockPanel DockPanel.Dock="Top" Height="40" LastChildFill="True"
+                                       Background="{StaticResource Surface2Brush}">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="0,0,12,0"
+                                            VerticalAlignment="Center">
+                                    <TextBox Width="220" Height="26" VerticalAlignment="Center"
+                                             Text="{Binding TaskQuery, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                             AutomationProperties.Name="任务号查找">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Return" Command="{Binding FindTaskCommand}"/>
+                                        </TextBox.InputBindings>
+                                    </TextBox>
+                                    <Button Content="查找" Style="{StaticResource GhostButton}" Height="26" Padding="12,0"
+                                            FontSize="12" Margin="8,0,0,0" Command="{Binding FindTaskCommand}"
+                                            AutomationProperties.Name="查找任务"/>
+                                    <Button Content="刷新" Style="{StaticResource GhostButton}" Height="26" Padding="12,0"
+                                            FontSize="12" Margin="8,0,0,0" Command="{Binding RefreshTasksCommand}"/>
+                                </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
                                     <TextBlock Text="RCS 任务" Style="{StaticResource PanelTitle}" VerticalAlignment="Center"/>
-                                    <TextBlock Text="点选一行可回填任务号，并在下方查看完整编号与错误" Style="{StaticResource MutedText}"
+                                    <TextBlock Text="查找或点选一行回填任务号" Style="{StaticResource MutedText}"
                                                FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
-                                <Button Content="刷新" Style="{StaticResource GhostButton}" HorizontalAlignment="Right" Margin="0,0,12,0"
-                                        Height="26" Padding="12,0" FontSize="12" Command="{Binding RefreshTasksCommand}"/>
-                            </Grid>
+                            </DockPanel>
                             <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
                             <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
                                     Background="{StaticResource Surface2Brush}" Padding="12,8" MinHeight="96" MaxHeight="168">
@@ -527,7 +542,12 @@
                                                 <TextBlock Grid.Column="2" Text="角色" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
                                                 <ComboBox Grid.Column="3" ItemsSource="{Binding ChangeFrameRoleOptions}" SelectedItem="{Binding ChangeFrameRole}"
                                                           Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}" Margin="0,0,8,0"/>
-                                                <Button Grid.Column="4" Content="换架" Style="{StaticResource PrimaryButton}" Height="26" Padding="12,0" Command="{Binding ChangeFrameCommand}"/>
+                                                <StackPanel Grid.Column="4" Orientation="Horizontal">
+                                                    <Button Content="换架" Style="{StaticResource PrimaryButton}" Height="26" Padding="12,0" Command="{Binding ChangeFrameCommand}"/>
+                                                    <Button Content="新架到位" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" Margin="8,0,0,0"
+                                                            Command="{Binding ConfirmNewFrameInPlaceCommand}"
+                                                            ToolTip="换架第二发失败、站点空置后：人工送架到位再点此解锁该机台派工"/>
+                                                </StackPanel>
                                             </Grid>
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="回收点位" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="0,0,8,0"/>

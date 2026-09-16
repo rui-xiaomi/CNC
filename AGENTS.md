@@ -54,7 +54,7 @@ alwaysApply: true
 - RCS 协议方法名 `excuteTask` 拼写错误为契约一部分，勿改
 - Alarm 粘滞、启动对账完成前不开自动派工、缺 LOCATION_MAP 拒发、软删配置拒新派工、HasMat 未知 fail-closed：是安全设计，不是 bug
 - PLC 自动重连已实现（`PlcReconnectService`，`Plc.AutoReconnectEnabled` 默认 `true`）：只对 `Faulted` 连接重连，人工 Disconnect 不重连；间隔从 `AutoReconnectInitialDelayMs`（默认 2000ms）失败倍增到 `AutoReconnectMaxDelayMs`（默认 30000ms），**无次数上限**。原 `Plc.MaxReconnectAttempts` 配置项从未被代码读取，已移除，勿再加回。重连成功前仍 fail-closed，不恢复派工
-- 演示 SQL / `tools/FrameSeedReset` 会清空槽位（含预记）：仅测试库，**禁止在现场生产库执行**
+- `docs/sql/cnc_schema.sql` 全量重建会 DROP 全表；`tools/FrameSeedReset` 会清空槽位（含预记）：仅测试库，**禁止在现场生产库执行**
 
 ## 参考文档
 - 改动产品/调度/RCS 流程前，必须先读 `docs/客户端开发文档.md`（唯一开发方案）

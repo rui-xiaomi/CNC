@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using CncLoader.Core.Abstractions;
+using CncLoader.Core.Plc;
 using CncLoader.Core.Signals;
 using Microsoft.Extensions.Logging;
 
@@ -61,10 +62,12 @@ public sealed class OmronFinsPlcClient : IPlcClient
 
     public async Task ConnectAsync(CancellationToken ct = default)
     {
-        SetState(PlcConnectionState.Connecting);
+        // 与读写/断开同一端点闸：探活走已持闸发送，避免重连拆掉在途 UDP。
+        await _ioGate.WaitAsync(ct).ConfigureAwait(false);
         var sw = Stopwatch.StartNew();
         try
         {
+            SetState(PlcConnectionState.Connecting);
             lock (_sync)
             {
                 _udp?.Dispose();
@@ -87,7 +90,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
 
             // FINS/UDP 无握手：必须实际读一次 DM 确认设备可达，否则离线设备会被误判为在线，
             // 进而拖垮轮询（每个点位都等满读超时）。探活失败即视为连接失败。
-            await ProbeAsync(ct);
+            await ProbeHeldAsync(ct);
 
             _linkFaults.NoteSuccess();
             SetState(PlcConnectionState.Connected);
@@ -105,19 +108,23 @@ public sealed class OmronFinsPlcClient : IPlcClient
                 _udp?.Dispose();
                 _udp = null;
             }
-            SetState(PlcConnectionState.Faulted, ex.Message);
+            SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(ex));
             _deviceLogger.Log(new DeviceLogEntry
             {
                 DeviceType = DeviceType.Plc, DeviceId = PlcId, Action = DeviceAction.Connect,
-                Request = $"{Endpoint.Host}:{Endpoint.Port}", Success = false, Error = ex.Message,
+                Request = $"{Endpoint.Host}:{Endpoint.Port}", Success = false, Error = PlcLinkError.Describe(ex),
                 CostMs = (int)sw.ElapsedMilliseconds
             });
             throw;
         }
+        finally
+        {
+            _ioGate.Release();
+        }
     }
 
-    /// <summary>连接探活：读 1 个 DM 字确认链路可达（不记设备流水，避免连接阶段噪声）。</summary>
-    private async Task ProbeAsync(CancellationToken ct)
+    /// <summary>连接探活：读 1 个 DM 字确认链路可达（调用方已持闸）。</summary>
+    private async Task ProbeHeldAsync(CancellationToken ct)
     {
         var (areaCode, offset) = ResolveAddress("D0");
         var body = new byte[]
@@ -127,7 +134,7 @@ public sealed class OmronFinsPlcClient : IPlcClient
             0x00,
             0x00, 0x01,
         };
-        await SendAsync(0x01, 0x01, body, ct);
+        await SendHeldAsync(0x01, 0x01, body, ct);
     }
 
     public async Task DisconnectAsync()
@@ -262,6 +269,17 @@ public sealed class OmronFinsPlcClient : IPlcClient
         await _ioGate.WaitAsync(ct);
         try
         {
+            return await SendHeldAsync(mrc, src, body, ct);
+        }
+        finally
+        {
+            _ioGate.Release();
+        }
+    }
+
+    /// <summary>已持端点闸时发送一帧（Connect 探活复用，避免重入死锁）。</summary>
+    private async Task<byte[]> SendHeldAsync(byte mrc, byte src, byte[] body, CancellationToken ct)
+    {
             var udp = _udp ?? throw new InvalidOperationException($"PLC {PlcId} 未连接");
             byte sid;
             lock (_sync) { sid = unchecked(++_sid); }
@@ -305,7 +323,13 @@ public sealed class OmronFinsPlcClient : IPlcClient
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
+                RecoverUdpAfterAbort();
                 throw new TimeoutException($"FINS 应答超时（{_rwTimeoutMs}ms）");
+            }
+            catch (SocketException ex) when (PlcLinkError.IsCanceledReceiveArtifact(ex))
+            {
+                RecoverUdpAfterAbort();
+                throw new TimeoutException($"FINS 应答超时（{_rwTimeoutMs}ms）", ex);
             }
 
             // 结束码 resp[12..13] 含 3 个状态标志位，必须剥离后再判成败：
@@ -323,11 +347,6 @@ public sealed class OmronFinsPlcClient : IPlcClient
             if (pcNonFatalError && Interlocked.Exchange(ref _nonFatalWarned, 1) == 0)
                 _logger.LogWarning("PLC {PlcId} 存在非致命错误（如电池欠压），通信正常但建议现场检查。后续同类响应不再重复告警。", PlcId);
             return resp;
-        }
-        finally
-        {
-            _ioGate.Release();
-        }
     }
 
     private static (byte AreaCode, int Offset) ResolveAddress(string registerAddress)
@@ -357,12 +376,39 @@ public sealed class OmronFinsPlcClient : IPlcClient
         if (ex is SocketException or IOException)
         {
             if (_linkFaults.NoteHardFailure())
-                SetState(PlcConnectionState.Faulted, ex.Message);
+                SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(ex));
             return;
         }
 
         if (ex is TimeoutException && _linkFaults.NoteTimeout())
-            SetState(PlcConnectionState.Faulted, ex.Message);
+            SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(ex));
+    }
+
+    /// <summary>
+    /// 超时取消 Receive 会把 Windows UDP 套接字留在 10022/995 不可用态。
+    /// 在同一 IO 闸内重建，避免后续读被误报「提供了一个无效的参数」并立刻硬断链。
+    /// </summary>
+    private void RecoverUdpAfterAbort()
+    {
+        Exception? fail = null;
+        lock (_sync)
+        {
+            _udp?.Dispose();
+            _udp = null;
+            try
+            {
+                var udp = new UdpClient();
+                udp.Connect(Endpoint.Host, Endpoint.Port);
+                _udp = udp;
+            }
+            catch (Exception ex)
+            {
+                fail = ex;
+            }
+        }
+
+        if (fail is not null)
+            SetState(PlcConnectionState.Faulted, PlcLinkError.Describe(fail));
     }
 
     private void SetState(PlcConnectionState state, string? message = null)

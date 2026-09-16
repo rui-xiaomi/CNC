@@ -49,6 +49,10 @@ public interface IRcsTaskService
         => QueryAsync(req, ct);
 
     Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default);
+
+    /// <summary>按本地号或回包号取一行；不存在返回 null。默认空实现供测试桩。</summary>
+    Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
+        => Task.FromResult<RcsTaskRow?>(null);
     Task<IReadOnlyList<RcsMsgRow>> GetRecentMessagesAsync(int limit = 100, CancellationToken ct = default);
 
     /// <summary>按条件查询报文流水（方向/接口/taskId/条数），供报文流水页筛选。</summary>

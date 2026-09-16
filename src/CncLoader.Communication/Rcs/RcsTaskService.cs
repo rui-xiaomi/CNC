@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CncLoader.Common.Configuration;
 using CncLoader.Core.Rcs;
 using Microsoft.Extensions.Logging;
 
@@ -42,7 +43,7 @@ public sealed class RcsTaskService : IRcsTaskService
         IRoutingAvailabilityValidator routingValidator,
         ILogger<RcsTaskService> logger,
         ISlotAccountService slots,
-        RcsCallbackNotifier? notifier = null)
+        RcsCallbackNotifier notifier)
     {
         _client = client;
         _store = store;
@@ -284,7 +285,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
         await _store.IncrementRedoAsync(rcsTaskId, ct);
         var result = await BuildAndSendAsync(row, "redo", ct);
-        if (!result.Success)
+        if (ShouldRollbackReplay(result))
             await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
         return await CompleteDispatchAsync(rcsTaskId, result, ct, forgetOnSuccess: true);
     }
@@ -304,8 +305,9 @@ public sealed class RcsTaskService : IRcsTaskService
         var hold = await EnsureReplayReservationAsync(row, gate.Context!, ct);
         if (!hold.Ok) return hold.Failure!;
 
+        await _store.MarkResendAttemptAsync(rcsTaskId, ct);
         var result = await BuildAndSendAsync(row, "redo", ct);
-        if (!result.Success)
+        if (ShouldRollbackReplay(result))
             await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
         return await CompleteDispatchAsync(rcsTaskId, result, ct, forgetOnSuccess: true);
     }
@@ -356,7 +358,7 @@ public sealed class RcsTaskService : IRcsTaskService
         }
 
         var result = await BuildAndSendAsync(row, "redo", ct);
-        if (!result.Success)
+        if (ShouldRollbackReplay(result))
             await RollbackReplayIfCreatedAsync(hold, rcsTaskId, ct);
         return await CompleteDispatchAsync(rcsTaskId, result, ct, forgetOnSuccess: true);
     }
@@ -369,6 +371,9 @@ public sealed class RcsTaskService : IRcsTaskService
 
     public Task<IReadOnlyList<RcsTaskRow>> GetRecentTasksAsync(int limit = 100, CancellationToken ct = default)
         => _store.GetRecentAsync(limit, ct);
+
+    public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
+        => _store.GetByTaskIdAsync(rcsTaskId, ct);
 
     public Task<IReadOnlyList<RcsMsgRow>> GetRecentMessagesAsync(int limit = 100, CancellationToken ct = default)
         => _msgLog.GetRecentAsync(limit, ct);
@@ -497,7 +502,7 @@ public sealed class RcsTaskService : IRcsTaskService
             return false;
 
         return to.Kind == ManagedEndpointKind.Area
-               && string.Equals(to.LocName, "PALLET_RETURN", StringComparison.Ordinal);
+               && string.Equals(to.LocName, LocationAreaNames.PalletReturn, StringComparison.Ordinal);
     }
 
     private static bool MatchesChangeFrameRole(DispatchRouteContext ctx)
@@ -517,7 +522,7 @@ public sealed class RcsTaskService : IRcsTaskService
 
     private static bool IsChangeFrameBufferArea(ManagedDispatchEndpoint ep)
         => ep.Kind == ManagedEndpointKind.Area
-           && ep.LocName is "EMPTY_BUFFER" or "FULL_BUFFER";
+           && LocationAreaNames.IsChangeFrameBuffer(ep.LocName);
 
     /// <summary>
     /// Grab：两端须为 station/shelf（现场 101 料架站 → 201 机台站）。
@@ -560,10 +565,22 @@ public sealed class RcsTaskService : IRcsTaskService
                && to.Kind == ManagedEndpointKind.Frame;
     }
 
+    /// <summary>重发结果未知不回滚本轮补的预记：RCS 可能已按该槽位执行。</summary>
+    private static bool ShouldRollbackReplay(RcsResult result)
+        => !result.Success && result.FailureKind != RcsFailureKind.OutcomeUnknown;
+
     private async Task<RcsResult> CompleteDispatchAsync(
         string localTaskId, RcsResult result, CancellationToken ct, bool forgetOnSuccess = false)
     {
-        await FinishAsync(localTaskId, result, ct);
+        try
+        {
+            await FinishAsync(localTaskId, result, ct);
+        }
+        catch (Exception ex) when (result.Success || result.FailureKind == RcsFailureKind.OutcomeUnknown)
+        {
+            // RCS 已受理或可能已受理：落库异常不得改判失败（调用方会回滚预记而车照跑），交跟踪器按 queryTask 收敛。
+            _logger.LogError(ex, "任务 {TaskId} 已发往 RCS，但落库下发结果失败，交跟踪器收敛", localTaskId);
+        }
         if (forgetOnSuccess && result.Success)
         {
             _callbackProcessor.ForgetTask(localTaskId);
@@ -577,6 +594,16 @@ public sealed class RcsTaskService : IRcsTaskService
 
     private async Task FinishAsync(string localTaskId, RcsResult result, CancellationToken ct)
     {
+        if (result.FailureKind == RcsFailureKind.OutcomeUnknown)
+        {
+            // 可能已建任务：不落 FAILED（FAILED 移出未完结列表，跟踪器不再确认，陈旧清扫还会回滚预记）。
+            // 置 DISPATCHED 进跟踪器轮询；RCS 实无此任务时超宽限判查无再落 FAILED。
+            _logger.LogWarning("RCS 下发结果未知 {TaskId}：{Err}，置 DISPATCHED 交跟踪器按 queryTask 确认",
+                localTaskId, result.Error);
+            await _store.SetDispatchedAsync(localTaskId, ct);
+            return;
+        }
+
         if (!result.Success)
         {
             if (!await _store.UpdateStateAsync(localTaskId, RcsTaskState.Failed, null, result.Message ?? result.Error, ct))

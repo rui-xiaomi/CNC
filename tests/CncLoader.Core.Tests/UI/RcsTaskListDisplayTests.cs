@@ -65,6 +65,24 @@ public sealed class RcsTaskListDisplayTests
     }
 
     [Test]
+    public async Task 查找任务号_选中并回填操作框()
+    {
+        var h = ManualReplayHarness.Create();
+        var id = "LINE01-GR-20260914164312-0001";
+        h.SeedHistoricalTask(taskId: id, state: RcsTaskState.Canceled);
+
+        h.ViewModel.TaskQuery = id;
+        await h.ViewModel.FindTaskCommand.ExecuteAsync(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.ViewModel.OperateTaskId, Is.EqualTo(id));
+            Assert.That(h.ViewModel.SelectedTask?.RcsTaskId, Is.EqualTo(id));
+            Assert.That(h.ViewModel.HasSelectedTask, Is.True);
+        });
+    }
+
+    [Test]
     public void 查看报文错误_有文案则Alert()
     {
         var h = ManualReplayHarness.Create();

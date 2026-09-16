@@ -71,6 +71,16 @@ public sealed class SlotAccountService : ISlotAccountService
         return await _slotStore.FindReservedByTaskIdAsync(taskId, ct);
     }
 
+    public async Task<bool> TouchReservationAsync(string taskId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return false;
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var affected = await db.FrameSlots
+            .Where(s => s.Remark == taskId && s.SlotState == SlotStates.Reserved)
+            .ExecuteUpdateAsync(set => set.SetProperty(s => s.BindTime, (DateTime?)DateTime.Now), ct);
+        return affected > 0;
+    }
+
     public async Task<ReservedSlot?> ReserveTakeByMaterialAsync(long frameId, string taskId, string materialId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(taskId) || string.IsNullOrWhiteSpace(materialId)) return null;
@@ -99,29 +109,35 @@ public sealed class SlotAccountService : ISlotAccountService
         return ok;
     }
 
-    public async Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
+    public Task<int> RollbackStaleReservationsAsync(IReadOnlyCollection<string> activeTaskIds, CancellationToken ct = default)
+        => RollbackStaleReservationsAsync(activeTaskIds, TimeSpan.Zero, ct);
+
+    public async Task<int> RollbackStaleReservationsAsync(
+        IReadOnlyCollection<string> activeTaskIds, TimeSpan minAge, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var reserved = await db.FrameSlots.AsTracking()
-            .Where(s => s.SlotState == SlotStates.Reserved && s.Remark != null)
-            .ToListAsync(ct);
+        var cutoff = DateTime.Now - minAge;
         var active = new HashSet<string>(activeTaskIds);
-        var taskIds = reserved.Select(s => s.Remark!).Where(id => !active.Contains(id)).Distinct().ToList();
-        var completed = new HashSet<string>(StringComparer.Ordinal);
-        if (taskIds.Count > 0)
-        {
-            var done = await db.AgvTasks.AsNoTracking()
-                .Where(t => t.RcsTaskId != null && taskIds.Contains(t.RcsTaskId) && t.TaskState == RcsTaskState.Completed)
-                .Select(t => t.RcsTaskId!)
-                .ToListAsync(ct);
-            foreach (var id in done) completed.Add(id);
-        }
+        var reserved = await db.FrameSlots.AsNoTracking()
+            .Where(s => s.SlotState == SlotStates.Reserved && s.Remark != null)
+            .Select(s => new { s.Id, s.Remark, s.BindSource, s.BindTime })
+            .ToListAsync(ct);
+        // 仍在执行或未满宽限（可能是尚未落库的在途派工）不动；无 BIND_TIME 的异常预记按陈旧处理。
+        var stale = reserved
+            .Where(s => !active.Contains(s.Remark!) && (s.BindTime is null || s.BindTime <= cutoff))
+            .ToList();
+        if (stale.Count == 0) return 0;
+
+        var taskIds = stale.Select(s => s.Remark!).Distinct().ToList();
+        var completed = new HashSet<string>(await db.AgvTasks.AsNoTracking()
+            .Where(t => t.RcsTaskId != null && taskIds.Contains(t.RcsTaskId) && t.TaskState == RcsTaskState.Completed)
+            .Select(t => t.RcsTaskId!)
+            .ToListAsync(ct), StringComparer.Ordinal);
 
         var rolled = 0;
         var skippedCompleted = 0;
-        foreach (var slot in reserved)
+        foreach (var slot in stale)
         {
-            if (slot.Remark != null && active.Contains(slot.Remark)) continue; // 仍在执行，不动
             var taskId = slot.Remark!;
             if (completed.Contains(taskId))
             {
@@ -129,25 +145,34 @@ public sealed class SlotAccountService : ISlotAccountService
                 skippedCompleted++;
                 continue;
             }
+
+            // 条件原子回滚：读取后被 Confirm / 重新预记 / BIND_TIME 刷新则 affected=0，不覆盖并发写。
             if (slot.BindSource == ReserveTake)
             {
-                slot.SlotState = SlotStates.Occupied; // 取料未完成 → 物料还在
-                slot.Remark = null;
-                slot.BindTime = null;
-                rolled++;
+                rolled += await db.FrameSlots
+                    .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Reserved && s.Remark == taskId
+                                && s.BindSource == ReserveTake
+                                && (s.BindTime == null || s.BindTime <= cutoff))
+                    .ExecuteUpdateAsync(set => set
+                        .SetProperty(s => s.SlotState, SlotStates.Occupied) // 取料未完成 → 物料还在
+                        .SetProperty(s => s.Remark, (string?)null)
+                        .SetProperty(s => s.BindTime, (DateTime?)null), ct);
             }
             else
             {
-                slot.SlotState = SlotStates.Empty; // 入库未完成/失败 → 槽位仍空
-                slot.MaterialId = null;
-                slot.Remark = null;
-                slot.BindTime = null;
-                rolled++;
+                rolled += await db.FrameSlots
+                    .Where(s => s.Id == slot.Id && s.SlotState == SlotStates.Reserved && s.Remark == taskId
+                                && (s.BindSource == null || s.BindSource != ReserveTake)
+                                && (s.BindTime == null || s.BindTime <= cutoff))
+                    .ExecuteUpdateAsync(set => set
+                        .SetProperty(s => s.SlotState, SlotStates.Empty) // 入库未完成/失败 → 槽位仍空
+                        .SetProperty(s => s.MaterialId, (string?)null)
+                        .SetProperty(s => s.Remark, (string?)null)
+                        .SetProperty(s => s.BindTime, (DateTime?)null), ct);
             }
         }
-        if (rolled > 0) await db.SaveChangesAsync(ct);
         if (rolled > 0 || skippedCompleted > 0)
-            _logger.LogInformation("陈旧预记：回滚 {R}，跳过 COMPLETED 待 PLC 门 {S}", rolled, skippedCompleted);
+            _logger.LogInformation("陈旧预记（宽限 {Grace}）：回滚 {R}，跳过 COMPLETED 待 PLC 门 {S}", minAge, rolled, skippedCompleted);
         return rolled;
     }
 
@@ -299,6 +324,61 @@ public sealed class SlotAccountService : ISlotAccountService
         catch (Exception ex)
         {
             _logger.LogError(ex, "人工校正料架 {Frame} 槽 {Slot} 数据库异常", frameId, slotNo);
+            return SlotMutationResult.From(
+                SlotMutationStatus.DatabaseError, frameId, slotNo, null, ex.Message);
+        }
+    }
+
+    public async Task<SlotMutationResult> ClearSlotAsync(
+        long frameId, int slotNo, string author, CancellationToken ct = default)
+    {
+        var first = await SetSlotAsync(frameId, slotNo, null, SlotStates.Empty, author, ct);
+        if (first.Status != SlotMutationStatus.ReservationConflict)
+            return first;
+
+        var snap = first.Snapshot;
+        if (snap is null)
+            return first;
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            var now = DateTime.Now;
+            var attempt = await _slotStore.TryForceClearReservedAsync(
+                frameId, slotNo, snap.Remark, now, ct);
+            if (attempt.AffectedRows == 1)
+            {
+                _logger.LogWarning(
+                    "人工置空释放 COMPLETED/异常预记：料架 {Frame} 槽 {Slot} task={Task} by {Author}",
+                    frameId, slotNo, snap.Remark, author);
+                return SlotMutationResult.From(SlotMutationStatus.Updated, frameId, slotNo, attempt.Current);
+            }
+
+            var current = attempt.Current;
+            if (current is null)
+            {
+                return SlotMutationResult.From(
+                    SlotMutationStatus.NotFound, frameId, slotNo, null,
+                    $"料架 {frameId} 槽 {slotNo} 不存在");
+            }
+
+            if (current.SlotState == SlotStates.Reserved)
+                return first;
+
+            if (current.SlotState == SlotStates.Empty)
+                return SlotMutationResult.From(SlotMutationStatus.Unchanged, frameId, slotNo, current);
+
+            return SlotMutationResult.From(
+                SlotMutationStatus.ConcurrencyConflict, frameId, slotNo, current,
+                "槽位已被并发修改，请刷新后重试");
+        }
+        catch (OperationCanceledException)
+        {
+            return SlotMutationResult.From(SlotMutationStatus.Cancelled, frameId, slotNo, null, "操作已取消");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "人工置空释放料架 {Frame} 槽 {Slot} 数据库异常", frameId, slotNo);
             return SlotMutationResult.From(
                 SlotMutationStatus.DatabaseError, frameId, slotNo, null, ex.Message);
         }

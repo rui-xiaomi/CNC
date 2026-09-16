@@ -55,7 +55,7 @@ public sealed class RcsAuxiliaryOperationRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         _svc = new RcsTaskService(
             _client, _tasks, new AuxNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
     }
 
     // ─── 文档化：真实参数与种子形状 ───────────────────────────────

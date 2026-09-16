@@ -220,7 +220,9 @@ public enum RcsFailureKind
     /// <summary>自动重派已达 MaxAutoRedo（Claim 未抢到预算）。</summary>
     RedoLimitReached,
     /// <summary>自动重派 Claim 竞争失败或任务非候选态（非路由失败、不告警上限）。</summary>
-    AutoRedoNotClaimable
+    AutoRedoNotClaimable,
+    /// <summary>创建类请求已发出但未拿到确定应答（超时/断连/5xx）：RCS 可能已建任务，不得按失败回滚，交 queryTask 确认。</summary>
+    OutcomeUnknown
 }
 
 /// <summary>一次 RCS 调用的结果（含请求报文原文，供落库与展示）。</summary>
@@ -268,5 +270,12 @@ public sealed record RcsResult(
         => new(false, 0, false, null, "", null, message, 0)
         {
             FailureKind = RcsFailureKind.AutoRedoNotClaimable
+        };
+
+    /// <summary>创建类请求已发出但结果未知（超时/断连/5xx），见 <see cref="RcsFailureKind.OutcomeUnknown"/>。</summary>
+    public static RcsResult OutcomeUnknown(string requestBody, string error, int httpStatus = 0, int elapsedMs = 0)
+        => new(false, httpStatus, false, null, requestBody, null, error, elapsedMs)
+        {
+            FailureKind = RcsFailureKind.OutcomeUnknown
         };
 }

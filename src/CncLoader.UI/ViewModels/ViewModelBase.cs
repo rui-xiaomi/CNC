@@ -22,6 +22,9 @@ public abstract partial class PageViewModelBase : ViewModelBase
     /// <summary>页面被导航激活时调用（默认空；页面可在此启动定时器/立即刷新）。</summary>
     public virtual void OnActivated() { }
 
+    /// <summary>带参导航（如同页再次定位任务号）。无参切换不会调用。</summary>
+    public virtual void OnNavigatedTo(object? argument) { }
+
     /// <summary>页面被导航离开时调用（默认空；页面可在此停止定时器，避免隐藏页持续刷库）。</summary>
     public virtual void OnDeactivated() { }
 }

@@ -7,5 +7,5 @@ public interface INavigationService
 {
     PageViewModelBase? Current { get; }
     event EventHandler<PageViewModelBase>? Navigated;
-    void NavigateTo(string key);
+    void NavigateTo(string key, object? argument = null);
 }

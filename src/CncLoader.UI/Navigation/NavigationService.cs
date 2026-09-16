@@ -15,13 +15,18 @@ public sealed class NavigationService : INavigationService
 
     public event EventHandler<PageViewModelBase>? Navigated;
 
-    public void NavigateTo(string key)
+    public void NavigateTo(string key, object? argument = null)
     {
-        if (!_pages.TryGetValue(key, out var page) || ReferenceEquals(page, Current))
+        if (!_pages.TryGetValue(key, out var page))
             return;
-        Current?.OnDeactivated();
-        Current = page;
-        page.OnActivated();
-        Navigated?.Invoke(this, page);
+        if (!ReferenceEquals(page, Current))
+        {
+            Current?.OnDeactivated();
+            Current = page;
+            page.OnActivated();
+            Navigated?.Invoke(this, page);
+        }
+        if (argument is not null)
+            page.OnNavigatedTo(argument);
     }
 }

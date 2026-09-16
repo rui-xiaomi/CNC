@@ -24,7 +24,8 @@ public static class RcsAckParser
             if (!TryGetData(doc.RootElement, out var data)) return null;
             return ReadAssignedIdFromData(data);
         }
-        catch (JsonException)
+        // 非对象节点上 TryGetProperty 抛 InvalidOperationException（如根为数组），与格式错误同样按无号处理。
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return null;
         }
@@ -81,7 +82,8 @@ public static class RcsAckParser
                     list.Add((id!, st!));
             }
         }
-        catch (JsonException)
+        // 根为数组等非对象时 TryGetProperty 抛 InvalidOperationException；不得冒泡打断轮询/启动对账①b。
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return list;
         }

@@ -3,6 +3,7 @@ using CncLoader.Common.Configuration;
 using CncLoader.Communication.Rcs;
 using CncLoader.Core.Abstractions;
 using CncLoader.Core.Rcs;
+using CncLoader.Core.State;
 using CncLoader.Data.Repositories;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -69,7 +70,7 @@ public sealed class RcsTaskTrackerRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         _svc = new RcsTaskService(
             _client, _tasks, new TrackerNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
 
         _alarms = new NoopAlarms();
         var options = Options.Create(new AppOptions
@@ -400,12 +401,33 @@ public sealed class RcsTaskTrackerRoutingGateTests
         Assert.Multiple(() =>
         {
             Assert.That(_alarms.RaiseCount, Is.EqualTo(0),
-                "路由拒发不置工位 Alarm / 不 Growl（Tracker 无 Growl）");
+                "路由拒发不经 IAlarmEventService（收口走调度器 NotifyTaskAbandoned）");
             Assert.That(_client.TransitCount, Is.EqualTo(0));
             Assert.That(after.RedoCount, Is.EqualTo(before.RedoCount),
                 $"路由拒发不得耗 RedoCount；Actual {before.RedoCount}→{after.RedoCount} " +
                 $"ClaimCalls={_tasks.TryClaimCallCount} 顺序={Fmt()}");
         });
+    }
+
+    [Test]
+    public async Task RouteReject_NotifiesSchedulerAbandoned()
+    {
+        var scheduler = new AbandonRecordingScheduler();
+        var services = new ServiceCollection()
+            .AddSingleton<IPositionScheduler>(scheduler)
+            .BuildServiceProvider();
+        await using var tracker = new RcsTaskTracker(
+            _svc, _tasks, _alarms, new RcsCallbackNotifier(),
+            Options.Create(new AppOptions
+            {
+                Rcs = new RcsOptions { TrackerEnabled = true, MaxAutoRedo = MaxAutoRedo, PollIntervalMs = 60_000 }
+            }),
+            new StubRuntime(), services, NullLogger<RcsTaskTracker>.Instance);
+        _loc.SetStateByCode(LoadAreaCode, remove: false, state: "1");
+
+        await tracker.ProbeAutoRedoOnceAsync(TaskId);
+
+        Assert.That(scheduler.Abandoned, Is.EqualTo(new[] { (TaskId, "AUTO_REDO_ROUTE_UNAVAILABLE") }));
     }
 
     [Test]
@@ -508,6 +530,158 @@ public sealed class RcsTaskTrackerRoutingGateTests
     }
 
     [Test]
+    public async Task NotFound_刚落库未满下发宽限_不判查无不落FAILED()
+    {
+        // P0-3：先落库后下发，下发窗口内 RCS 尚无此任务，不得误判查无、不得落 FAILED（否则陈旧清扫回滚其预记）。
+        const string inFlightId = "LINE01-MV-INFLIGHT-0001";
+        _tasks.Seed(new RcsTaskRow(
+            50, inFlightId, "transit", "0", RcsTaskState.Dispatched, null, 5,
+            LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
+            0, "0", DateTime.Now.AddSeconds(-5), null, null, null));
+
+        await _tracker.ProbePollOnceAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_client.LastQuery?.Condition.Conditions.Single().Value, Does.Contain(inFlightId),
+                "前置：该任务确实进了 queryTask 且 RCS 未返回");
+            Assert.That(_tasks.Snapshot(inFlightId)!.TaskState, Is.EqualTo(RcsTaskState.Dispatched));
+            Assert.That(_alarms.NotFoundCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task NotFound_已下发超过可见延迟加轮询周期_无需等下发宽限即判查无()
+    {
+        // RCS 现场确认新建任务约 3s 后可查：已拿到下发结果的首发任务，从 DISPATCH_TIME 起等 3s + 轮询周期即可判查无。
+        const string id = "LINE01-MV-DISPATCHED-0001";
+        _tasks.Seed(new RcsTaskRow(
+            51, id, "transit", "0", RcsTaskState.Dispatched, null, 5,
+            LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
+            0, "0", DateTime.Now.AddSeconds(-70), DateTime.Now.AddSeconds(-70), null, null));
+
+        await _tracker.ProbePollOnceAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_tasks.Snapshot(id)!.TaskState, Is.EqualTo(RcsTaskState.Failed),
+                "70s 已超 3s + 60s 轮询周期，且短于 2min 下发宽限，须走快速判定");
+            Assert.That(_alarms.NotFoundCount, Is.GreaterThanOrEqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task NotFound_自动redo已刷新SendTime_旧DispatchTime不得立即判查无()
+    {
+        const string id = "LINE01-MV-REDO-WINDOW-0001";
+        _tasks.Seed(new RcsTaskRow(
+            53, id, "transit", "0", RcsTaskState.Failed, null, 5,
+            LoadAreaCode, PositionCell, EqId, PositionId, null, null, null,
+            0, "0", DateTime.Now.AddMinutes(-20), DateTime.Now.AddMinutes(-19), null, null));
+
+        var claim = await _tasks.TryClaimAutoRedoAsync(id, MaxAutoRedo);
+        Assert.That(claim, Is.EqualTo(AutoRedoClaimResult.Claimed));
+        var after = _tasks.Snapshot(id)!;
+        Assert.That(after.SendTime, Is.GreaterThan(after.DispatchTime!.Value),
+            "Claim 须刷新 SEND_TIME，否则查无窗口仍按创建时刻计算");
+
+        await _tracker.ProbePollOnceAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_tasks.Snapshot(id)!.TaskState, Is.EqualTo(RcsTaskState.Dispatched),
+                "重发窗口内 query 未命中不得落 FAILED、不得回滚预记");
+            Assert.That(_alarms.NotFoundCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task NotFound_通知换架编排与盘点收口_否则结果未知的事务一直挂起()
+    {
+        const string id = "LINE01-CF-UNKNOWN-0001";
+        _tasks.Seed(new RcsTaskRow(
+            52, id, "change_frame", "1", RcsTaskState.Dispatched, null, 9,
+            FrameShelfCode, EmptyBufferCode, EqId, null, null, "CF-1", null,
+            0, "0", DateTime.Now.AddSeconds(-70), DateTime.Now.AddSeconds(-70), null, null));
+        var changeFrame = new AbandonRecordingChangeFrame();
+        var inventory = new AbandonRecordingInventory();
+        var services = new ServiceCollection()
+            .AddSingleton<IChangeFrameOrchestrator>(changeFrame)
+            .AddSingleton<IInventoryService>(inventory)
+            .BuildServiceProvider();
+        await using var tracker = new RcsTaskTracker(
+            _svc, _tasks, _alarms, new RcsCallbackNotifier(),
+            Options.Create(new AppOptions
+            {
+                Rcs = new RcsOptions { TrackerEnabled = true, MaxAutoRedo = MaxAutoRedo, PollIntervalMs = 60_000 }
+            }),
+            new StubRuntime(), services, NullLogger<RcsTaskTracker>.Instance);
+
+        await tracker.ProbePollOnceAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_tasks.Snapshot(id)!.TaskState, Is.EqualTo(RcsTaskState.Failed));
+            Assert.That(changeFrame.Abandoned, Is.EqualTo(new[] { (id, "RCS_NOT_FOUND") }));
+            Assert.That(inventory.Abandoned, Is.EqualTo(new[] { (id, "RCS_NOT_FOUND") }));
+        });
+    }
+
+    private sealed class AbandonRecordingScheduler : IPositionScheduler
+    {
+        public List<(string TaskId, string Reason)> Abandoned { get; } = new();
+        public bool IsReconciled => true;
+        public ReconciliationState ReconciliationState => ReconciliationState.Succeeded;
+        public string? ReconciliationFailureReason => null;
+        public bool IsAutoDispatchPaused => false;
+#pragma warning disable CS0067
+        public event EventHandler? Reconciled;
+        public event EventHandler<ReconciliationSnapshot>? ReconciliationStateChanged;
+#pragma warning restore CS0067
+        public void SetAutoDispatchPaused(bool paused) { }
+        public Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default)
+            => Task.CompletedTask;
+        public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+        {
+            Abandoned.Add((taskId, reason));
+            return Task.CompletedTask;
+        }
+        public void InvalidateFrameBindingCache(long? equipmentId = null) { }
+    }
+
+    private sealed class AbandonRecordingChangeFrame : IChangeFrameOrchestrator
+    {
+        public List<(string TaskId, string Reason)> Abandoned { get; } = new();
+#pragma warning disable CS0067
+        public event EventHandler<ChangeFrameProgressEvent>? ProgressChanged;
+#pragma warning restore CS0067
+        public Task<string> ChangeFrameAsync(long equipmentId, FrameRole role, string author, CancellationToken ct = default)
+            => Task.FromResult("");
+        public IReadOnlyList<ChangeFrameProgressEvent> GetActiveTransactions() => Array.Empty<ChangeFrameProgressEvent>();
+        public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+        {
+            Abandoned.Add((taskId, reason));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class AbandonRecordingInventory : IInventoryService
+    {
+        public List<(string TaskId, string Reason)> Abandoned { get; } = new();
+#pragma warning disable CS0067
+        public event EventHandler<InventoryResultEvent>? InventoryCompleted;
+#pragma warning restore CS0067
+        public Task<string> StartInventoryAsync(long frameId, int posStart, int count, string author, CancellationToken ct = default)
+            => Task.FromResult("");
+        public IReadOnlyList<InventoryTaskInfo> GetActiveInventories() => Array.Empty<InventoryTaskInfo>();
+        public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+        {
+            Abandoned.Add((taskId, reason));
+            return Task.CompletedTask;
+        }
+    }
+
+    [Test]
     public async Task Poll_QueryUsesIdKeyAndLocalTaskId()
     {
         const string local = "L1-GB-20260911142538-9209";
@@ -585,7 +759,7 @@ public sealed class RcsTaskTrackerRoutingGateTests
         validator.OrderSink = _order;
         _svc = new RcsTaskService(
             _client, _tasks, new TrackerNoopMsgLog(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
         var options = Options.Create(new AppOptions
         {
             Rcs = new RcsOptions { TrackerEnabled = true, MaxAutoRedo = MaxAutoRedo, PollIntervalMs = 60_000 }

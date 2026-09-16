@@ -19,6 +19,27 @@ public interface IChangeFrameOrchestrator
 
     /// <summary>当前进行中的换架事务（UI 展示）。</summary>
     IReadOnlyList<ChangeFrameProgressEvent> GetActiveTransactions();
+
+    /// <summary>
+    /// 重启接续（P1-4）：从未完结任务里的换架任务按 TXN_ID 重建进行中事务，使随后的完成/失败事件照常推进第二发或告警。
+    /// 须在跟踪器与调度器对账发出终态事件之前调用。返回恢复的事务数。
+    /// </summary>
+    Task<int> RecoverInFlightAsync(IReadOnlyList<RcsTaskRow> unfinished, CancellationToken ct = default)
+        => Task.FromResult(0);
+
+    /// <summary>
+    /// 任务被跟踪器判定放弃（如 RCS 侧查无）时收口所属换架事务：告警并结束事务。
+    /// 查无直接落库不发状态事件，不通知则事务一直挂在进行中。非本编排的任务忽略。
+    /// </summary>
+    Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    /// <summary>人工确认新架已到位：解除该机台因第二发失败产生的派工锁定。</summary>
+    Task ConfirmNewFrameInPlaceAsync(long equipmentId, FrameRole role, string author, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    /// <summary>该机台该角色是否因换架第二发失败锁定（水位监视不得再触发）。</summary>
+    bool IsRoleLocked(long equipmentId, FrameRole role) => false;
 }
 
 /// <summary>换架进度事件。</summary>

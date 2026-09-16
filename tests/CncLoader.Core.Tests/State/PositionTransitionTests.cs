@@ -407,14 +407,27 @@ public sealed class PositionTransitionTests
 
     // ─── 陈旧直送登记回收 ──────────────────────────────────────────────────
 
-    [TestCase(RcsTaskState.Failed, "STALE:FAILED")]
-    [TestCase(RcsTaskState.Canceled, "STALE:CANCELED")]
-    public void InboundReclaim_SourceAbandoned_ClearsImmediately(string state, string expectedReason)
+    [Test]
+    public void InboundReclaim_SourceCanceled_ClearsImmediately()
     {
-        var decision = PositionTransition.DecideInboundReclaim(false, state, TimeSpan.Zero);
+        var decision = PositionTransition.DecideInboundReclaim(false, RcsTaskState.Canceled, TimeSpan.Zero);
 
         Assert.That(decision.Kind, Is.EqualTo(InboundReclaimKind.Clear));
-        Assert.That(decision.Reason, Is.EqualTo(expectedReason));
+        Assert.That(decision.Reason, Is.EqualTo("STALE:CANCELED"));
+    }
+
+    [Test]
+    public void InboundReclaim_SourceFailed_KeepsUntilTtl_BecauseAutoRedoMayStillDeliver()
+    {
+        var within = PositionTransition.DecideInboundReclaim(
+            false, RcsTaskState.Failed, PositionTransition.InboundHandoffTtl);
+        var beyond = PositionTransition.DecideInboundReclaim(
+            false, RcsTaskState.Failed,
+            PositionTransition.InboundHandoffTtl + TimeSpan.FromMinutes(1));
+
+        Assert.That(within.Kind, Is.EqualTo(InboundReclaimKind.Keep), "FAILED 会自动 redo，车仍可能送达，不得立即清登记");
+        Assert.That(beyond.Kind, Is.EqualTo(InboundReclaimKind.Clear));
+        Assert.That(beyond.Reason, Is.EqualTo("TTL"));
     }
 
     [Test]
@@ -452,6 +465,95 @@ public sealed class PositionTransitionTests
         Assert.That(within.Kind, Is.EqualTo(InboundReclaimKind.Keep));
         Assert.That(beyond.Kind, Is.EqualTo(InboundReclaimKind.Clear));
         Assert.That(beyond.Reason, Is.EqualTo("TTL"));
+    }
+
+    [Test]
+    public void Processing_TimesOut_ToAlarm()
+    {
+        var outcome = PositionTransition.Decide(Online(PositionState.Processing) with
+        {
+            Ok = false,
+            Ng = false,
+            StateAge = TimeSpan.FromMinutes(11),
+            ProcessTimeoutMs = 600_000
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Target, Is.EqualTo(PositionState.Alarm));
+            Assert.That(outcome.AlarmReason, Does.Contain("加工超时"));
+            Assert.That(Kinds(outcome), Is.EqualTo(new[] { PositionActionKind.RaiseAlarm }));
+        });
+    }
+
+    [Test]
+    public void Processing_UnderTimeout_StaysProcessing()
+    {
+        var outcome = PositionTransition.Decide(Online(PositionState.Processing) with
+        {
+            Ok = false,
+            Ng = false,
+            StateAge = TimeSpan.FromMinutes(5),
+            ProcessTimeoutMs = 600_000
+        });
+
+        Assert.That(outcome.Target, Is.EqualTo(PositionState.Processing));
+    }
+
+    [Test]
+    public void Transporting_TaskExecutionTimeout_ToAlarm()
+    {
+        var outcome = PositionTransition.Decide(Online(PositionState.Transporting) with
+        {
+            RcsState = RcsTaskState.Executing,
+            Phase = PositionPhase.Upload,
+            HasCurrentTask = true,
+            TaskAge = TimeSpan.FromMinutes(16),
+            TaskExecutionTimeoutMs = 900_000
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Target, Is.EqualTo(PositionState.Alarm));
+            Assert.That(outcome.AlarmReason, Does.Contain("执行超时"));
+        });
+    }
+
+    [Test]
+    public void Transporting_Completed_BeatsTaskExecutionTimeout_EmitsRecheck()
+    {
+        var outcome = PositionTransition.Decide(Online(PositionState.Transporting) with
+        {
+            RcsState = RcsTaskState.Completed,
+            Phase = PositionPhase.Upload,
+            HasCurrentTask = true,
+            TaskAge = TimeSpan.FromMinutes(16),
+            TaskExecutionTimeoutMs = 900_000
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Target, Is.EqualTo(PositionState.Transporting));
+            Assert.That(Kinds(outcome), Is.EqualTo(new[] { PositionActionKind.RecheckHasMatFresh }),
+                "RCS 已完成不得因 TaskAge 超时跳过 HasMat 复核");
+            Assert.That(outcome.AlarmReason, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Dispatching_Completed_BeatsTaskExecutionTimeout_GoesTransporting()
+    {
+        var outcome = PositionTransition.Decide(Online(PositionState.Dispatching) with
+        {
+            RcsState = RcsTaskState.Completed,
+            Phase = PositionPhase.Upload,
+            HasCurrentTask = true,
+            TaskAge = TimeSpan.FromMinutes(16),
+            TaskExecutionTimeoutMs = 900_000
+        });
+
+        Assert.That(outcome.Target, Is.EqualTo(PositionState.Transporting));
+        Assert.That(Kinds(outcome), Is.EqualTo(new[] { PositionActionKind.RecheckHasMatFresh }));
     }
 
     // ─── Offline 复位 ──────────────────────────────────────────────────────

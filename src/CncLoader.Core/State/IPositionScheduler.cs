@@ -38,7 +38,10 @@ public interface IPositionScheduler
     /// </summary>
     void SetAutoDispatchPaused(bool paused);
 
-    /// <summary>人工恢复：把指定加工位从 ALARM 重置回 WAIT_LOAD（解除报警后调用）。</summary>
+    /// <summary>
+    /// 人工恢复：把指定加工位从 ALARM 重置回 WAIT_LOAD（解除报警后调用）。
+    /// 绑定的 RCS 任务未到终态时拒绝恢复并抛 <see cref="InvalidOperationException"/>（消息可直接展示给操作员）。
+    /// </summary>
     Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default);
 
     /// <summary>
@@ -49,4 +52,10 @@ public interface IPositionScheduler
 
     /// <summary>料架绑定变更后失效机台→料架缓存（equipmentId 空则全清）。</summary>
     void InvalidateFrameBindingCache(long? equipmentId = null);
+
+    /// <summary>换架第二发失败等：锁定该机台自动派工（进程内）。</summary>
+    void SetEquipmentDispatchHold(long equipmentId, bool held, string? reason = null) { }
+
+    /// <summary>该机台是否因换架失败等被锁定自动派工。</summary>
+    bool IsEquipmentDispatchHeld(long equipmentId) => false;
 }

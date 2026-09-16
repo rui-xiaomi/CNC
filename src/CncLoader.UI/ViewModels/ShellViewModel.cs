@@ -66,10 +66,12 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private int _unhandledAlarms;
     [ObservableProperty] private string _clock = "";
     [ObservableProperty] private string _heartbeatText = "000000";
+    private bool _syncingNav;
 
     partial void OnSelectedNavItemChanged(NavItem? value)
     {
-        if (value is not null) _navigation.NavigateTo(value.Key);
+        if (_syncingNav || value is null) return;
+        _navigation.NavigateTo(value.Key);
     }
 
     partial void OnSelectedWorkLineChanged(WorkLineListItem? value)
@@ -143,9 +145,15 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     {
         CurrentPage = page;
         CurrentTitle = page.Title;
+        var item = NavItems.FirstOrDefault(i => i.Key == page.Key);
+        if (item is null || ReferenceEquals(SelectedNavItem, item)) return;
+        _syncingNav = true;
+        try { SelectedNavItem = item; }
+        finally { _syncingNav = false; }
     }
 
-    private void OnMachineChanged(object? sender, MachineStatus e) => RefreshPlcStatus();
+    private void OnMachineChanged(object? sender, MachineStatus e)
+        => _ui.Post(RefreshPlcStatus);
 
     private void RefreshPlcStatus()
     {

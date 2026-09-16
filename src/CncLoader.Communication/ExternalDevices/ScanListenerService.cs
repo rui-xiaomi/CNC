@@ -13,6 +13,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
     private readonly ILogger<ScanListenerService> _logger;
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
+    private Task? _acceptLoop;
     private readonly ConcurrentDictionary<TcpClient, byte> _clients = new();
     private readonly ConcurrentQueue<ScanRecord> _recent = new();
     private const int MaxRecent = 50;
@@ -34,7 +35,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
             _cts = new CancellationTokenSource();
             _listener = new TcpListener(IPAddress.Any, Math.Clamp(port, 1, 65535));
             _listener.Start();
-            _ = AcceptLoopAsync(_cts.Token);
+            _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token));
             _logger.LogInformation("扫码枪监听已启动，端口 {Port}", port);
             return Task.FromResult(true);
         }
@@ -48,24 +49,31 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
 
     public async Task StopAsync(CancellationToken ct = default)
     {
-        if (_listener is null) return;
+        if (_listener is null && _acceptLoop is null) return;
         try
         {
             _cts?.Cancel();
-            _listener.Stop();
+            try { _listener?.Stop(); }
+            catch (ObjectDisposedException) { }
             foreach (var c in _clients.Keys)
                 try { c.Close(); } catch { }
             _clients.Clear();
             UpdateConnectedCount(0);
+            if (_acceptLoop is not null)
+            {
+                try { await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false); }
+                catch (TimeoutException) { _logger.LogDebug("扫码枪监听停止等待超时"); }
+                catch (OperationCanceledException) { }
+            }
             _logger.LogInformation("扫码枪监听已停止");
         }
         finally
         {
             _listener = null;
+            _acceptLoop = null;
             _cts?.Dispose();
             _cts = null;
         }
-        await Task.CompletedTask;
     }
 
     public IReadOnlyList<ScanRecord> GetRecent(int max = 50)
@@ -79,7 +87,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
         while (!ct.IsCancellationRequested && _listener is not null)
         {
             TcpClient client;
-            try { client = await _listener.AcceptTcpClientAsync(ct); }
+            try { client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { break; }
             catch (ObjectDisposedException) { break; }
             catch (Exception ex)
@@ -105,7 +113,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
             var sb = new StringBuilder();
             while (!ct.IsCancellationRequested && client.Connected)
             {
-                var n = await stream.ReadAsync(buf, ct);
+                var n = await stream.ReadAsync(buf, ct).ConfigureAwait(false);
                 if (n == 0) break;
                 sb.Append(Encoding.UTF8.GetString(buf, 0, n));
                 while (TryExtractLine(sb, out var line))
@@ -161,6 +169,7 @@ public sealed class ScanListenerService : IScanListenerService, IDisposable
 
     public void Dispose()
     {
-        _ = StopAsync(default);
+        try { StopAsync(CancellationToken.None).GetAwaiter().GetResult(); }
+        catch (Exception ex) { _logger.LogDebug(ex, "扫码枪监听释放"); }
     }
 }

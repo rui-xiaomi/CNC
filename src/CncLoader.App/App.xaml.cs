@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -25,9 +26,15 @@ namespace CncLoader.App;
 
 public partial class App : Application
 {
+    /// <summary>停主机上限：须大于 PositionScheduler.StopAsync 的 10s 有界等待（P1-3）。</summary>
+    private static readonly TimeSpan HostStopTimeout = TimeSpan.FromSeconds(15);
+
     private IHost? _host;
     private Microsoft.Extensions.Logging.ILogger? _logger;
     private SingleInstanceGuard? _singleInstance;
+    /// <summary>停主机任务（窗口关闭与 OnExit 兜底共用，只停一次；仅 UI 线程读写）。</summary>
+    private Task? _hostStopTask;
+    private bool _shutdownRequested;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -51,6 +58,7 @@ public partial class App : Application
             // 先显示主窗口，再后台跑启动自检（DB 探活 + PLC 建链 + 轮询一轮）。
             // 自检可能因连不上真机而耗时数十秒，绝不能阻塞窗口显示。
             var shell = _host.Services.GetRequiredService<ShellWindow>();
+            shell.Closing += OnShellClosing;
             shell.Show();
 
             _ = RunStartupVerificationSafeAsync(_host.Services);
@@ -166,6 +174,8 @@ public partial class App : Application
         // 7×24 无人值守：禁止弹阻断式模态框（无人点会冻结 UI 线程、后台仍派工）；改用非阻塞 Growl + 日志（P0-4）。
         try
         {
+            // Handled=true 后界面状态可能不一致：计数交看板常驻提示，避免一闪而过的 Growl 被忽略（P2-6）
+            _host?.Services.GetService<IUiExceptionMonitor>()?.Record(e.Exception);
             _host?.Services.GetService<IUserNotificationService>()?.Error($"发生未处理异常：{e.Exception.Message}");
         }
         catch (Exception notifyEx)
@@ -197,16 +207,48 @@ public partial class App : Application
         }
     }
 
-    protected override async void OnExit(ExitEventArgs e)
+    /// <summary>
+    /// 主窗口关闭：先取消关闭，停完主机（等调度器/跟踪器/PLC 在途读写退出）再真正退出（P1-3）。
+    /// OnExit 不能 await：WPF 不等待 async void，首个 await 后进程即可能退出，停机与日志落盘都不保证完成。
+    /// </summary>
+    private async void OnShellClosing(object? sender, CancelEventArgs e)
+    {
+        if (_hostStopTask is { IsCompleted: true }) return; // 停机已完成，放行本次关闭
+        e.Cancel = true;
+        if (_shutdownRequested) return; // 停机进行中，忽略重复关闭
+        _shutdownRequested = true;
+        if (sender is Window window) window.IsEnabled = false;
+        await StopHostAsync();
+        Shutdown();
+    }
+
+    private Task StopHostAsync() => _hostStopTask ??= StopHostCoreAsync();
+
+    private async Task StopHostCoreAsync()
+    {
+        if (_host is null) return;
+        try
+        {
+            using var cts = new CancellationTokenSource(HostStopTimeout);
+            var started = DateTime.Now;
+            Log.Logger.Information("开始停止主机");
+            // 线程池上停且不回 UI 上下文：OnExit 兜底会在 UI 线程同步等待本任务，回 UI 上下文即互锁。
+            await Task.Run(() => _host.StopAsync(cts.Token)).ConfigureAwait(false);
+            Log.Logger.Information("主机已停止，用时 {Ms}ms", (int)(DateTime.Now - started).TotalMilliseconds);
+        }
+        catch (Exception ex) { Log.Logger.Warning(ex, "停止主机异常"); }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
     {
         try
         {
-            if (_host is not null)
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await _host.StopAsync(cts.Token);
-                _host.Dispose();
-            }
+            // 兜底：启动失败、会话结束等未经主窗口关闭的退出路径，有界同步等待停机。
+            if (!StopHostAsync().Wait(HostStopTimeout + TimeSpan.FromSeconds(1)))
+                Log.Logger.Warning("停止主机超时（{Seconds}s），强制退出", HostStopTimeout.TotalSeconds);
+            // Dispose 同样放线程池并有界等待：UI 线程同步 Dispose 会与内部 await 回 UI 上下文互锁（FINS 模拟器 StopAsync 即如此）。
+            if (_host is { } host && !Task.Run(host.Dispose).Wait(HostStopTimeout))
+                Log.Logger.Warning("释放主机超时（{Seconds}s），强制退出", HostStopTimeout.TotalSeconds);
         }
         catch (Exception ex) { Log.Logger.Warning(ex, "停止主机异常"); }
         finally

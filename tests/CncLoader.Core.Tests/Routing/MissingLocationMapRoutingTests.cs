@@ -87,6 +87,33 @@ public sealed class MissingLocationMapRoutingTests
         Assert.That(await resolver.ResolveUploadAsync(Eq, Pos), Is.EqualTo(("LOAD-01", "CELL-01")));
     }
 
+    [Test]
+    public async Task HandoffDestination_PositionCell_ResolvesToPosition()
+    {
+        var map = new StubLocationMap();
+        map.SeedPosition(Eq, Pos, "cell", "CELL-01");
+        var resolver = new RouteResolver(map, NullLogger<RouteResolver>.Instance);
+
+        Assert.That(await resolver.ResolveHandoffDestinationAsync("CELL-01", null), Is.EqualTo((Eq, Pos)));
+    }
+
+    [Test]
+    public async Task HandoffDestination_FrameCellOrUnmapped_ReturnsNull()
+    {
+        var map = new StubLocationMap();
+        map.SeedFrame(FrameId, "cell", "RK-A-01");
+        var resolver = new RouteResolver(map, NullLogger<RouteResolver>.Instance);
+
+        var frameCell = await resolver.ResolveHandoffDestinationAsync("RK-A-01", null);
+        var unmapped = await resolver.ResolveHandoffDestinationAsync("UNKNOWN", null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(frameCell, Is.Null, "料架终点不是交接");
+            Assert.That(unmapped, Is.Null, "未映射编码不得猜测");
+        });
+    }
+
     // ─── 真实调度器：路由解析失败即拒发 ────────────────────────────────────
 
     [Test]

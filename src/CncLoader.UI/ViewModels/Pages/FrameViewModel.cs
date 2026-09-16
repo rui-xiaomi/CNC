@@ -396,8 +396,14 @@ public sealed partial class FrameViewModel : PageViewModelBase
         }
         try
         {
+            if (SelectedSlot.Reserved
+                && !_notify.Confirm(
+                    "该槽仍被任务预记。仅当任务已完成或预记数据异常时才会置空；在途/失败任务仍会拒绝。PLC 未复核时按实物强制收口。",
+                    "置空释放预记槽"))
+                return;
+
             var label = SelectedSlot.Label;
-            var result = await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, null, SlotStates.Empty, _user.Name);
+            var result = await _slots.ClearSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, _user.Name);
             NotifySlotMutationResult(result, SlotMutationOp.Clear, label);
             CorrectMaterial = "";
             CorrectSlotState = "空(0)";

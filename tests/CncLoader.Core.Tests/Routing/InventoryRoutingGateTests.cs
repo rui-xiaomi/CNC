@@ -64,7 +64,7 @@ public sealed class InventoryRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         var taskSvc = new RcsTaskService(
             _client, _tasks, new InvNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
 
         var equipment = new StoreBackedFrameBindEquipment(_eq);
         _alarms = new NoopAlarms();
@@ -77,6 +77,79 @@ public sealed class InventoryRoutingGateTests
             _notifier, NullLogger<InventoryService>.Instance);
         _inventory.InventoryCompleted += (_, e) => _completed.Add(e);
     }
+
+    [Test]
+    public async Task IdentifyOutcomeUnknown_RegistersActive_NoFailedEvent()
+    {
+        _client.UnknownNextExcute = true;
+
+        var taskId = await _inventory.StartInventoryAsync(FrameIdTransit, 101, 3, "inv-red");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(taskId, Is.Not.Null.And.Not.Empty, "结果未知须返回 taskId，定期盘点才会等结果");
+            Assert.That(_inventory.GetActiveInventories().Single().TaskId, Is.EqualTo(taskId));
+            Assert.That(_tasks.Snapshot(taskId)!.TaskState, Is.EqualTo(RcsTaskState.Dispatched), "不落 FAILED，交跟踪器确认");
+            Assert.That(_completed, Is.Empty, "结果未知不得发 FAILED 结果");
+            Assert.That(_alarms.RaiseCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task IdentifyOutcomeUnknown_ThenRcsNotFound_CompletesAsFailed()
+    {
+        _client.UnknownNextExcute = true;
+        var taskId = await _inventory.StartInventoryAsync(FrameIdTransit, 101, 3, "inv-red");
+
+        await _inventory.NotifyTaskAbandonedAsync(taskId, "RCS_NOT_FOUND");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_inventory.GetActiveInventories(), Is.Empty);
+            Assert.That(_completed.Single().TaskId, Is.EqualTo(taskId));
+            Assert.That(_completed.Single().State, Is.EqualTo("FAILED"));
+            Assert.That(_completed.Single().FrameId, Is.EqualTo(FrameIdTransit));
+        });
+    }
+
+    [Test]
+    public async Task Recover_IdentifyInFlight_AfterRestart_ScanResultStillCompletes()
+    {
+        var row = IdentifyRow("101,3");
+
+        var recovered = await _inventory.RecoverInFlightAsync(new[] { row });
+        var active = _inventory.GetActiveInventories();
+        _notifier.RaiseScanResult(new RcsScanResultEvent(row.RcsTaskId!, RcsErrorCode.Success, FrameShelfCode,
+            new[] { "M1", "M2", "M3" }, null));
+        for (var i = 0; i < 100 && _completed.Count == 0; i++) await Task.Delay(20);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered, Is.EqualTo(1));
+            Assert.That(active.Single().FrameId, Is.EqualTo(FrameIdTransit));
+            Assert.That(active.Single().PosStart, Is.EqualTo(101));
+            Assert.That(active.Single().Count, Is.EqualTo(3));
+            Assert.That(_completed.Single().TaskId, Is.EqualTo(row.RcsTaskId), "接续后扫码结果须照常收口");
+            Assert.That(_completed.Single().FrameId, Is.EqualTo(FrameIdTransit));
+            Assert.That(_inventory.GetActiveInventories(), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task Recover_Identify_MalformedParam_NotRecovered()
+    {
+        var recovered = await _inventory.RecoverInFlightAsync(new[] { IdentifyRow("bad") });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered, Is.Zero);
+            Assert.That(_inventory.GetActiveInventories(), Is.Empty);
+        });
+    }
+
+    private static RcsTaskRow IdentifyRow(string reqParam)
+        => new(1, "LINE-A-ID-20260915000000-0001", "identify", "2", RcsTaskState.Dispatched, null, 8,
+            FrameShelfCode, FrameShelfCode, null, null, null, null, reqParam, 0, "0", DateTime.Now, DateTime.Now, null, null);
 
     [Test]
     public void Chain_Documents_Inventory_OnlyIdentify_NoGrab()
@@ -219,7 +292,7 @@ public sealed class InventoryRoutingGateTests
         _loc.SetStateByCode(FrameShelfCode, remove: false, state: "1");
         var taskSvc = new RcsTaskService(
             _client, _tasks, new InvNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
 
         var result = await taskSvc.DispatchIdentifyAsync(new IdentifyDispatchArgs
         {

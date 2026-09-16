@@ -1,3 +1,4 @@
+using CncLoader.Common.Configuration;
 using CncLoader.Core.Abstractions;
 
 namespace CncLoader.Core.Rcs;
@@ -107,7 +108,7 @@ public sealed record ManagedDispatchEndpoint
 
     /// <summary>已配置的 AREA 角色（与 LocationDisplayLabels / 种子一致）。</summary>
     public static bool IsConfiguredAreaRole(string? locName) =>
-        locName is "LOAD_AREA" or "UNLOAD_AREA" or "FULL_BUFFER" or "EMPTY_BUFFER" or "PALLET_RETURN";
+        LocationAreaNames.IsConfiguredAreaRole(locName);
 }
 
 /// <summary>

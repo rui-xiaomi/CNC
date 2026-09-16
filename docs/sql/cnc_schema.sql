@@ -290,6 +290,8 @@ CREATE TABLE MAS_AUTO_FRAME_SLOT (
   UNIQUE KEY uk_frame_slot (FRAME_ID, SLOT_NO),
   UNIQUE KEY uk_frame_layer_pos (FRAME_ID, LAYER_NO, POS_IN_LAYER),
   KEY idx_slot_electrode (ELECTRODE_ID),
+  KEY idx_slot_frame_state (FRAME_ID, SLOT_STATE),
+  KEY idx_slot_remark (REMARK),
   CONSTRAINT fk_slot_frame FOREIGN KEY (FRAME_ID) REFERENCES MAS_AUTO_FRAME (ID1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料架槽位与物料绑定（层+层内位）';
 
@@ -354,8 +356,8 @@ CREATE TABLE MAS_AUTO_AGV_TASK (
   UPDATETIME      DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (ID1),
   KEY idx_agv_line (WORKLINE_ID),
-  KEY idx_agv_rcs_task (RCS_TASK_ID),
-  KEY idx_agv_rcs_remote (RCS_REMOTE_ID),
+  UNIQUE KEY uk_agv_rcs_task (RCS_TASK_ID),
+  UNIQUE KEY uk_agv_rcs_remote (RCS_REMOTE_ID),
   KEY idx_agv_task_state (TASK_STATE),
   KEY idx_agv_txn (TXN_ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AGV/RCS任务记录';
@@ -393,7 +395,8 @@ CREATE TABLE MAS_AUTO_ALARM_EVENT (
   CREATE_TIME DATETIME    NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发生时间',
   PRIMARY KEY (ID1),
   KEY idx_alarm_state (ALARM_STATE),
-  KEY idx_alarm_line (WORKLINE_ID)
+  KEY idx_alarm_line (WORKLINE_ID),
+  KEY idx_alarm_time (CREATE_TIME)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='告警事件';
 
 -- 17. 逻辑位置↔RCS点位编码映射（station/cell 双层）

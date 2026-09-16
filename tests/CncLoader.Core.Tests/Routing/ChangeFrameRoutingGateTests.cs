@@ -64,7 +64,7 @@ public sealed class ChangeFrameRoutingGateTests
         _tasks = new MutableRcsTaskStore { OrderSink = _order };
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
 
         _alarms = new NoopAlarms();
         _notifier = new RcsCallbackNotifier();
@@ -474,7 +474,7 @@ public sealed class ChangeFrameRoutingGateTests
     {
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
 
         var result = await taskSvc.DispatchTransitAsync(new TransitDispatchArgs
         {
@@ -503,7 +503,7 @@ public sealed class ChangeFrameRoutingGateTests
         _eq.ClearFrameBinds();
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
 
         var result = await taskSvc.DispatchTransitAsync(new TransitDispatchArgs
         {
@@ -778,6 +778,125 @@ public sealed class ChangeFrameRoutingGateTests
 
     // ─── helpers ─────────────────────────────────────────────────
 
+    // ─── E. 下发结果未知 ─────────────────────────────────────────
+
+    [Test]
+    public async Task PullOutcomeUnknown_KeepsTransaction_CompletedEventStillDispatchesPush()
+    {
+        _client.UnknownNextTransit = true;
+        var pull = await StartPullAsync(FrameRole.Upload);
+        var activeAfterPull = _orch.GetActiveTransactions().Count;
+        var pullRowState = _tasks.Snapshot(pull.PullTaskId!)?.TaskState;
+        var transitBefore = _client.TransitCount;
+
+        var push = await CompletePullAndAwaitPushAsync(pull.PullTaskId!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pull.State, Is.EqualTo("RUNNING"), $"结果未知不得按失败结束事务：{pull.Message}");
+            Assert.That(pull.Message, Does.Contain("结果未知"));
+            Assert.That(activeAfterPull, Is.EqualTo(1), "事务须保留等 RCS 确认");
+            Assert.That(pullRowState, Is.EqualTo(RcsTaskState.Dispatched), "结果未知置 DISPATCHED 交跟踪器，不落 FAILED");
+            Assert.That(push.Step, Is.EqualTo(ChangeFrameStep.PushNew), "RCS 实际已执行时完成事件须照常推进第二发");
+            Assert.That(_client.TransitCount - transitBefore, Is.EqualTo(1));
+            Assert.That(_alarms.RaiseCount, Is.Zero, "结果未知不得告警为下发失败");
+        });
+    }
+
+    [Test]
+    public async Task PullOutcomeUnknown_ThenRcsNotFound_AbandonsWithAlarm()
+    {
+        _client.UnknownNextTransit = true;
+        var pull = await StartPullAsync(FrameRole.Upload);
+
+        await _orch.NotifyTaskAbandonedAsync(pull.PullTaskId!, "RCS_NOT_FOUND");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_orch.GetActiveTransactions(), Is.Empty, "查无须结束事务，否则一直挡住盘点与水位换架");
+            Assert.That(_progress[^1].Step, Is.EqualTo(ChangeFrameStep.Alarm));
+            Assert.That(_progress[^1].Message, Does.Contain("第一发"));
+            Assert.That(_alarms.RaiseCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task PushOutcomeUnknown_KeepsTransaction_NoWorkOrderAlarm()
+    {
+        var pull = await StartPullAsync(FrameRole.Upload);
+        _client.UnknownNextTransit = true;
+
+        var push = await CompletePullAndAwaitPushAsync(pull.PullTaskId!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(push.Step, Is.EqualTo(ChangeFrameStep.PushNew), $"state={push.State} msg={push.Message}");
+            Assert.That(push.State, Is.EqualTo("RUNNING"));
+            Assert.That(push.Message, Does.Contain("结果未知"));
+            Assert.That(_orch.GetActiveTransactions(), Has.Count.EqualTo(1));
+            Assert.That(_alarms.RaiseCount, Is.Zero, "可能已在送新架，不得按第二发失败锁工序");
+        });
+    }
+
+    // ─── D. 重启接续（P1-4）──────────────────────────────────────
+
+    [Test]
+    public async Task Recover_PullInFlight_AfterRestart_PullCompleted_DispatchesPush()
+    {
+        var pull = await StartPullAsync(FrameRole.Upload);
+        var pullRow = _tasks.Snapshot(pull.PullTaskId!);
+        Assert.That(pullRow, Is.Not.Null);
+
+        // 模拟重启：新编排器（内存事务为空）+ 新事件总线，只凭库内未完结行接续
+        var notifier = new RcsCallbackNotifier();
+        var taskSvc = new RcsTaskService(
+            _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
+            _resolver, _validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), notifier);
+        var restarted = new ChangeFrameOrchestrator(
+            taskSvc, _tasks, _equipment, _loc, _alarms, new IdlePositionScheduler(), notifier,
+            Options.Create(new AppOptions
+            {
+                Rcs = new RcsOptions { EmptyBufferArea = LocEmptyBuffer, FullBufferArea = LocFullBuffer, MaxAutoRedo = 3 }
+            }),
+            NullLogger<ChangeFrameOrchestrator>.Instance);
+        var pushSeen = new TaskCompletionSource<ChangeFrameProgressEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        restarted.ProgressChanged += (_, e) =>
+        {
+            if (e.Step is ChangeFrameStep.PushNew or ChangeFrameStep.Alarm) pushSeen.TrySetResult(e);
+        };
+
+        var recovered = await restarted.RecoverInFlightAsync(new[] { pullRow! });
+        var transitBefore = _client.TransitCount;
+        notifier.RaiseTaskStatus(new RcsTaskStatusEvent(pull.PullTaskId!, RcsErrorCode.Success, "ok", RcsTaskState.Completed));
+        var push = await pushSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered, Is.EqualTo(1));
+            Assert.That(push.Step, Is.EqualTo(ChangeFrameStep.PushNew), $"state={push.State} msg={push.Message}");
+            Assert.That(push.Role, Is.EqualTo(FrameRole.Upload), "按空架缓存区反推上料角色");
+            Assert.That(_client.TransitCount - transitBefore, Is.EqualTo(1), "接续后第一发完成须下发第二发");
+            Assert.That(_tasks.Created.Last().FromCode, Is.EqualTo(EmptyBufferCode));
+            Assert.That(_tasks.Created.Last().ToCode, Is.EqualTo(FrameShelfCode));
+            Assert.That(_tasks.Created.Last().TxnId, Is.EqualTo(pull.TxnId));
+        });
+    }
+
+    [Test]
+    public async Task Recover_IgnoresRowsThatAreNotChangeFrame()
+    {
+        var row = new RcsTaskRow(1, "LINE-A-TR-1", "transit", "1", RcsTaskState.Executing, null, 5,
+            FrameShelfCode, EmptyBufferCode, EqId, null, null, "CF-X", null, 0, "0", DateTime.Now, null, null, null);
+
+        var recovered = await _orch.RecoverInFlightAsync(new[] { row });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered, Is.Zero);
+            Assert.That(_orch.GetActiveTransactions(), Is.Empty);
+        });
+    }
+
     private async Task<ChangeFrameProgressEvent> StartPullAsync(FrameRole role)
     {
         var before = _progress.Count;
@@ -836,7 +955,7 @@ public sealed class ChangeFrameRoutingGateTests
         validator.OrderSink = _order;
         var taskSvc = new RcsTaskService(
             _client, _tasks, new CfNoopMsgLog(), new TrackingCallbackProcessor(),
-            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure());
+            resolver, validator, NullLogger<RcsTaskService>.Instance, new TrackingSlotsForClosure(), new RcsCallbackNotifier());
         var options = Options.Create(new AppOptions
         {
             Rcs = new RcsOptions

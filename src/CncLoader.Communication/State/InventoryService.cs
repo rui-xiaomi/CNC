@@ -86,6 +86,16 @@ public sealed class InventoryService : IInventoryService
             FrameId = frameId, Author = author
         }, ct);
 
+        if (r.FailureKind == RcsFailureKind.OutcomeUnknown && !string.IsNullOrEmpty(r.TaskId))
+        {
+            // 请求已发出未拿到应答：RCS 可能已在扫码——登记进行中，扫码结果到达照常回写；
+            // RCS 实无此任务时由 NotifyTaskAbandonedAsync 收口为 FAILED。
+            _active[r.TaskId] = new InventoryTaskInfo(frameId, r.TaskId, posStart, count, DateTime.Now);
+            _logger.LogWarning("盘点下发结果未知 料架 {Frame} 任务 {Task}：{Err}，登记进行中等待 RCS 确认",
+                frameId, r.TaskId, r.Error ?? r.Message ?? "—");
+            return r.TaskId;
+        }
+
         if (!r.Success || string.IsNullOrEmpty(r.TaskId))
         {
             var err = r.Error ?? r.Message ?? "未知错误";
@@ -106,6 +116,41 @@ public sealed class InventoryService : IInventoryService
         _active[r.TaskId] = info;
         _logger.LogInformation("盘点已发起 料架 {Frame} 任务 {Task} 起始 {Start} 数 {N}", frameId, r.TaskId, posStart, count);
         return r.TaskId;
+    }
+
+    public async Task<int> RecoverInFlightAsync(IReadOnlyList<RcsTaskRow> unfinished, CancellationToken ct = default)
+    {
+        var kind = RcsTaskKindNames.ToDbKind(RcsTaskKind.Identify);
+        var recovered = 0;
+        foreach (var row in unfinished)
+        {
+            if (row.Kind != kind || string.IsNullOrEmpty(row.RcsTaskId) || _active.ContainsKey(row.RcsTaskId)) continue;
+            // 下发时 FromCode=料架 station/shelf，ReqParam="起始孔位,数量"
+            var station = await _locationMap.ResolveByRcsCodeAsync(row.FromCode, ct);
+            var parts = (row.ReqParam ?? "").Split(',');
+            if (station?.FrameId is not long frameId || parts.Length != 2
+                || !int.TryParse(parts[0], out var posStart) || !int.TryParse(parts[1], out var count))
+            {
+                _logger.LogWarning("盘点任务 {Task} 重启后无法接续（站点 {Station} 未映射料架或参数 {Param} 非法），其扫码结果将不回写",
+                    row.RcsTaskId, row.FromCode, row.ReqParam ?? "—");
+                continue;
+            }
+            _active[row.RcsTaskId] = new InventoryTaskInfo(frameId, row.RcsTaskId, posStart, count, row.SendTime);
+            recovered++;
+            _logger.LogInformation("盘点任务 {Task} 重启接续：料架 {Frame} 起始 {Start} 数 {N}", row.RcsTaskId, frameId, posStart, count);
+        }
+        return recovered;
+    }
+
+    public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
+    {
+        if (_active.TryRemove(taskId, out var info))
+        {
+            _logger.LogWarning("盘点任务 {Task}（料架 {Frame}）已放弃（{Reason}），按失败收口", taskId, info.FrameId, reason);
+            InventoryCompleted?.Invoke(this, new InventoryResultEvent(info.FrameId, taskId, "FAILED", null,
+                Array.Empty<string>(), 0, $"盘点任务已放弃（{reason}）"));
+        }
+        return Task.CompletedTask;
     }
 
     /// <summary>按料架绑定机台反查线体；多绑定取首条活动路由；不可用返回 null。</summary>
@@ -129,27 +174,23 @@ public sealed class InventoryService : IInventoryService
 
     private void OnTaskStatusReceived(object? sender, RcsTaskStatusEvent e)
     {
-        if (!_active.ContainsKey(e.TaskId)) return;
-        if (e.TaskState is RcsTaskState.Failed or RcsTaskState.Canceled)
-        {
-            _active.TryRemove(e.TaskId, out _);
-            InventoryCompleted?.Invoke(this, new InventoryResultEvent(0, e.TaskId, e.TaskState.ToString().ToUpperInvariant(), null, Array.Empty<string>(), 0, e.Message));
-        }
+        if (e.TaskState is not (RcsTaskState.Failed or RcsTaskState.Canceled)) return;
+        if (!_active.TryRemove(e.TaskId, out var info)) return;
+        InventoryCompleted?.Invoke(this, new InventoryResultEvent(info.FrameId, e.TaskId, e.TaskState.ToString().ToUpperInvariant(), null, Array.Empty<string>(), 0, e.Message));
     }
 
     private async Task HandleScanAsync(InventoryTaskInfo info, RcsScanResultEvent e)
     {
+        if (!_active.TryRemove(info.TaskId, out _)) return;
         try
         {
             if (e.ErrorCode != RcsErrorCode.Success)
             {
-                _active.TryRemove(info.TaskId, out _);
                 InventoryCompleted?.Invoke(this, new InventoryResultEvent(info.FrameId, info.TaskId, "FAILED", e.Code, e.Products, 0, e.Message));
                 return;
             }
 
             var correction = await _slots.CorrectFromInventoryAsync(info.FrameId, info.PosStart, e.Products);
-            _active.TryRemove(info.TaskId, out _);
 
             // 汇总 Warning 已在 SlotAccountService 记录，此处只转发事件，避免重复刷屏。
             if (correction.Status == InventoryCorrectionStatus.Cancelled)
@@ -173,7 +214,6 @@ public sealed class InventoryService : IInventoryService
         }
         catch (Exception ex)
         {
-            _active.TryRemove(info.TaskId, out _);
             _logger.LogWarning(ex, "盘点处理异常 料架 {Frame} 任务 {Task}", info.FrameId, info.TaskId);
             InventoryCompleted?.Invoke(this, new InventoryResultEvent(info.FrameId, info.TaskId, "FAILED", e.Code, e.Products, 0, ex.Message));
         }

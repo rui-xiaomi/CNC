@@ -1,3 +1,4 @@
+using CncLoader.Common.Configuration;
 using CncLoader.Core.Rcs;
 using CncLoader.Core.State;
 using Microsoft.Extensions.Logging;
@@ -11,8 +12,8 @@ namespace CncLoader.Communication.State;
 /// </summary>
 public sealed class RouteResolver : IRouteResolver
 {
-    public const string LoadAreaName = "LOAD_AREA";
-    public const string UnloadAreaName = "UNLOAD_AREA";
+    public const string LoadAreaName = LocationAreaNames.LoadArea;
+    public const string UnloadAreaName = LocationAreaNames.UnloadArea;
 
     private readonly ILocationMapService _locationMap;
     private readonly ILogger<RouteResolver> _logger;
@@ -88,5 +89,17 @@ public sealed class RouteResolver : IRouteResolver
         if (hit is null || hit.FrameId != frameId || !string.Equals(hit.RcsType, "cell", StringComparison.Ordinal))
             return null;
         return composed;
+    }
+
+    public async Task<(long EquipmentId, long PositionId)?> ResolveHandoffDestinationAsync(
+        string toCode, string? reqParam, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(toCode)) return null;
+        var byCode = await _locationMap.ResolveByRcsCodeAsync(toCode, ct);
+        // 终点须是机台/加工位点位；料架、区域或未映射编码一律不当交接（禁止按站码前缀猜）
+        if (byCode?.EquipmentId is null) return null;
+        var dest = GrabHandoffDest.Resolve(
+            await _locationMap.GetAllAsync(ct), toCode, byCode, GrabHandoffDest.TryReadDstPos(reqParam));
+        return dest is { EquipmentId: long eq, PositionId: long pos } ? (eq, pos) : null;
     }
 }

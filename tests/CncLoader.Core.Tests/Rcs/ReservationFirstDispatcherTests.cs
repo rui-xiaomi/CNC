@@ -267,6 +267,27 @@ public sealed class ReservationFirstDispatcherTests
         Assert.That(rolledBack, Is.True);
     }
 
+    [Test]
+    public async Task Rcs结果未知时_保留预记不回滚()
+    {
+        var dispatcher = new ReservationFirstDispatcher();
+        var rolledBack = false;
+
+        var result = await dispatcher.ExecuteAsync(
+            "task-1",
+            (_, _) => Task.FromResult<object?>(new object()),
+            AlwaysAvailable,
+            (_, _) => Task.FromResult(RcsResult.OutcomeUnknown("", "超时") with { TaskId = "task-1" }),
+            (_, _) => { rolledBack = true; return Task.FromResult(true); });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(ReservationFirstDispatchStatus.DispatchUnknown));
+            Assert.That(result.Reservation, Is.Not.Null);
+            Assert.That(rolledBack, Is.False, "RCS 可能已按预记槽位执行，回滚会造成双占/双放");
+        });
+    }
+
     private static RcsResult Success(string taskId) =>
         new(true, 200, true, "ok", "", "{}", null, 1) { TaskId = taskId };
 }

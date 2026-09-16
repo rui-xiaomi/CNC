@@ -43,7 +43,7 @@ public sealed class PlcConnectionService : IPlcConnectionService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "PLC {PlcId} 连接失败", plcId);
-            await _alarms.RaisePlcAlarmAsync(plcId, $"PLC#{plcId} 连接失败：{ex.Message}");
+            await _alarms.RaisePlcAlarmAsync(plcId, $"PLC#{plcId} 连接失败：{PlcLinkError.Describe(ex)}");
             throw;
         }
     }
@@ -83,7 +83,19 @@ public sealed class PlcConnectionService : IPlcConnectionService
     {
         ConnectionChanged?.Invoke(this, e.PlcId);
         if (e.State is PlcConnectionState.Faulted)
-            _ = _alarms.RaisePlcAlarmAsync(e.PlcId, e.Message ?? "PLC 连接异常");
+            _ = ObservePlcAlarmAsync(e.PlcId, e.Message ?? "PLC 连接异常");
+    }
+
+    private async Task ObservePlcAlarmAsync(long plcId, string message)
+    {
+        try
+        {
+            await _alarms.RaisePlcAlarmAsync(plcId, message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PLC {PlcId} 连接异常告警落库失败", plcId);
+        }
     }
 
     private static PlcLinkState MapState(PlcConnectionState s) => s switch

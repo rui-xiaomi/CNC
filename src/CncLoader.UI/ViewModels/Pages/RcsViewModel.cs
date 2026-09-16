@@ -87,7 +87,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
         MsgDirectionOptions = new[] { "全部", "出站", "入站" };
         MsgInterfaceOptions = new[] { "全部", "搬运下发", "定制任务", "取消任务", "查询任务",
             "状态回调", "扫码回调", "告警回调" };
-        MsgLimitOptions = new[] { 100, 500, 1000, 2000 };
+        MsgLimitOptions = new[] { 50, 100, 200, 500 };
         TerminalLines = new ObservableCollection<string>();
         Tasks = new ObservableCollection<RcsTaskRow>();
         Messages = new ObservableCollection<RcsMsgRow>();
@@ -246,6 +246,12 @@ public sealed partial class RcsViewModel : PageViewModelBase
     public override string Title => "RCS 任务管理";
     public override string Description => "RCS 对接：任务下发、跟踪、报文流水与位置映射。";
 
+    public override void OnNavigatedTo(object? argument)
+    {
+        if (argument is string id && !string.IsNullOrWhiteSpace(id))
+            _ = FocusTaskAsync(id);
+    }
+
     public string[] KindOptions { get; }
     public string[] LocTypeOptions { get; }
     public string[] LocFilterTypeOptions { get; }
@@ -338,6 +344,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     // 取消/redo（任务列表点选回填 OperateTaskId）
     [ObservableProperty] private RcsTaskRow? _selectedTask;
     [ObservableProperty] private string _operateTaskId = "";
+    [ObservableProperty] private string _taskQuery = "";
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _statusMessage = "";
 
@@ -695,6 +702,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
     [RelayCommand]
     private async Task DispatchAsync()
     {
+        if (!EnsureManualDispatchAllowed("手动下发")) return;
         if (!TryValidateManualDispatch(out var from, out var to, out var error))
         {
             _notify.Warning(error);
@@ -891,11 +899,26 @@ public sealed partial class RcsViewModel : PageViewModelBase
         finally { IsBusy = false; await RefreshTasksAsync(); await RefreshMessagesAsync(); }
     }
 
+    /// <summary>
+    /// 手动互斥：自动派工运行中禁止手动下发/Redo/换架/托盘回收（与调度器抢料源、抢工位）。
+    /// 调度器未启用或已暂停自动派工时放行；取消任务、槽位校正不受限。
+    /// </summary>
+    private bool EnsureManualDispatchAllowed(string action)
+    {
+        if (!_options.SchedulerEnabled || _scheduler.IsAutoDispatchPaused) return true;
+        var msg = $"自动派工运行中，禁止{action}：请先开启「暂停自动派工」";
+        _notify.Warning(msg);
+        StatusMessage = msg;
+        Append($"> 拒绝{action}：自动派工运行中");
+        return false;
+    }
+
     [RelayCommand]
     private async Task RedoAsync()
     {
         if (string.IsNullOrWhiteSpace(OperateTaskId)) { _notify.Warning("请填任务号。"); return; }
         var taskId = OperateTaskId.Trim();
+        if (!EnsureManualDispatchAllowed("手动 Redo")) return;
         if (!ConfirmDangerousRcs("重做 RCS 任务", $"任务号：{taskId}"))
             return;
         IsBusy = true;
@@ -929,6 +952,7 @@ public sealed partial class RcsViewModel : PageViewModelBase
             return;
         }
         var role = ChangeFrameRole == "下料架" ? FrameRole.Unload : FrameRole.Upload;
+        if (!EnsureManualDispatchAllowed("手动换架")) return;
         if (!ConfirmDangerousRcs("换架", $"机台：{eqId}\n角色：{ChangeFrameRole}"))
             return;
         try
@@ -941,9 +965,29 @@ public sealed partial class RcsViewModel : PageViewModelBase
     }
 
     [RelayCommand]
+    private async Task ConfirmNewFrameInPlaceAsync()
+    {
+        if (!long.TryParse(ChangeFrameEquipmentId?.Trim(), out var eqId) || eqId <= 0)
+        {
+            _notify.Warning("请填机台 ID（数字）。");
+            return;
+        }
+        var role = ChangeFrameRole == "下料架" ? FrameRole.Unload : FrameRole.Upload;
+        try
+        {
+            await _changeFrame.ConfirmNewFrameInPlaceAsync(eqId, role, "operator");
+            _scheduler.SetEquipmentDispatchHold(eqId, false);
+            Append($"> 新架到位确认 机台{eqId} {ChangeFrameRole}，已解锁派工");
+            _notify.Success("已确认新架到位并解锁该机台自动派工");
+        }
+        catch (Exception ex) { _notify.Error($"确认失败：{ex.Message}"); }
+    }
+
+    [RelayCommand]
     private async Task PalletReturnAsync()
     {
         if (string.IsNullOrWhiteSpace(PalletReturnFromCode)) { _notify.Warning("请填回收点位编码。"); return; }
+        if (!EnsureManualDispatchAllowed("手动托盘回收")) return;
         try
         {
             var dest = (await _locationMap.ResolveAreaAsync(_options.PalletReturnArea))?.RcsCode;
@@ -1094,6 +1138,13 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 _notify.Success(
                     $"本机监听可达 {sw.ElapsedMilliseconds}ms（不代表 RCS 服务器回调网络已打通）");
             }
+            else if ((int)resp.StatusCode == 403)
+            {
+                CallbackHealthText = "本机被拒";
+                CallbackHealthBrushKey = "AlarmBrush";
+                Append($"< 本机监听被白名单拒绝 HTTP403 {ack}");
+                _notify.Warning("本机监听被白名单拒绝（127.0.0.1 应已自动放行，请重启客户端后再测）");
+            }
             else
             {
                 CallbackHealthText = "本机不通";
@@ -1144,6 +1195,9 @@ public sealed partial class RcsViewModel : PageViewModelBase
     }
 
     [RelayCommand]
+    private Task FindTaskAsync() => FocusTaskAsync(TaskQuery);
+
+    [RelayCommand]
     private async Task RefreshTasksAsync()
     {
         try
@@ -1158,6 +1212,57 @@ public sealed partial class RcsViewModel : PageViewModelBase
         catch (Exception ex) { StatusMessage = $"任务加载失败：{ex.Message}"; }
     }
 
+    /// <summary>按本地号/回包号或片段定位任务，回填操作框；不在最近 100 条则按号补查。</summary>
+    internal async Task FocusTaskAsync(string? raw)
+    {
+        var q = raw?.Trim() ?? "";
+        if (q.Length == 0)
+        {
+            _notify.Warning("请填任务号。");
+            return;
+        }
+
+        TaskQuery = q;
+        OperateTaskId = q;
+        await RefreshTasksAsync();
+
+        var hit = FindInList(q);
+        if (hit is null)
+        {
+            var row = await _rcs.GetByTaskIdAsync(q);
+            if (row is not null)
+            {
+                _ui.Invoke(() =>
+                {
+                    if (!Tasks.Any(t => t.RcsTaskId == row.RcsTaskId))
+                        Tasks.Insert(0, row);
+                });
+                hit = FindInList(row.RcsTaskId ?? q) ?? row;
+            }
+        }
+
+        _ui.Invoke(() =>
+        {
+            SelectedTask = hit;
+            if (hit is not null)
+            {
+                OperateTaskId = string.IsNullOrWhiteSpace(hit.RcsTaskId) ? q : hit.RcsTaskId;
+                MsgFilterTaskId = OperateTaskId;
+                StatusMessage = $"已定位 {OperateTaskId}";
+            }
+            else
+            {
+                StatusMessage = $"列表无此号，已填入操作框，可直接确认取消";
+            }
+        });
+    }
+
+    private RcsTaskRow? FindInList(string q)
+        => Tasks.FirstOrDefault(t => t.RcsTaskId == q || t.RcsRemoteId == q)
+           ?? Tasks.FirstOrDefault(t =>
+               (!string.IsNullOrEmpty(t.RcsTaskId) && t.RcsTaskId.Contains(q, StringComparison.OrdinalIgnoreCase))
+               || (!string.IsNullOrEmpty(t.RcsRemoteId) && t.RcsRemoteId.Contains(q, StringComparison.OrdinalIgnoreCase)));
+
     [RelayCommand]
     private async Task RefreshMessagesAsync()
     {
@@ -1169,7 +1274,8 @@ public sealed partial class RcsViewModel : PageViewModelBase
                 Direction = RcsDisplayLabels.DirectionFromZh(MsgFilterDirection),
                 Interface = RcsDisplayLabels.InterfaceFromZh(MsgFilterInterface),
                 TaskId = string.IsNullOrWhiteSpace(MsgFilterTaskId) ? null : MsgFilterTaskId.Trim(),
-                Limit = MsgLimit
+                Limit = MsgLimit,
+                IncludeBodies = MsgLimit <= 100
             });
             ReplaceOnUi(Messages, rows);
             if (keepId is long id)

@@ -27,6 +27,9 @@ public static class LoggerSetup
                 path: Path.Combine(logDir, "cncloader-.log"),
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: options.RetainedFileCountLimit,
+                // 单文件达上限后滚动到新文件续写，避免异常风暴时停写、恰好丢最关键的日志（P1-7）。
+                fileSizeLimitBytes: 100L * 1024 * 1024,
+                rollOnFileSizeLimit: true,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
     }

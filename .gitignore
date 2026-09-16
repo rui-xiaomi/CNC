@@ -17,6 +17,10 @@ secrets.local.json
 ## Node (docs/scripts PPT 生成)
 node_modules/
 
+## Publish output
+CncLoaderPublish/
+
 ## OS
 Thumbs.db
 .DS_Store
+nul

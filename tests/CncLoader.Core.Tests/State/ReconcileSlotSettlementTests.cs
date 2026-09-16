@@ -94,12 +94,70 @@ public sealed class ReconcileSlotSettlementTests
         });
     }
 
+    [Test]
+    public async Task 对账1_未完结交接下料_重建下游工位交接登记()
+    {
+        var store = new MemoryTaskStore();
+        store.Add(Row(TaskId, taskType: "1", RcsTaskState.Executing, Eq, Pos) with { ToCode = "CELL-NEXT" });
+        var tasks = new QueryTaskService("""{"items":[]}""");
+        var scheduler = CreateScheduler(store, tasks, new CountingSlots(), routes: new HandoffRoutes("CELL-NEXT", 31, 2));
+
+        var round = await scheduler.ProbeReconcileAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(round.Succeeded, Is.True);
+            Assert.That(scheduler.ProbeHasExpectedInbound(31, 2), Is.True, "重启后须补回下游工位交接登记，否则到料被判有料无任务");
+            Assert.That(scheduler.ProbeGetContext(Eq, Pos).CurrentTaskId, Is.EqualTo(TaskId), "源工位仍绑回任务");
+        });
+    }
+
+    [Test]
+    public async Task 对账1_下料终点不是加工位_不登记交接()
+    {
+        var store = new MemoryTaskStore();
+        store.Add(Row(TaskId, taskType: "1", RcsTaskState.Executing, Eq, Pos) with { ToCode = "RACK-CELL" });
+        var tasks = new QueryTaskService("""{"items":[]}""");
+        var scheduler = CreateScheduler(store, tasks, new CountingSlots(), routes: new HandoffRoutes("CELL-NEXT", 31, 2));
+
+        var round = await scheduler.ProbeReconcileAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(round.Succeeded, Is.True);
+            Assert.That(scheduler.ProbeHasExpectedInbound(31, 2), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task 对账1b_无工位任务停机期间已完成_补发终态事件供换架编排接续()
+    {
+        var store = new MemoryTaskStore();
+        store.Add(Row("T-CF-PULL", taskType: "1", RcsTaskState.Executing, eq: null, pos: null));
+        var tasks = new QueryTaskService("""{"items":[{"id":"T-CF-PULL","status":"completed"}]}""");
+        var notifier = new RcsCallbackNotifier();
+        var events = new List<RcsTaskStatusEvent>();
+        notifier.TaskStatusReceived += (_, e) => events.Add(e);
+        var scheduler = CreateScheduler(store, tasks, new CountingSlots(), notifier: notifier);
+
+        var round = await scheduler.ProbeReconcileAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(round.Succeeded, Is.True);
+            Assert.That(events.Select(e => (e.TaskId, e.TaskState)),
+                Is.EqualTo(new[] { ("T-CF-PULL", RcsTaskState.Completed) }), "直接落库不通知订阅方，须补发一次");
+        });
+    }
+
     private static PositionScheduler CreateScheduler(
         IRcsTaskStore taskStore,
         IRcsTaskService taskSvc,
         ISlotAccountService slots,
         IPlcOperationService? plc = null,
-        bool withHasMatPoint = false)
+        bool withHasMatPoint = false,
+        IRouteResolver? routes = null,
+        RcsCallbackNotifier? notifier = null)
     {
         var equipment = new StubEquipment();
         IPlcPointSource points = withHasMatPoint ? new HasMatPoints() : new EmptyPoints();
@@ -109,7 +167,7 @@ public sealed class ReconcileSlotSettlementTests
             taskStore,
             points,
             plc ?? new FixedHasMatPlc(hasMat: null),
-            new FixedRoutes(),
+            routes ?? new FixedRoutes(),
             new PriorityDispatchQueue(),
             new NoopAlarms(),
             Options.Create(new AppOptions
@@ -125,7 +183,34 @@ public sealed class ReconcileSlotSettlementTests
             new NoopWorkRecords(),
             equipment,
             slots,
-            new WorkLineOnlyRoutingValidator(equipment));
+            new WorkLineOnlyRoutingValidator(equipment),
+            notifier: notifier);
+    }
+
+    /// <summary>仅指定终点编码反查到下游加工位，其余解析沿用 <see cref="FixedRoutes"/>。</summary>
+    private sealed class HandoffRoutes : IRouteResolver
+    {
+        private readonly FixedRoutes _inner = new();
+        private readonly string _toCode;
+        private readonly (long EquipmentId, long PositionId) _dest;
+
+        public HandoffRoutes(string toCode, long equipmentId, long positionId)
+        {
+            _toCode = toCode;
+            _dest = (equipmentId, positionId);
+        }
+
+        public Task<(long EquipmentId, long PositionId)?> ResolveHandoffDestinationAsync(string toCode, string? reqParam, CancellationToken ct = default)
+            => Task.FromResult(toCode == _toCode ? ((long EquipmentId, long PositionId)?)_dest : null);
+
+        public Task<(string from, string to)?> ResolveUploadAsync(long equipmentId, long positionId, CancellationToken ct = default)
+            => _inner.ResolveUploadAsync(equipmentId, positionId, ct);
+        public Task<(string from, string to)?> ResolveUnloadAsync(long equipmentId, long positionId, CancellationToken ct = default)
+            => _inner.ResolveUnloadAsync(equipmentId, positionId, ct);
+        public Task<string?> ResolvePositionCellAsync(long equipmentId, long positionId, CancellationToken ct = default)
+            => _inner.ResolvePositionCellAsync(equipmentId, positionId, ct);
+        public Task<string?> ResolveFrameCellAsync(long frameId, CancellationToken ct = default)
+            => _inner.ResolveFrameCellAsync(frameId, ct);
     }
 
     private static RcsTaskRow Row(string taskId, string taskType, string state, long? eq, long? pos)

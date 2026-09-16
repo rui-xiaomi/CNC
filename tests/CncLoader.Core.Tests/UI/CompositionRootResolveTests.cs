@@ -5,7 +5,10 @@ using CncLoader.Core.DependencyInjection;
 using CncLoader.Core.Rcs;
 using CncLoader.Data.DependencyInjection;
 using CncLoader.UI.DependencyInjection;
+using CncLoader.UI.Navigation;
 using CncLoader.UI.Services;
+using CncLoader.UI.ViewModels;
+using CncLoader.UI.ViewModels.Pages;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -53,12 +56,17 @@ public sealed class CompositionRootResolveTests
     }
 
     [OneTimeTearDown]
-    public void Dispose() => _provider.Dispose();
+    public async Task DisposeAsync() => await _provider.DisposeAsync();
 
     [TestCase(typeof(IUserNotificationService))]
     [TestCase(typeof(IUiDispatcher))]
     [TestCase(typeof(IDialogService))]
     [TestCase(typeof(IRcsTaskService))]
+    [TestCase(typeof(INavigationService))]
+    [TestCase(typeof(IRcsTaskNavigator))]
+    [TestCase(typeof(DashboardViewModel))]
+    [TestCase(typeof(RcsViewModel))]
+    [TestCase(typeof(ShellViewModel))]
     public void Seam_Resolves(Type service)
     {
         Assert.That(_provider.GetService(service), Is.Not.Null, $"{service.Name} 未注册或依赖不全");

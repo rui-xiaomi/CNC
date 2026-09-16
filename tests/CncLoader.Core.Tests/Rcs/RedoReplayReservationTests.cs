@@ -173,6 +173,26 @@ public sealed class RedoReplayReservationTests
         });
     }
 
+    [Test]
+    public async Task Redo_下发结果未知_不回滚本轮新预记且不落FAILED()
+    {
+        var h = Harness.Create();
+        h.Slots.AllowReserve = true;
+        h.Client.UnknownNextTransit = true;
+        h.SeedFailedUploadFromFrame(materialId: "M-9");
+
+        var result = await h.Svc.RedoAsync(TaskId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.FailureKind, Is.EqualTo(RcsFailureKind.OutcomeUnknown));
+            Assert.That(h.Client.TransitCount, Is.EqualTo(1));
+            Assert.That(h.Slots.RollbackTakeCount, Is.EqualTo(0), "结果未知不得回滚本轮补的预记");
+            Assert.That(h.Tasks.Snapshot(TaskId)!.TaskState, Is.Not.EqualTo(RcsTaskState.Failed),
+                "FAILED 会移出未完结列表：跟踪器不再确认，陈旧清扫还会回滚预记");
+        });
+    }
+
     private sealed class Harness
     {
         public required RcsTaskService Svc { get; init; }
@@ -207,7 +227,7 @@ public sealed class RedoReplayReservationTests
             var slots = new ReplaySlots();
             var svc = new RcsTaskService(
                 client, tasks, new NoopMsgLog(), new TrackingCallbackProcessor(),
-                resolver, validator, NullLogger<RcsTaskService>.Instance, slots);
+                resolver, validator, NullLogger<RcsTaskService>.Instance, slots, new RcsCallbackNotifier());
             return new Harness { Svc = svc, Slots = slots, Client = client, Tasks = tasks };
         }
 
