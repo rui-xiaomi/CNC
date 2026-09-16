@@ -1,0 +1,57 @@
+info:
+  name: 03-scanTaskStatus-识别结果
+  type: http
+  seq: 3
+
+http:
+  method: POST
+  url: "{{cbBaseUrl}}/externalApi/scanTaskStatus"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "RCS",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "{{lastTaskId}}",
+        "version": "{{version}}",
+        "data": {
+          "system": {
+            "error_code": 0,
+            "msg": ""
+          },
+          "code": "{{loadStation}}",
+          "products": ["QR-A-001", "QR-A-002", "QR-A-003"]
+        }
+      }
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+        test("应答回带 taskId", function () {
+          const b = res.getBody() || {};
+          expect(b.taskId).to.be.a("string");
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  由本系统提供，识别任务 identifyQR 的结果推送。
+
+  - code：被扫描的料架编号，和 taskId 一起做双重校验
+  - products：二维码结果数组，元素顺序对应下发的孔位顺序，即 param 里的起始孔位加数量
+  - 空位对应的元素是空串
+
+  路径常量：src/CncLoader.Core/Rcs/RcsCallbackModels.cs:16

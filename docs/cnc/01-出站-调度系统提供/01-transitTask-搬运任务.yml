@@ -1,0 +1,63 @@
+info:
+  name: 01-transitTask-搬运任务
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{rcsBaseUrl}}/api/ExternalInterfaces/transitTask"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "{{clientCode}}",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "{{newTaskId}}",
+        "version": "{{version}}",
+        "taskType": "move",
+        "priority": 5,
+        "position": [
+          { "code": "{{loadCell}}", "type": "cell" },
+          { "code": "{{transitCell}}", "type": "cell" }
+        ]
+      }
+
+runtime:
+  scripts:
+    - type: before-request
+      code: |-
+        bru.setVar("taskKind", "TR");
+    - type: after-response
+      code: |-
+        bru.setVar("lastTaskId", bru.getVar("newTaskId"));
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+        test("Success 为真", function () {
+          const b = res.getBody() || {};
+          expect(String(b.Success ?? b.success)).to.equal("true");
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  搬运任务，cell 级点位。position 第一个元素是取、最后一个是放。
+
+  - taskType：in 入库 / out 出库 / move 搬运。换架、空托盘、命名区回退用 move；
+    配置 Rcs.LoadUnloadVerb=Transit 时，工位上料用 out、下料用 in。
+  - container 本项目不填，托盘由 RCS 自选。
+  - commandType 填 redo 表示失败重做，必须复用同一个 taskId。
+  - 点位码必须来自 MAS_AUTO_LOCATION_MAP，缺映射时禁止生成 FRAME-{id} 假码下发。
+
+  实现：src/CncLoader.Communication/Rcs/RcsClient.cs:16

@@ -1,0 +1,72 @@
+info:
+  name: 02-excuteTask-抓取任务
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{rcsBaseUrl}}/api/ExternalInterfaces/excuteTask"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "{{clientCode}}",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "{{newTaskId}}",
+        "version": "{{version}}",
+        "priority": 5,
+        "taskType": "grabTask",
+        "param": "[{\"srcNo\":101,\"srcPos\":101,\"dstNo\":201,\"dstPos\":101,\"data\":\"QR-TEST-001\"}]",
+        "position": [
+          {
+            "code": "{{loadStation}}",
+            "type": "station"
+          },
+          {
+            "code": "{{unloadStation}}",
+            "type": "station"
+          }
+        ]
+      }
+
+runtime:
+  scripts:
+    - type: before-request
+      code: bru.setVar("taskKind", "GB");
+    - type: after-response
+      code: bru.setVar("lastTaskId", bru.getVar("newTaskId"));
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+        test("Success 为真", function () {
+          const b = res.getBody() || {};
+          expect(String(b.Success ?? b.success)).to.equal("true");
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  定制任务之机械臂抓取，station 级点位，孔位由上位机在 param 里指定。
+
+  param 是字符串化的 JSON 数组，每个元素的字段：
+  - srcNo：抓取位编号，如 101 上料架
+  - srcPos：抓取孔位
+  - dstNo：放置位编号，如 201 加工位
+  - dstPos：放置孔位
+  - data：该件的二维码值
+
+  配置 Rcs.LoadUnloadVerb=Grab 时（本现场即是），工位上下料走这个接口而不是 transitTask。
+  结果由 RCS 回调 /externalApi/pushTaskStatus 推送。
+
+  实现：src/CncLoader.Communication/Rcs/RcsTaskService.cs:148

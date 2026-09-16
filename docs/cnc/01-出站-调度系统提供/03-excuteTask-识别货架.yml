@@ -1,0 +1,62 @@
+info:
+  name: 03-excuteTask-识别货架
+  type: http
+  seq: 3
+
+http:
+  method: POST
+  url: "{{rcsBaseUrl}}/api/ExternalInterfaces/excuteTask"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "{{clientCode}}",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "{{newTaskId}}",
+        "version": "{{version}}",
+        "priority": 5,
+        "taskType": "identifyQR",
+        "param": "101,3",
+        "position": [
+          { "code": "{{loadStation}}", "type": "station" }
+        ]
+      }
+
+runtime:
+  scripts:
+    - type: before-request
+      code: |-
+        bru.setVar("taskKind", "ID");
+    - type: after-response
+      code: |-
+        bru.setVar("lastTaskId", bru.getVar("newTaskId"));
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+        test("Success 为真", function () {
+          const b = res.getBody() || {};
+          expect(String(b.Success ?? b.success)).to.equal("true");
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  定制任务之识别货架二维码。
+
+  param 格式是 起始孔位,数量：起始孔位为三位数，百位数表示面（1xx 是 A 面）；
+  数量是要识别的孔位个数。整架识别大约 3 到 4 分钟。
+
+  识别结果不在应答里，由 RCS 回调 /externalApi/scanTaskStatus 推送。
+
+  实现：src/CncLoader.Communication/Rcs/RcsTaskService.cs:190

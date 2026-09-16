@@ -1,0 +1,7 @@
+info:
+  name: 02-入站-本系统提供
+  seq: 2
+docs: |-
+  本客户端内嵌 Kestrel 自宿主，路径前缀 /externalApi/，由 RCS 回调。
+  处理只做「落库 + 发内部事件 + 应答 {"taskId":"..."}」。
+  路径常量见 src/CncLoader.Core/Rcs/RcsCallbackModels.cs:15-17。

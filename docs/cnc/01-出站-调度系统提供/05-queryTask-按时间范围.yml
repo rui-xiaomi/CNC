@@ -1,0 +1,75 @@
+info:
+  name: 05-queryTask-按时间范围
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: "{{rcsBaseUrl}}/api/ExternalInterfaces/queryTask"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "condition": {
+          "relation": "AND",
+          "conditions": [
+            {
+              "key": "CreateAt",
+              "value": "2026-09-11 15:22:41",
+              "operator": "GT",
+              "order": "Asc"
+            },{
+              "key": "CreateAt",
+              "value": "2026-09-11 15:22:41",
+              "operator": "LT",
+              "order": "Asc"
+            }
+          ]
+        },
+        "pageIndex": 1,
+        "pageSize": 10
+      }
+
+runtime:
+  scripts:
+    - type: before-request
+      code: |-
+        // 默认查最近 24 小时。时间值格式必须是 yyyy-MM-ddTHH:mm:ss，日期与时间之间带 T。
+        const pad = (n) => String(n).padStart(2, "0");
+        const d = new Date(Date.now() - 24 * 3600 * 1000);
+        const v = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+          + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+        bru.setVar("queryFrom", v);
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+        test("查询成功", function () {
+          const b = res.getBody() || {};
+          expect(String(b.success ?? b.Success)).to.equal("true");
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  条件查询，只读，无频率限制。这是这套接口里唯一没有副作用的一个，适合先用它验连通。
+
+  - relation：AND 或 OR
+  - key：字段名首字母大写，如 CreateAt、Id、Status
+  - value：时间值的日期与时间之间要加 T，如 2026-09-10T13:51:14
+  - operator：GT / GTE / LT / LTE / EQ / LIKE / NE / IN
+  - order：None / Asc / Desc
+  - 查全部可以用 pageIndex=1、pageSize=10000
+
+  返回 items 里的 status 是 RCS 的 11 态：uninitialized、blocked、error、failed、queued、
+  standby、underway、delayed、skipped、canceled、completed、killed。
+  映射到本系统 5 态的规则见 docs/客户端开发文档.md 第 4.5 节。

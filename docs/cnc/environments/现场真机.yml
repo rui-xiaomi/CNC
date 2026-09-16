@@ -1,0 +1,34 @@
+name: 现场真机
+description: |-
+  实际生效值来自 DB 表 MAS_AUTO_WORKLINE_AGV（有行则覆盖 appsettings）：
+  RCS_BASE_URL=http://192.168.250.13:5050，RCS_CALLBACK_HOST=0.0.0.0，RCS_CALLBACK_PORT=9080。
+
+  注意：本机若开着 sing-box 等 TUN 代理，192.168.250.0/24 的路由会被劫持导致连接被重置，
+  需先把该网段设为直连或关闭 TUN。
+
+  点位码必须与 MAS_AUTO_LOCATION_MAP 一致，下方是按规则填的样例，联调前逐个核对。
+variables:
+  - name: rcsBaseUrl
+    value: http://192.168.250.13:5050
+  - name: cbBaseUrl
+    value: http://127.0.0.1:9080
+  - name: clientCode
+    value: WMS
+  - name: version
+    value: 1.0.0
+  - name: tokenCode
+    value: "0"
+  - name: lineCode
+    value: L1
+  - name: loadStation
+    value: "101"
+  - name: unloadStation
+    value: "201"
+  - name: loadCell
+    value: "101101"
+  - name: transitCell
+    value: "301"
+  - name: unloadCell
+    value: "303"
+  - name: ngCell
+    value: "401"

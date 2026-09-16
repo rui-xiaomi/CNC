@@ -1,0 +1,59 @@
+info:
+  name: 01-pushTaskStatus-任务成功
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{cbBaseUrl}}/externalApi/pushTaskStatus"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "RCS",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "{{lastTaskId}}",
+        "version": "{{version}}",
+        "data": {
+          "system": {
+            "error_code": 0,
+            "msg": ""
+          }
+        }
+      }
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+        test("应答回带 taskId", function () {
+          const b = res.getBody() || {};
+          expect(b.taskId).to.be.a("string");
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  由本系统提供、RCS 调用。搬运任务与抓取任务的结果都走这一个接口。
+
+  error_code：0 成功、1 错误、9 取消。应答格式是 {"taskId":"..."}。
+
+  去重时机（P0-4）：in-flight 与 final seen 分离，持久化成功之后才写 final seen；
+  失败或取消要释放 in-flight，禁止先去重后落库导致同一个 key 永不被处理。
+
+  监听地址由 Rcs.CallbackHost 和 Rcs.CallbackPort 决定，当前实际生效值来自 DB 表
+  MAS_AUTO_WORKLINE_AGV，是 0.0.0.0:9080；改动需要重启 App。
+
+  路径常量：src/CncLoader.Core/Rcs/RcsCallbackModels.cs:15

@@ -1,0 +1,38 @@
+opencollection: 1.0.0
+
+info:
+  name: cnc
+  description: |-
+    智造云枢 LineOS 与 RCS（AGV 调度系统）的对接接口。
+    接口原文见 docs/agv对外接口.docx，合并后的契约以 docs/客户端开发文档.md 第 12 节为准。
+
+    出站 4 个接口由调度系统提供，入站 3 个接口由本客户端提供。
+    公共字段 reqTime 和 newTaskId 由集合级 before-request 脚本自动生成，不用手填。
+
+request:
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  scripts:
+    - type: before-request
+      code: |-
+        // 公共字段自动填充。
+        // taskId 规则见 src/CncLoader.Core/Rcs/RcsTaskId.cs：
+        // {线体}-{类型缩写}-{yyyyMMddHHmmss}-{4位序列}
+        const pad = (n, w) => String(n).padStart(w, "0");
+        const d = new Date();
+        const date = d.getFullYear() + "-" + pad(d.getMonth() + 1, 2) + "-" + pad(d.getDate(), 2);
+        const time = pad(d.getHours(), 2) + ":" + pad(d.getMinutes(), 2) + ":" + pad(d.getSeconds(), 2);
+        bru.setVar("reqTime", date + " " + time);
+
+        const stamp = (date + time).replace(/[-:]/g, "");
+        const seq = pad(Math.floor(Math.random() * 9999) + 1, 4);
+        const kind = bru.getVar("taskKind") || "TEST";
+        bru.setVar("newTaskId", bru.getEnvVar("lineCode") + "-" + kind + "-" + stamp + "-" + seq);
+
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git

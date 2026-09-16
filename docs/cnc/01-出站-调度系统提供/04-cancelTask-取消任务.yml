@@ -1,0 +1,44 @@
+info:
+  name: 04-cancelTask-取消任务
+  type: http
+  seq: 4
+
+http:
+  method: POST
+  url: "{{rcsBaseUrl}}/api/ExternalInterfaces/cancelTask"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "{{clientCode}}",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "CNC_WMS_TASK_2_2026-09-11_0214329453",
+        "version": "{{version}}"
+      }
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  取消任务。taskId 取自本集合上一次下发时存下的 lastTaskId，也可以手工改成具体任务号。
+
+  注意：取消之后小车和车上的容器需要人工处理，本系统的做法是开工单并锁定点位。
+  RCS 侧若返回已取消或查无此任务，本地一律按取消收口。
+
+  实现：src/CncLoader.Communication/Rcs/RcsClient.cs:18

@@ -1,0 +1,48 @@
+info:
+  name: 06-queryTask-按taskId批量
+  type: http
+  seq: 6
+
+http:
+  method: POST
+  url: "{{rcsBaseUrl}}/api/ExternalInterfaces/queryTask"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "condition": {
+          "relation": "AND",
+          "conditions": [
+            {
+              "key": "Id",
+              "value": "L1-GB-20260911142538-9209",
+              "operator": "IN",
+              "order": "None"
+            }
+          ]
+        },
+        "pageIndex": 1,
+        "pageSize": 100
+      }
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  兜底轮询通道：把未完结的 taskId 用逗号拼成一串走 IN 批量查。
+  本系统每 2 到 5 秒查一次；查询结果与回调结果冲突时，以 queryTask 为准。

@@ -1,0 +1,29 @@
+name: 本地模拟器
+description: |-
+  App 以 App__Rcs__UseSimulator=true 启动时，内置 RCS 模拟器监听 BaseUrl 的端口，
+  回调服务监听 CallbackPort。两者都在本机。
+variables:
+  - name: rcsBaseUrl
+    value: http://127.0.0.1:5050
+  - name: cbBaseUrl
+    value: http://127.0.0.1:9080
+  - name: clientCode
+    value: WMS
+  - name: version
+    value: 1.0.0
+  - name: tokenCode
+    value: "0"
+  - name: lineCode
+    value: L1
+  - name: loadStation
+    value: "101"
+  - name: unloadStation
+    value: "201"
+  - name: loadCell
+    value: "101101"
+  - name: transitCell
+    value: "301"
+  - name: unloadCell
+    value: "303"
+  - name: ngCell
+    value: "401"

@@ -1,0 +1,59 @@
+info:
+  name: 04-warnCallback-告警推送
+  type: http
+  seq: 4
+
+http:
+  method: POST
+  url: "{{cbBaseUrl}}/externalApi/warnCallback"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "RCS",
+        "tokenCode": "{{tokenCode}}",
+        "data": [
+          {
+            "robotCode": "1001",
+            "beginTime": "{{reqTime}}",
+            "warnContent": "平台失联",
+            "taskCode": "{{lastTaskId}}"
+          },
+          {
+            "robotCode": "1002",
+            "beginTime": "{{reqTime}}",
+            "warnContent": "导航告警",
+            "taskCode": ""
+          }
+        ]
+      }
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  由本系统提供，严重告警推送，指会导致 AGV 停止运行的告警，RCS 每 10 秒推一次。
+
+  data 是数组，字段为 robotCode 车号、beginTime 告警开始时间、warnContent 告警内容、
+  taskCode 任务号（可空）。去重键是 robotCode + beginTime + warnContent；
+  带 taskCode 的告警会联动挂起对应任务。
+
+  注意这个接口的报文里没有 taskId 和 version，和另外两个回调不一样。
+
+  路径常量：src/CncLoader.Core/Rcs/RcsCallbackModels.cs:17

@@ -1,0 +1,47 @@
+info:
+  name: 02-pushTaskStatus-任务失败
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{cbBaseUrl}}/externalApi/pushTaskStatus"
+  headers:
+    - name: Content-Type
+      value: application/json; charset=utf-8
+  body:
+    type: json
+    data: |-
+      {
+        "reqTime": "{{reqTime}}",
+        "clientCode": "RCS",
+        "tokenCode": "{{tokenCode}}",
+        "taskId": "{{lastTaskId}}",
+        "version": "{{version}}",
+        "data": {
+          "system": {
+            "error_code": 1,
+            "msg": "撞机，任务中止"
+          }
+        }
+      }
+
+runtime:
+  scripts:
+    - type: tests
+      code: |-
+        test("HTTP 200", function () {
+          expect(res.getStatus()).to.equal(200);
+        });
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+docs: |-
+  失败分支，error_code=1；把它改成 9 就是取消分支。
+
+  用途：验证去重键包含 error_code，同一个 taskId 先推 1 再推 0 不应该被当成重复丢弃。

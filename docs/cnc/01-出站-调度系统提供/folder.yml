@@ -1,0 +1,7 @@
+info:
+  name: 01-出站-调度系统提供
+  seq: 1
+docs: |-
+  本客户端作为 HTTP 客户端调用，路径前缀 /api/ExternalInterfaces/。
+  应答外层统一 { Success, Message, Data }；Success 可能是布尔、字符串 "true" 或数字 1。
+  实现见 src/CncLoader.Communication/Rcs/RcsClient.cs。
