@@ -41,14 +41,29 @@ public interface IPositionScheduler
     /// <summary>
     /// 人工恢复：把指定加工位从 ALARM 重置回 WAIT_LOAD（解除报警后调用）。
     /// 绑定的 RCS 任务未到终态时拒绝恢复并抛 <see cref="InvalidOperationException"/>（消息可直接展示给操作员）。
+    /// 绑定或该工位上未确认的 CANCELED 任务在恢复成功时一并记 <c>CANCEL_MANUAL_FLAG=1</c>，无需再到 RCS 页确认。
     /// </summary>
     Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 加工位处于 WAIT_LOAD 且有未确认取消占用时，在看板确认现场已处理小车/容器。
+    /// 无待确认取消时抛 <see cref="InvalidOperationException"/>。
+    /// </summary>
+    Task AcknowledgeCancelHoldAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.CompletedTask;
 
     /// <summary>
     /// RCS 任务已放弃（redo 达上限 / 查无等）：绑定工位置 ALARM、回滚预记、清工序间交接登记，
     /// 避免工位停在 DISPATCHING/TRANSPORTING 且看板无「恢复」按钮。
     /// </summary>
     Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default);
+
+    /// <summary>
+    /// 料架人工置空后：匹配物料码且处于空闲/告警的加工位，仅在 PLC HasMat 确认无料时清看板物料码。
+    /// HasMat 未知或确认有料不得清（fail-closed）。默认空实现供测试桩编译。
+    /// </summary>
+    Task ClearStaleDisplayMaterialAsync(string? materialId, CancellationToken ct = default)
+        => Task.CompletedTask;
 
     /// <summary>料架绑定变更后失效机台→料架缓存（equipmentId 空则全清）。</summary>
     void InvalidateFrameBindingCache(long? equipmentId = null);

@@ -4,7 +4,6 @@ using CncLoader.Core.Config;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Rcs;
 using CncLoader.Core.State;
-using CncLoader.UI.Navigation;
 using CncLoader.UI.ViewModels.Pages;
 
 namespace CncLoader.Core.Tests.State;
@@ -108,20 +107,20 @@ public sealed class DashboardViewModelReconciliationTests
     }
 
     [Test]
-    public void 去确认_把工位卡任务号交给RCS导航()
+    public async Task 确认取消_在看板调用调度器不必跳转RCS()
     {
-        var nav = new RecordingRcsNav();
-        using var vm = CreateVm(new FakeScheduler { State = ReconciliationState.Succeeded, IsReconciled = true }, nav);
+        var scheduler = new FakeScheduler { State = ReconciliationState.Succeeded, IsReconciled = true };
+        using var vm = CreateVm(scheduler);
         var card = new PositionCardVm(1, 2, PositionState.WaitLoad, null,
             CancelHoldDisplay.Format(new[] { "LINE01-GR-20260914164312-0001" }),
             true, true, false);
 
-        vm.OpenCancelHoldCommand.Execute(card);
+        await vm.OpenCancelHoldCommand.ExecuteAsync(card);
 
-        Assert.That(nav.Last, Is.EqualTo("LINE01-GR-20260914164312-0001"));
+        Assert.That(scheduler.Acknowledged, Is.EqualTo((1L, 2L)));
     }
 
-    private static DashboardViewModel CreateVm(FakeScheduler scheduler, IRcsTaskNavigator? rcsNav = null)
+    private static DashboardViewModel CreateVm(FakeScheduler scheduler)
         => new(
             new SignalStateStore(),
             new FakeWorkRecords(),
@@ -131,14 +130,7 @@ public sealed class DashboardViewModelReconciliationTests
             new FakeWorkLines(),
             new FakeUser(),
             new Tests.UI.RecordingNotify(),
-            new Tests.UI.ImmediateUiDispatcher(),
-            rcsNav: rcsNav);
-
-    private sealed class RecordingRcsNav : IRcsTaskNavigator
-    {
-        public string? Last;
-        public void OpenTask(string taskId) => Last = taskId;
-    }
+            new Tests.UI.ImmediateUiDispatcher());
 
     private sealed class FakeScheduler : IPositionScheduler
     {
@@ -164,8 +156,15 @@ public sealed class DashboardViewModelReconciliationTests
             ReconciliationStateChanged?.Invoke(this, new ReconciliationSnapshot(state, reason, isReconciled));
         }
 
+        public (long Eq, long Pos)? Acknowledged { get; private set; }
+
         public void SetAutoDispatchPaused(bool paused) { }
         public Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task AcknowledgeCancelHoldAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        {
+            Acknowledged = (equipmentId, positionId);
+            return Task.CompletedTask;
+        }
         public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default) => Task.CompletedTask;
         public void InvalidateFrameBindingCache(long? equipmentId = null) { }
     }

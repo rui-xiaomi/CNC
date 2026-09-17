@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CncLoader.Common.Configuration;
 using CncLoader.Common.Identity;
@@ -41,6 +42,8 @@ public sealed partial class RcsViewModel : PageViewModelBase, IRcsPageCoordinato
     private string? _verifiedConnectionKey;
     private bool _suppressPauseSideEffects;
     private readonly Dictionary<long, string> _frameCodes = new();
+    private readonly DispatcherTimer _taskRefreshTimer;
+    private int _taskRefreshBusy;
     private bool _disposed;
 
     public RcsConnectionViewModel Connection { get; }
@@ -93,6 +96,13 @@ public sealed partial class RcsViewModel : PageViewModelBase, IRcsPageCoordinato
         _callbacks.ScanResultReceived += OnScanResultReceived;
         _callbacks.WarnReceived += OnWarnReceived;
         _changeFrame.ProgressChanged += OnChangeFrameProgress;
+
+        // 与料架/看板一致：停留本页定时拉库。自动派工落库不经回调，只靠回调会漏掉 DISPATCHED 行。
+        _taskRefreshTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(1500)
+        };
+        _taskRefreshTimer.Tick += OnTaskRefreshTick;
 
         _ = InitializeAsync();
     }
@@ -245,10 +255,24 @@ public sealed partial class RcsViewModel : PageViewModelBase, IRcsPageCoordinato
         if (TaskBoard.AutoRefreshMessages) _ = TaskBoard.RefreshMessageListAsync();
     }
 
+    private void OnTaskRefreshTick(object? sender, EventArgs e)
+    {
+        if (_disposed || IsBusy) return;
+        _ = RefreshOnCallbackAsync();
+    }
+
     private async Task RefreshOnCallbackAsync()
     {
-        await TaskBoard.RefreshTaskListAsync();
-        if (TaskBoard.AutoRefreshMessages) await TaskBoard.RefreshMessageListAsync();
+        if (Interlocked.Exchange(ref _taskRefreshBusy, 1) != 0) return;
+        try
+        {
+            await TaskBoard.RefreshTaskListAsync();
+            if (TaskBoard.AutoRefreshMessages) await TaskBoard.RefreshMessageListAsync();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _taskRefreshBusy, 0);
+        }
     }
 
     public override string Key => "rcs";
@@ -261,10 +285,23 @@ public sealed partial class RcsViewModel : PageViewModelBase, IRcsPageCoordinato
             _ = TaskBoard.FocusTaskAsync(id);
     }
 
+    /// <summary>激活：立即刷任务列表并启动 1.5s 定时器（隐藏页不刷库）。</summary>
+    public override void OnActivated()
+    {
+        if (_disposed) return;
+        _taskRefreshTimer.Start();
+        _ = RefreshOnCallbackAsync();
+    }
+
+    /// <summary>失活：停定时器。</summary>
+    public override void OnDeactivated() => _taskRefreshTimer.Stop();
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _taskRefreshTimer.Stop();
+        _taskRefreshTimer.Tick -= OnTaskRefreshTick;
         _callbacks.TaskStatusReceived -= OnTaskStatusReceived;
         _callbacks.ScanResultReceived -= OnScanResultReceived;
         _callbacks.WarnReceived -= OnWarnReceived;

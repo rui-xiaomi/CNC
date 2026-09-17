@@ -408,11 +408,11 @@
                                                     </DockPanel>
                                                     <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,12,0"
                                                                 VerticalAlignment="Center">
-                                                        <Button Content="去确认" Height="26" Padding="10,0" FontSize="12"
+                                                        <Button Content="确认取消" Height="26" Padding="10,0" FontSize="12"
                                                                 Command="{Binding DataContext.OpenCancelHoldCommand, RelativeSource={RelativeSource AncestorType={x:Type theme:DashboardCommandScope}}}"
                                                                 CommandParameter="{Binding}"
                                                                 ToolTip="{Binding StateDisplay}"
-                                                                AutomationProperties.Name="去确认取消任务">
+                                                                AutomationProperties.Name="确认取消已处理">
                                                             <Button.Style>
                                                                 <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
                                                                     <Setter Property="Visibility" Value="Collapsed"/>

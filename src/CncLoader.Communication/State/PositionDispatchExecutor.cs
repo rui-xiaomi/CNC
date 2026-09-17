@@ -86,7 +86,7 @@ internal sealed class PositionDispatchExecutor
         if (await _taskStore.HasUnconfirmedCanceledAsync(ctx.EquipmentId, ctx.PositionId, ct))
         {
             _rt.LogRouteUnavailableThrottled(ctx.EquipmentId,
-                $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 存在未确认取消任务，上料等待（RCS 页「确认取消已处理」）");
+                $"EQ{ctx.EquipmentId} POS{ctx.PositionId} 存在未确认取消任务，上料等待（看板「确认取消」或告警「恢复」）");
             return UploadDecision.WaitMaterial;
         }
 

@@ -65,6 +65,44 @@ public sealed class RcsTaskListDisplayTests
     }
 
     [Test]
+    public async Task 进页激活_拉最新任务_不必点刷新()
+    {
+        var h = ManualReplayHarness.Create();
+        await h.ViewModel.TaskBoard.RefreshTaskListAsync();
+
+        var id = "LINE01-GR-20260917174000-0099";
+        h.SeedHistoricalTask(taskId: id, state: RcsTaskState.Dispatched);
+
+        Assert.That(h.ViewModel.TaskBoard.Tasks.Any(t => t.RcsTaskId == id), Is.False);
+
+        h.ViewModel.OnActivated();
+        await WaitUntilAsync(
+            () => h.ViewModel.TaskBoard.Tasks.Any(t => t.RcsTaskId == id),
+            TimeSpan.FromSeconds(2));
+
+        h.ViewModel.OnDeactivated();
+    }
+
+    [Test]
+    public async Task 状态回调_刷新任务列表()
+    {
+        var notifier = new RcsCallbackNotifier();
+        var h = ManualReplayHarness.Create(callbackNotifier: notifier);
+        await h.ViewModel.TaskBoard.RefreshTaskListAsync();
+
+        var id = "LINE01-GR-20260917174000-0088";
+        h.SeedHistoricalTask(taskId: id, state: RcsTaskState.Completed);
+
+        Assert.That(h.ViewModel.TaskBoard.Tasks.Any(t => t.RcsTaskId == id), Is.False);
+
+        notifier.RaiseTaskStatus(new RcsTaskStatusEvent(
+            id, RcsErrorCode.Success, null, RcsTaskState.Completed));
+        await WaitUntilAsync(
+            () => h.ViewModel.TaskBoard.Tasks.Any(t => t.RcsTaskId == id),
+            TimeSpan.FromSeconds(2));
+    }
+
+    [Test]
     public async Task 查找任务号_选中并回填操作框()
     {
         var h = ManualReplayHarness.Create();
@@ -96,6 +134,18 @@ public sealed class RcsTaskListDisplayTests
             Assert.That(h.Notify.AlertCount, Is.EqualTo(1));
             Assert.That(h.Notify.All, Does.Contain("UPLOAD_SLOT_OCCUPIED"));
         });
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var start = DateTime.UtcNow;
+        while (DateTime.UtcNow - start < timeout)
+        {
+            if (predicate()) return;
+            await Task.Delay(20);
+        }
+
+        Assert.Fail($"条件在 {timeout.TotalSeconds:0.#}s 内未满足");
     }
 
     private static RcsTaskRow NewTask(string? error) => new(

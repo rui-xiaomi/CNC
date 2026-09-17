@@ -215,7 +215,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
 
         if (e.AlarmType is "RCS_CANCELED" or "RCS_REDO_LIMIT" or "RCS_NOT_FOUND")
         {
-            _notify.Alert(e.Message + "\n\n请到「RCS 任务」或「日志/告警」页跟进处理。", title);
+            _notify.Alert(e.Message + "\n\n请现场处理小车/容器后，在监控看板对应工位确认并恢复，不必再到 RCS 任务页操作。", title);
             return;
         }
 

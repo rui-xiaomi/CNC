@@ -75,7 +75,7 @@ public interface IRcsTaskStore
     Task<bool> HasUnconfirmedCanceledAsync(long equipmentId, long positionId, CancellationToken ct = default)
         => Task.FromResult(false);
 
-    /// <summary>该工位未确认取消任务的本地号（新→旧）。看板要展示给操作员去 RCS 页确认。</summary>
+    /// <summary>该工位未确认取消任务的本地号（新→旧）。看板就地确认。</summary>
     Task<IReadOnlyList<string>> ListUnconfirmedCanceledTaskIdsAsync(
         long equipmentId, long positionId, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());

@@ -378,8 +378,10 @@ public sealed partial class FrameViewModel : PageViewModelBase
             var material = string.IsNullOrWhiteSpace(CorrectMaterial) ? null : CorrectMaterial.Trim();
             if (stateCode == "0") material = null;
             var label = SelectedSlot.Label;
+            var previousMaterial = SelectedSlot.MaterialId;
             var result = await _slots.SetSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, material, stateCode, _user.Name);
             NotifySlotMutationResult(result, SlotMutationOp.Correct, label);
+            await SyncDashboardIfEmptiedAsync(result, stateCode == SlotStates.Empty ? previousMaterial : null);
             await LoadDetailAsync(SelectedFrame.Id);
         }
         catch (Exception ex) { _notify.Error($"校正失败：{ex.Message}"); }
@@ -403,13 +405,29 @@ public sealed partial class FrameViewModel : PageViewModelBase
                 return;
 
             var label = SelectedSlot.Label;
+            var previousMaterial = SelectedSlot.MaterialId;
             var result = await _slots.ClearSlotAsync(SelectedFrame.Id, SelectedSlot.SlotNo, _user.Name);
             NotifySlotMutationResult(result, SlotMutationOp.Clear, label);
             CorrectMaterial = "";
             CorrectSlotState = "空(0)";
+            await SyncDashboardIfEmptiedAsync(result, previousMaterial);
             await LoadDetailAsync(SelectedFrame.Id);
         }
         catch (Exception ex) { _notify.Error($"置空失败：{ex.Message}"); }
+    }
+
+    private async Task SyncDashboardIfEmptiedAsync(SlotMutationResult result, string? previousMaterialId)
+    {
+        if (result.Status != SlotMutationStatus.Updated || string.IsNullOrWhiteSpace(previousMaterialId))
+            return;
+        try
+        {
+            await _scheduler.ClearStaleDisplayMaterialAsync(previousMaterialId);
+        }
+        catch (Exception ex)
+        {
+            _notify.Warning($"料架已置空，但看板物料未同步：{ex.Message}");
+        }
     }
 
     private enum SlotMutationOp { Correct, Clear }

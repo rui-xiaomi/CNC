@@ -80,6 +80,21 @@ public sealed class FrameViewModelSlotMutationTests
     }
 
     [Test]
+    public async Task 置空成功_通知调度器清除看板滞留物料()
+    {
+        var slots = new FakeSlots { NextResult = Result(SlotMutationStatus.Updated) };
+        var notify = new FakeNotify();
+        var scheduler = new FakeScheduler();
+        var vm = CreateVm(slots, notify, scheduler: scheduler);
+        PrepareSelection(vm, correctState: "空(0)", material: "MAT-DASH");
+        vm.SelectedSlot = new SlotVm(2, "1层-2", "MAT-DASH", SlotStates.Occupied);
+
+        await vm.ClearSelectedSlotCommand.ExecuteAsync(null);
+
+        Assert.That(scheduler.ClearedMaterials, Is.EqualTo(new[] { "MAT-DASH" }));
+    }
+
+    [Test]
     public async Task R7_Updated_保持现有成功文案()
     {
         var slots = new FakeSlots { NextResult = Result(SlotMutationStatus.Updated) };
@@ -323,12 +338,13 @@ public sealed class FrameViewModelSlotMutationTests
         });
     }
 
-    private static FrameViewModel CreateVm(FakeSlots slots, FakeNotify notify, FakeFrames? frames = null)
+    private static FrameViewModel CreateVm(FakeSlots slots, FakeNotify notify, FakeFrames? frames = null,
+        FakeScheduler? scheduler = null)
         => new(
             frames ?? new FakeFrames(),
             slots,
             new FakeInventory(),
-            new FakeScheduler(),
+            scheduler ?? new FakeScheduler(),
             new FakeUser(),
             notify,
             new ImmediateUiDispatcher(),
@@ -478,6 +494,7 @@ public sealed class FrameViewModelSlotMutationTests
 
     private sealed class FakeScheduler : IPositionScheduler
     {
+        public List<string> ClearedMaterials { get; } = [];
         public bool IsReconciled => true;
         public ReconciliationState ReconciliationState => ReconciliationState.Succeeded;
         public string? ReconciliationFailureReason => null;
@@ -487,6 +504,11 @@ public sealed class FrameViewModelSlotMutationTests
         public void SetAutoDispatchPaused(bool paused) { }
         public Task ResetAlarmAsync(long equipmentId, long positionId, CancellationToken ct = default) => Task.CompletedTask;
         public Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ClearStaleDisplayMaterialAsync(string? materialId, CancellationToken ct = default)
+        {
+            if (!string.IsNullOrWhiteSpace(materialId)) ClearedMaterials.Add(materialId);
+            return Task.CompletedTask;
+        }
         public void InvalidateFrameBindingCache(long? equipmentId = null) { }
     }
 

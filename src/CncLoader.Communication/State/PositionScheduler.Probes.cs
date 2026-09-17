@@ -101,6 +101,9 @@ public sealed partial class PositionScheduler
     internal string? ProbeStatusDetail(long equipmentId, long positionId)
         => _contexts.TryGetValue((equipmentId, positionId), out var ctx) ? ctx.StatusDetail : null;
 
+    internal string? ProbeMaterialId(long equipmentId, long positionId)
+        => _contexts.TryGetValue((equipmentId, positionId), out var ctx) ? ctx.MaterialId : null;
+
     /// <summary>测试接缝：置加工位上下文，供 <see cref="ProbeDrivePositionOnceAsync"/> 从指定状态起步。</summary>
     internal void ProbeSetContext(long equipmentId, long positionId, PositionState state,
         string? currentTaskId = null, PositionPhase? phase = null,

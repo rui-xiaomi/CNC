@@ -1,6 +1,6 @@
 namespace CncLoader.Core.State;
 
-/// <summary>未确认取消占用的工位卡文案：前缀 + 任务号，供看板展示与跳转解析。</summary>
+/// <summary>未确认取消占用的工位卡文案：前缀 + 任务号，供看板展示与就地确认。</summary>
 public static class CancelHoldDisplay
 {
     public const string Prefix = "待确认取消";

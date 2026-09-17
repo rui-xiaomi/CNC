@@ -5,7 +5,6 @@ using CncLoader.Core.Abstractions;
 using CncLoader.Core.Plc;
 using CncLoader.Core.Rcs;
 using CncLoader.Core.State;
-using CncLoader.UI.Navigation;
 
 namespace CncLoader.UI.ViewModels.Pages;
 
@@ -24,7 +23,6 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     private readonly ICraftworkService? _crafts;
     private readonly IUserNotificationService _notify;
     private readonly IUiDispatcher _ui;
-    private readonly IRcsTaskNavigator? _rcsNav;
 
     private readonly Dictionary<long, string> _equipmentNames = new();
     private readonly Dictionary<long, string> _equipmentNos = new();
@@ -41,9 +39,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
         IPositionScheduler scheduler, IFrameService frames, IWorkLineService workLines, ICurrentUser user,
         IUserNotificationService notify, IUiDispatcher ui,
         IEquipmentConfigService? equipment = null, ICraftworkService? crafts = null,
-        IUiExceptionMonitor? uiExceptions = null, IRcsTaskNavigator? rcsNav = null)
+        IUiExceptionMonitor? uiExceptions = null)
     {
-        _rcsNav = rcsNav;
         _store = store;
         _alarms = alarms;
         _scheduler = scheduler;
@@ -226,20 +223,26 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void OpenCancelHold(PositionCardVm? card)
+    private async Task OpenCancelHoldAsync(PositionCardVm? card)
     {
-        var id = CancelHoldDisplay.TryParseTaskId(card?.StatusDetail);
-        if (id is null)
+        if (card is null) return;
+        if (!card.HasCancelHold)
         {
             _notify.Warning("该工位没有待确认取消任务。");
             return;
         }
-        if (_rcsNav is null)
-        {
-            _notify.Warning("无法打开 RCS 页。");
+        var id = CancelHoldDisplay.TryParseTaskId(card.StatusDetail);
+        var hint = id is null ? "" : $"\n任务号：{id}";
+        if (!_notify.Confirm(
+                $"确认已现场处理 {card.EquipmentText} {card.PositionText} 取消后的小车/容器？确认后该工位可重新派工。{hint}",
+                "确认取消已处理"))
             return;
+        try
+        {
+            await _scheduler.AcknowledgeCancelHoldAsync(card.EquipmentId, card.PositionId);
+            _notify.Success($"{card.EquipmentText} {card.PositionText} 已确认取消处理，可重新派工。");
         }
-        _rcsNav.OpenTask(id);
+        catch (Exception ex) { _notify.Error($"确认失败：{ex.Message}"); }
     }
 
     [RelayCommand]
@@ -247,7 +250,8 @@ public sealed partial class DashboardViewModel : PageViewModelBase, IDisposable
     {
         if (card is null) return;
         if (!_notify.Confirm(
-                $"确认已现场处理 {card.EquipmentText} {card.PositionText} 的告警并恢复运行？", "恢复告警"))
+                $"确认已现场处理 {card.EquipmentText} {card.PositionText} 的告警并恢复运行？\n若因 RCS 取消，须已处理小车与容器。",
+                "恢复告警"))
             return;
         try
         {

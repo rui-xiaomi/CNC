@@ -304,7 +304,7 @@ public sealed class PositionDriveExecutorTests
 
         Assert.That(h.Scheduler.ProbeStatusDetail(Eq, Pos),
             Is.EqualTo(PositionScheduler.FormatCancelHoldDetail(new[] { "T-1" })),
-            "未确认取消须把任务号写到工位卡，供 RCS 页确认");
+            "未确认取消须把任务号写到工位卡，供看板就地确认");
     }
 
     // ─── 人工恢复告警（P0-5） ─────────────────────────────────────────────
@@ -385,21 +385,46 @@ public sealed class PositionDriveExecutorTests
     }
 
     [Test]
-    public async Task ResetAlarm_CanceledWithoutManualConfirm_Refuses()
+    public async Task ResetAlarm_CanceledWithoutPriorConfirm_ConfirmsAndReturnsToWaitLoad()
     {
         var h = await BuildAsync();
         h.Tasks.SetState("T-1", RcsTaskState.Canceled);
         h.Tasks.SetCancelFlag("T-1", "0");
         h.Scheduler.ProbeSetContext(Eq, Pos, PositionState.Alarm, "T-1", PositionPhase.Upload);
 
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(
-            () => h.Scheduler.ResetAlarmAsync(Eq, Pos));
+        await h.Scheduler.ResetAlarmAsync(Eq, Pos);
+        var ctx = h.Scheduler.ProbeGetContext(Eq, Pos);
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex!.Message, Does.Contain("确认人工处理"));
-            Assert.That(h.Scheduler.ProbeGetContext(Eq, Pos).State, Is.EqualTo(PositionState.Alarm));
-            Assert.That(h.Scheduler.ProbeGetContext(Eq, Pos).CurrentTaskId, Is.EqualTo("T-1"));
+            Assert.That(ctx.State, Is.EqualTo(PositionState.WaitLoad));
+            Assert.That(ctx.CurrentTaskId, Is.Null);
+            Assert.That(h.Tasks.GetCancelFlag("T-1"), Is.EqualTo("1"),
+                "看板恢复即确认取消，不必再到 RCS 页点「确认取消已处理」");
+        });
+    }
+
+    [Test]
+    public async Task AcknowledgeCancelHold_WaitLoad_ClearsHold()
+    {
+        var h = await BuildAsync();
+        h.Tasks.SetState("T-1", RcsTaskState.Canceled);
+        h.Tasks.SetCancelFlag("T-1", "0");
+        h.SetMachine();
+        h.SetPositionSignals(hasMat: false, allowLoad: true);
+        h.Scheduler.ProbeSetContext(Eq, Pos, PositionState.WaitLoad);
+
+        await h.Scheduler.ProbeDrivePositionOnceAsync(Eq, Pos);
+        Assert.That(h.Scheduler.ProbeStatusDetail(Eq, Pos),
+            Is.EqualTo(PositionScheduler.FormatCancelHoldDetail(new[] { "T-1" })));
+
+        await h.Scheduler.AcknowledgeCancelHoldAsync(Eq, Pos);
+        await h.Scheduler.ProbeDrivePositionOnceAsync(Eq, Pos);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Tasks.GetCancelFlag("T-1"), Is.EqualTo("1"));
+            Assert.That(CancelHoldDisplay.IsHold(h.Scheduler.ProbeStatusDetail(Eq, Pos)), Is.False);
         });
     }
 
@@ -418,6 +443,79 @@ public sealed class PositionDriveExecutorTests
     }
 
     [Test]
+    public async Task Dispatching_Canceled_HasMatOff_ClearsDashboardMaterial()
+    {
+        var h = await BuildAsync();
+        h.Tasks.SetState("T-1", RcsTaskState.Canceled);
+        h.Plc.HasMatRawValue = 2;
+        h.SetMachine();
+        h.SetPositionSignals(hasMat: false, allowLoad: true);
+        h.Scheduler.ProbeSetContext(Eq, Pos, PositionState.Dispatching, "T-1", PositionPhase.Upload,
+            materialId: "M-CANCEL");
+
+        await h.Scheduler.ProbeDrivePositionOnceAsync(Eq, Pos);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Scheduler.ProbeGetContext(Eq, Pos).State, Is.EqualTo(PositionState.Alarm));
+            Assert.That(h.Scheduler.ProbeMaterialId(Eq, Pos), Is.Null,
+                "取消且 PLC 确认无料时，看板不得继续显示派工时绑上的物料码");
+            Assert.That(h.Signals.GetPosition(Eq, Pos)?.MaterialId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ResetAlarm_CanceledAfterConfirm_HasMatOff_ClearsMaterial()
+    {
+        var h = await BuildAsync();
+        h.Tasks.SetState("T-1", RcsTaskState.Canceled);
+        h.Tasks.SetCancelFlag("T-1", "1");
+        h.Plc.HasMatRawValue = 2;
+        h.Scheduler.ProbeSetContext(Eq, Pos, PositionState.Alarm, "T-1", PositionPhase.Upload,
+            materialId: "M-STALE");
+
+        await h.Scheduler.ResetAlarmAsync(Eq, Pos);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Scheduler.ProbeGetContext(Eq, Pos).State, Is.EqualTo(PositionState.WaitLoad));
+            Assert.That(h.Scheduler.ProbeMaterialId(Eq, Pos), Is.Null,
+                "恢复告警时 PLC 确认无料，须清看板物料；否则料架置空后工位仍挂旧码");
+            Assert.That(h.Signals.GetPosition(Eq, Pos)?.MaterialId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ClearStaleDisplayMaterial_WaitLoad_HasMatOff_ClearsMatching()
+    {
+        var h = await BuildAsync();
+        h.Plc.HasMatRawValue = 2;
+        h.Scheduler.ProbeSetContext(Eq, Pos, PositionState.WaitLoad, materialId: "M-RACK");
+
+        await ((IPositionScheduler)h.Scheduler).ClearStaleDisplayMaterialAsync("M-RACK");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Scheduler.ProbeMaterialId(Eq, Pos), Is.Null);
+            Assert.That(h.Signals.GetPosition(Eq, Pos)?.MaterialId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ClearStaleDisplayMaterial_HasMatOn_KeepsMaterial()
+    {
+        var h = await BuildAsync();
+        h.Plc.HasMatRawValue = 1;
+        h.Scheduler.ProbeSetContext(Eq, Pos, PositionState.Alarm, "T-1", PositionPhase.Unload,
+            materialId: "M-ON-MACHINE");
+
+        await ((IPositionScheduler)h.Scheduler).ClearStaleDisplayMaterialAsync("M-ON-MACHINE");
+
+        Assert.That(h.Scheduler.ProbeMaterialId(Eq, Pos), Is.EqualTo("M-ON-MACHINE"),
+            "PLC 确认有料时料架置空不得抹掉机上台账");
+    }
+
+    [Test]
     public async Task ResetAlarm_HasFinishedPieceOnMachine_RequeuesUnload()
     {
         var h = await BuildAsync();
@@ -429,6 +527,7 @@ public sealed class PositionDriveExecutorTests
         await h.Scheduler.ResetAlarmAsync(Eq, Pos);
 
         Assert.That(h.Scheduler.ProbeQueueCount, Is.EqualTo(1), "件仍在机台须再入下料队");
+        Assert.That(h.Scheduler.ProbeMaterialId(Eq, Pos), Is.EqualTo("M-9"), "机台上仍有件须保留物料码供下料");
         Assert.That(h.Plc.LastWrittenValue, Is.EqualTo(2), "人工恢复须关启动，避免机台继续测");
     }
 
@@ -609,6 +708,7 @@ public sealed class PositionDriveExecutorTests
 
         public void SetState(string taskId, string taskState) => _states[taskId] = taskState;
         public void SetCancelFlag(string taskId, string flag) => _cancelFlags[taskId] = flag;
+        public string GetCancelFlag(string taskId) => _cancelFlags.GetValueOrDefault(taskId, "0");
 
         public Task<RcsTaskRow?> GetByTaskIdAsync(string rcsTaskId, CancellationToken ct = default)
             => Task.FromResult(_states.TryGetValue(rcsTaskId, out var state)
@@ -625,7 +725,15 @@ public sealed class PositionDriveExecutorTests
         public Task IncrementRedoAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
         public Task<AutoRedoClaimResult> TryClaimAutoRedoAsync(string rcsTaskId, int maxRedo, CancellationToken ct = default)
             => Task.FromResult(AutoRedoClaimResult.NotClaimable);
-        public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ConfirmCancelHandledAsync(string rcsTaskId, CancellationToken ct = default)
+        {
+            if (!_states.TryGetValue(rcsTaskId, out var state))
+                throw new InvalidOperationException($"任务不存在：{rcsTaskId}");
+            if (state != RcsTaskState.Canceled)
+                throw new InvalidOperationException($"仅已取消（CANCELED）任务可确认人工处理，当前状态为 {state}");
+            _cancelFlags[rcsTaskId] = "1";
+            return Task.CompletedTask;
+        }
         public Task<bool> HasUnconfirmedCanceledAsync(long equipmentId, long positionId, CancellationToken ct = default)
         {
             if (equipmentId != Eq || positionId != Pos) return Task.FromResult(false);

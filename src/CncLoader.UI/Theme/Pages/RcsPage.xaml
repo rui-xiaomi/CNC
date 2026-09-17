@@ -112,7 +112,7 @@
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="140" MinWidth="100">
+                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="280" MinWidth="220">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
                                                 <Setter Property="ToolTip" Value="{Binding RcsRemoteId}"/>

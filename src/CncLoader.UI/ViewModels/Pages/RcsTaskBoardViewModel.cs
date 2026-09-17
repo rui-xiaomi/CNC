@@ -370,8 +370,11 @@ public sealed partial class RcsTaskBoardViewModel : ObservableObject
             var rows = await _page.Rcs.GetRecentTasksAsync(100);
             _page.ReplaceOnUi(Tasks, rows);
             if (!string.IsNullOrWhiteSpace(keepId))
-                SelectedTask = Tasks.FirstOrDefault(t =>
+            {
+                var match = Tasks.FirstOrDefault(t =>
                     t.RcsTaskId == keepId || t.RcsRemoteId == keepId);
+                _page.Ui.Invoke(() => SelectedTask = match);
+            }
         }
         catch (Exception ex) { _page.StatusMessage = $"任务加载失败：{ex.Message}"; }
     }

@@ -52,6 +52,8 @@ internal sealed class PositionAlarmRecovery
             }
         }
         await clearInboundAsync((ctx.EquipmentId, ctx.PositionId), "ALARM", ct);
+        if (hasMat == false)
+            ctx.MaterialId = null;
 
         var reason = ReasonForAlarm(ctx, hasMat, rcsState);
         var alarmKey = ctx.CurrentTaskId ?? $"EQ{ctx.EquipmentId}-POS{ctx.PositionId}";
@@ -90,9 +92,6 @@ internal sealed class PositionAlarmRecovery
             if (row is not null && !RcsStatusMapper.IsTerminal(row.TaskState))
                 throw new InvalidOperationException(
                     $"工位绑定的 RCS 任务 {taskId} 仍为 {row.TaskState}，请先在 RCS 页取消该任务或等待其结束，再恢复告警");
-            if (row is { TaskState: RcsTaskState.Canceled } && row.CancelManualFlag != "1")
-                throw new InvalidOperationException(
-                    $"工位绑定的 RCS 任务 {taskId} 已取消，请先在 RCS 页「确认人工处理」后再恢复告警");
 
             if (phase is PositionPhase phaseValue)
             {
@@ -107,11 +106,14 @@ internal sealed class PositionAlarmRecovery
             requestInboundClear(taskId, "RESET_ALARM");
         }
 
+        await ConfirmUnconfirmedCancelsAsync(ctx.EquipmentId, ctx.PositionId, ct);
+
         var lastTestOk = ctx.LastTestOk;
         var materialId = ctx.MaterialId;
+        var hasMatNow = await readHasMatFreshAsync(ctx, ct);
         ctx.CurrentTaskId = null;
         ctx.Phase = null;
-        ctx.MaterialId = materialId;
+        ctx.MaterialId = hasMatNow == false ? null : materialId;
         ctx.AlarmRaised = false;
         ctx.UploadRequested = false;
         ctx.HasMatRecheck.Reset();
@@ -122,7 +124,7 @@ internal sealed class PositionAlarmRecovery
             _logger.LogWarning("人工恢复 EQ{Eq} POS{Pos} 写 POS_TEST_START=2 未确认，请在 PLC 页复核启动电平",
                 ctx.EquipmentId, ctx.PositionId);
         setState(ctx, PositionState.WaitLoad);
-        if (lastTestOk is bool isOk && await readHasMatFreshAsync(ctx, ct) == true)
+        if (lastTestOk is bool isOk && hasMatNow == true)
         {
             await enqueueUnloadAsync(ctx, isOk, ct);
             _logger.LogInformation("人工恢复 EQ{Eq} POS{Pos} 后件仍在机台，已再入下料队 isOk={Ok}",
@@ -133,5 +135,12 @@ internal sealed class PositionAlarmRecovery
             _logger.LogInformation("人工恢复 EQ{Eq} POS{Pos} → WAIT_LOAD（已回滚预记 {Task}）",
                 ctx.EquipmentId, ctx.PositionId, taskId ?? "—");
         }
+    }
+
+    public async Task ConfirmUnconfirmedCancelsAsync(long equipmentId, long positionId, CancellationToken ct)
+    {
+        var ids = await _taskStore.ListUnconfirmedCanceledTaskIdsAsync(equipmentId, positionId, ct);
+        foreach (var id in ids)
+            await _taskStore.ConfirmCancelHandledAsync(id, ct);
     }
 }

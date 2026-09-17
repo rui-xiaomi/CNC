@@ -397,6 +397,23 @@ public sealed partial class PositionScheduler : IHostedService, IPositionSchedul
                 EnqueueUnloadAsync,
                 _statePublisher.SetState,
                 ct);
+            await _statePublisher.PublishCancelHoldAsync(ctx, ct);
+        }
+        finally { gate.Release(); }
+    }
+
+    public async Task AcknowledgeCancelHoldAsync(long equipmentId, long positionId, CancellationToken ct = default)
+    {
+        if (!_contexts.TryGetValue((equipmentId, positionId), out var ctx)) return;
+        var gate = GateFor((equipmentId, positionId));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var ids = await _taskStore.ListUnconfirmedCanceledTaskIdsAsync(equipmentId, positionId, ct);
+            if (ids.Count == 0)
+                throw new InvalidOperationException("该工位没有待确认取消任务");
+            await _alarmRecovery.ConfirmUnconfirmedCancelsAsync(equipmentId, positionId, ct);
+            await _statePublisher.PublishCancelHoldAsync(ctx, ct);
         }
         finally { gate.Release(); }
     }
@@ -408,6 +425,38 @@ public sealed partial class PositionScheduler : IHostedService, IPositionSchedul
 
     public void InvalidateFrameBindingCache(long? equipmentId = null)
         => _routeCache.InvalidateBindings(equipmentId);
+
+    public async Task ClearStaleDisplayMaterialAsync(string? materialId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(materialId)) return;
+
+        foreach (var kv in _contexts)
+        {
+            var ctx = kv.Value;
+            if (!string.Equals(ctx.MaterialId, materialId, StringComparison.Ordinal)) continue;
+            if (ctx.State is not (PositionState.Alarm or PositionState.WaitLoad or PositionState.Offline))
+                continue;
+
+            var gate = GateFor(kv.Key);
+            await gate.WaitAsync(ct);
+            try
+            {
+                if (!string.Equals(ctx.MaterialId, materialId, StringComparison.Ordinal)) continue;
+                if (ctx.State is not (PositionState.Alarm or PositionState.WaitLoad or PositionState.Offline))
+                    continue;
+
+                var hasMat = await ReadHasMatFreshAsync(ctx, ct);
+                if (hasMat != false) continue;
+
+                ctx.MaterialId = null;
+                _statePublisher.PublishPosition(ctx);
+                _logger.LogInformation(
+                    "EQ{Eq} POS{Pos} 料架置空后清除看板物料 {Mat}（PLC 确认无料）",
+                    ctx.EquipmentId, ctx.PositionId, materialId);
+            }
+            finally { gate.Release(); }
+        }
+    }
 
     public async Task NotifyTaskAbandonedAsync(string taskId, string reason, CancellationToken ct = default)
     {
@@ -536,7 +585,7 @@ public sealed partial class PositionScheduler : IHostedService, IPositionSchedul
     private Task<bool?> ReadHasMatFreshAsync(PositionContext ctx, CancellationToken ct)
         => _plcIo.ReadHasMatFreshAsync(ctx, ct);
 
-    /// <summary>看板工位卡：未确认取消占用，须带任务号供 RCS 页确认。</summary>
+    /// <summary>看板工位卡：未确认取消占用，须带任务号供看板就地确认。</summary>
     internal const string CancelHoldPrefix = CancelHoldDisplay.Prefix;
 
     internal static string FormatCancelHoldDetail(IReadOnlyList<string> ids)

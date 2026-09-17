@@ -48,7 +48,7 @@ internal sealed class PositionStatePublisher
         });
     }
 
-    /// <summary>看板工位卡：未确认取消占用，须带任务号供 RCS 页确认。</summary>
+    /// <summary>看板工位卡：未确认取消占用，须带任务号供看板就地确认。</summary>
     public async Task PublishCancelHoldAsync(PositionContext ctx, CancellationToken ct)
     {
         var wasHold = CancelHoldDisplay.IsHold(ctx.StatusDetail);

@@ -20,7 +20,10 @@ public sealed class SignalStateStore : ISignalStateStore
         var key = (status.EquipmentId, status.PositionId);
         var prev = _positions.TryGetValue(key, out var p) ? p : null;
         _positions[key] = status;
-        if (prev is null || prev.State != status.State)
+        if (prev is null
+            || prev.State != status.State
+            || !string.Equals(prev.MaterialId, status.MaterialId, StringComparison.Ordinal)
+            || !string.Equals(prev.StatusDetail, status.StatusDetail, StringComparison.Ordinal))
             PositionChanged?.Invoke(this, status);
     }
 
