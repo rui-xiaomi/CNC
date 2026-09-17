@@ -17,4 +17,10 @@ public interface IRcsCallbackListener
 
     /// <summary>实际绑定的 Port（启动快照）。</summary>
     int BoundPort { get; }
+
+    /// <summary>
+    /// 对本机 <c>pushTaskStatus</c> 发空 taskId 环回探针。
+    /// HttpClient 只允许在 Communication 实现；成功仅证明本机 Kestrel 可达。
+    /// </summary>
+    Task<RcsLocalCallbackProbeResult> ProbePushEndpointAsync(CancellationToken ct = default);
 }

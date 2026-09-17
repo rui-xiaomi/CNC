@@ -13,7 +13,7 @@
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="700" HorizontalAlignment="Left">
+            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="960" HorizontalAlignment="Stretch">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
                         <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
@@ -71,7 +71,7 @@
                     </Grid>
                     <Border Background="{StaticResource TermBrush}"
                             BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
-                            Padding="10,8">
+                            Padding="10,8" MinHeight="240">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" conv:AutoScroll.ToEnd="True">
                             <ItemsControl ItemsSource="{Binding TerminalLines}">
                                 <ItemsControl.ItemTemplate>

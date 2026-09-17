@@ -23,12 +23,15 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     private readonly IAlarmEventService _alarms;
     private readonly IUserNotificationService _notify;
     private readonly IUiDispatcher _ui;
+    private readonly ReconciliationStatusBinder _reconcile;
+    private readonly IUiExceptionMonitor? _uiExceptions;
     private readonly DispatcherTimer _timer;
     private long _heartbeat;
 
     public ShellViewModel(INavigationService navigation, ISignalStateStore store,
         IWorkLineService workLineService, IPlcCatalogService plcCatalog, IAlarmEventService alarms,
-        IUserNotificationService notify, IUiDispatcher ui)
+        IUserNotificationService notify, IUiDispatcher ui, IPositionScheduler scheduler,
+        IUiExceptionMonitor? uiExceptions = null)
     {
         _navigation = navigation;
         _store = store;
@@ -37,6 +40,7 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _alarms = alarms;
         _notify = notify;
         _ui = ui;
+        _uiExceptions = uiExceptions;
         _navigation.Navigated += OnNavigated;
         _store.MachineChanged += OnMachineChanged;
         _alarms.AlarmRaised += OnAlarmRaised;
@@ -50,6 +54,15 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _timer.Start();
         UpdateClock();
         _ = RefreshAlarmCountAsync();
+
+        _reconcile = new ReconciliationStatusBinder(scheduler, a => _ui.Post(a));
+        SyncReconcile();
+        _reconcile.Changed += OnReconcileChanged;
+        if (_uiExceptions is not null)
+        {
+            SyncUiExceptions();
+            _uiExceptions.Changed += OnUiExceptionsChanged;
+        }
     }
 
     public ObservableCollection<NavItem> NavItems { get; }
@@ -66,6 +79,12 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private int _unhandledAlarms;
     [ObservableProperty] private string _clock = "";
     [ObservableProperty] private string _heartbeatText = "000000";
+    [ObservableProperty] private string _reconcileTitle = "启动对账未开始";
+    [ObservableProperty] private string _reconcileBrushKey = "IdleBrush";
+    [ObservableProperty] private string? _reconcileToolTip;
+    [ObservableProperty] private bool _hasUiExceptions;
+    [ObservableProperty] private string _uiExceptionText = "";
+    [ObservableProperty] private string? _uiExceptionToolTip;
     private bool _syncingNav;
 
     partial void OnSelectedNavItemChanged(NavItem? value)
@@ -214,6 +233,30 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
 
     private void UpdateClock() => Clock = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
+    private void OnReconcileChanged(object? sender, EventArgs e) => SyncReconcile();
+
+    private void SyncReconcile()
+    {
+        ReconcileTitle = _reconcile.Title;
+        ReconcileBrushKey = _reconcile.BrushKey;
+        ReconcileToolTip = string.IsNullOrWhiteSpace(_reconcile.DetailToolTip)
+            ? _reconcile.SubText
+            : $"{_reconcile.SubText}\n{_reconcile.DetailToolTip}";
+    }
+
+    private void OnUiExceptionsChanged(object? sender, EventArgs e) => _ui.Post(SyncUiExceptions);
+
+    private void SyncUiExceptions()
+    {
+        if (_uiExceptions is null) return;
+        var count = _uiExceptions.Count;
+        HasUiExceptions = count > 0;
+        UiExceptionText = count > 0 ? $"界面异常 {count}" : "";
+        UiExceptionToolTip = count > 0
+            ? $"UI 线程已拦截 {count} 次未处理异常，界面显示可能与实际不一致，请核对后择机重启客户端。最近一次 {_uiExceptions.LastAt:HH:mm:ss}：{_uiExceptions.LastMessage}"
+            : null;
+    }
+
     private static IEnumerable<NavItem> BuildNavItems() =>
     [
         new("dash",  "监控看板",   "运行", Icons.Dashboard),
@@ -235,6 +278,10 @@ public sealed partial class ShellViewModel : ViewModelBase, IDisposable
         _store.MachineChanged -= OnMachineChanged;
         _alarms.AlarmRaised -= OnAlarmRaised;
         _workLineService.WorkLinesChanged -= OnWorkLinesChanged;
+        _reconcile.Changed -= OnReconcileChanged;
+        _reconcile.Dispose();
+        if (_uiExceptions is not null)
+            _uiExceptions.Changed -= OnUiExceptionsChanged;
     }
 }
 

@@ -27,6 +27,17 @@ public static class RcsDisplayLabels
         _ => state!
     };
 
+    /// <summary>任务态 → 状态徽标 token（ok/run/alarm/ng/idle/warn）。</summary>
+    public static string StateToBadge(string? state) => (state ?? "").Trim().ToUpperInvariant() switch
+    {
+        "COMPLETED" => "ok",
+        "DISPATCHED" or "EXECUTING" or "RUNNING" => "run",
+        "FAILED" => "alarm",
+        "CANCELED" => "ng",
+        "CREATED" or "" => "idle",
+        _ => "warn"
+    };
+
     public static string DirectionToZh(string? dir) => (dir ?? "").Trim().ToUpperInvariant() switch
     {
         "OUT" => "出站",

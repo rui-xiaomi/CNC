@@ -374,21 +374,33 @@ internal sealed class TracingSlots : ISlotAccountService
     public int RollbackCount => RollbackTakeCount + RollbackPutCount;
     public bool RollbackTakeSucceeds { get; set; } = true;
     public bool RollbackPutSucceeds { get; set; } = true;
+    public bool ReserveTakeReturnsNull { get; set; }
+    public Exception? ReserveTakeThrows { get; set; }
+    public int ReserveTakeMaxInFlight { get; private set; }
     public string? LastReservedTaskId { get; private set; }
     public string? LastRolledBackTaskId { get; private set; }
+    private int _reserveTakeInFlight;
 
     public Task<ReservedSlot?> ReserveTakeAsync(long frameId, string taskId, CancellationToken ct = default)
     {
         _trace.Add(DispatchGateEvents.ReserveStart);
         ReserveTakeCount++;
-        LastReservedTaskId = taskId;
-        _reserved[taskId] = 1;
-        _trace.Add(DispatchGateEvents.ReserveCommit);
-        _equipment?.MarkReserveCommitted();
-        _disableOnReserveCommit?.Invoke();
-        if (_disableOnReserveCommit is not null)
-            _trace.Add(DispatchGateEvents.DisableRoute);
-        return Task.FromResult<ReservedSlot?>(new ReservedSlot(frameId, 1, 1, 1, "MAT-1"));
+        var inFlight = Interlocked.Increment(ref _reserveTakeInFlight);
+        if (inFlight > ReserveTakeMaxInFlight) ReserveTakeMaxInFlight = inFlight;
+        try
+        {
+            if (ReserveTakeThrows is not null) throw ReserveTakeThrows;
+            if (ReserveTakeReturnsNull) return Task.FromResult<ReservedSlot?>(null);
+            LastReservedTaskId = taskId;
+            _reserved[taskId] = 1;
+            _trace.Add(DispatchGateEvents.ReserveCommit);
+            _equipment?.MarkReserveCommitted();
+            _disableOnReserveCommit?.Invoke();
+            if (_disableOnReserveCommit is not null)
+                _trace.Add(DispatchGateEvents.DisableRoute);
+            return Task.FromResult<ReservedSlot?>(new ReservedSlot(frameId, 1, 1, 1, "MAT-1"));
+        }
+        finally { Interlocked.Decrement(ref _reserveTakeInFlight); }
     }
 
     public Task<ReservedSlot?> ReserveAsync(long frameId, string taskId, string? materialId, CancellationToken ct = default)
@@ -472,6 +484,7 @@ internal sealed class TracingTaskService : IRcsTaskService
     public string? LastTaskType { get; private set; }
     public TransitDispatchArgs? LastArgs { get; private set; }
     public GrabDispatchArgs? LastGrabArgs { get; private set; }
+    public bool DispatchFails { get; set; }
 
     public Task<RcsResult> DispatchTransitAsync(TransitDispatchArgs args, CancellationToken ct = default)
     {
@@ -480,6 +493,8 @@ internal sealed class TracingTaskService : IRcsTaskService
         LastTaskId = args.TaskId;
         LastTaskType = args.TaskType;
         LastArgs = args;
+        if (DispatchFails)
+            return Task.FromResult(RcsResult.Fail("", "rcs-send-failed") with { TaskId = args.TaskId });
         return Task.FromResult(new RcsResult(true, 200, true, "ok", "", "{}", null, 1)
         {
             TaskId = args.TaskId ?? "missing"
@@ -655,6 +670,11 @@ internal sealed class NoopWorkRecords : IWorkRecordService
 
 internal sealed class NoopTaskStore : IRcsTaskStore
 {
+    public bool UnconfirmedCanceled { get; set; }
+
+    public Task<bool> HasUnconfirmedCanceledAsync(long equipmentId, long positionId, CancellationToken ct = default)
+        => Task.FromResult(UnconfirmedCanceled);
+
     public Task<long> CreateAsync(RcsTaskRecord record, CancellationToken ct = default) => Task.FromResult(0L);
     public Task SetDispatchedAsync(string rcsTaskId, CancellationToken ct = default) => Task.CompletedTask;
     public Task<bool> UpdateStateAsync(string rcsTaskId, string taskState, string? rcsStatus = null, string? error = null, CancellationToken ct = default)

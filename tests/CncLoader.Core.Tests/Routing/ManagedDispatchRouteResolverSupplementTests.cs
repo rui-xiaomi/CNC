@@ -34,10 +34,10 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
             Assert.That(resolved.IsResolved, Is.False);
         });
 
-        h.ViewModel.SelectedKind = "搬运";
-        h.ViewModel.FromCode = ManualReplayRoutingCodes.AmbiguousCell;
-        h.ViewModel.ToCode = ManualReplayRoutingCodes.ToCell;
-        await h.ViewModel.DispatchCommand.ExecuteAsync(null);
+        h.ViewModel.TaskBoard.SelectedKind = "搬运";
+        h.ViewModel.TaskBoard.FromCode = ManualReplayRoutingCodes.AmbiguousCell;
+        h.ViewModel.TaskBoard.ToCode = ManualReplayRoutingCodes.ToCell;
+        await h.ViewModel.TaskBoard.DispatchCommand.ExecuteAsync(null);
         Assert.That(h.Client.SendCount, Is.EqualTo(0));
     }
 
@@ -155,10 +155,10 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
     public async Task Supplement_ManualAllActive_ViewModelPreAndServiceOnce()
     {
         var h = ManualReplayHarness.Create();
-        h.ViewModel.SelectedKind = "搬运";
-        h.ViewModel.FromCode = ManualReplayRoutingCodes.FromCell;
-        h.ViewModel.ToCode = ManualReplayRoutingCodes.ToCell;
-        await h.ViewModel.DispatchCommand.ExecuteAsync(null);
+        h.ViewModel.TaskBoard.SelectedKind = "搬运";
+        h.ViewModel.TaskBoard.FromCode = ManualReplayRoutingCodes.FromCell;
+        h.ViewModel.TaskBoard.ToCode = ManualReplayRoutingCodes.ToCell;
+        await h.ViewModel.TaskBoard.DispatchCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -189,14 +189,14 @@ public sealed class ManagedDispatchRouteResolverSupplementTests
     public async Task Supplement_SameInstance_ActiveThenDisable_ImmediateReject()
     {
         var h = ManualReplayHarness.Create();
-        h.ViewModel.SelectedKind = "搬运";
-        h.ViewModel.FromCode = ManualReplayRoutingCodes.FromCell;
-        h.ViewModel.ToCode = ManualReplayRoutingCodes.ToCell;
-        await h.ViewModel.DispatchCommand.ExecuteAsync(null);
+        h.ViewModel.TaskBoard.SelectedKind = "搬运";
+        h.ViewModel.TaskBoard.FromCode = ManualReplayRoutingCodes.FromCell;
+        h.ViewModel.TaskBoard.ToCode = ManualReplayRoutingCodes.ToCell;
+        await h.ViewModel.TaskBoard.DispatchCommand.ExecuteAsync(null);
         Assert.That(h.Client.SendCount, Is.EqualTo(1));
 
         h.Store.SetWorkLineState(ManualReplayRoutingCodes.LineId, "1");
-        await h.ViewModel.DispatchCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.DispatchCommand.ExecuteAsync(null);
         Assert.That(h.Client.SendCount, Is.EqualTo(1), "禁用后同实例立即拒发");
     }
 

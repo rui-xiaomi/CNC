@@ -7,10 +7,10 @@ public sealed class RcsViewModelSafetyGateTests
     public async Task 测试连接不得Apply运行时出站()
     {
         var h = ManualReplayHarness.Create();
-        h.ViewModel.BaseUrl = "http://10.0.0.8:5050";
-        h.ViewModel.ClientCode = "PROBE";
+        h.ViewModel.Connection.BaseUrl = "http://10.0.0.8:5050";
+        h.ViewModel.Connection.ClientCode = "PROBE";
 
-        await h.ViewModel.TestConnectionCommand.ExecuteAsync(null);
+        await h.ViewModel.Connection.TestConnectionCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -26,10 +26,10 @@ public sealed class RcsViewModelSafetyGateTests
     public async Task 取消确认拒绝则不下发()
     {
         var h = ManualReplayHarness.Create();
-        h.ViewModel.OperateTaskId = "TASK-CANCEL";
+        h.ViewModel.TaskBoard.OperateTaskId = "TASK-CANCEL";
         h.Notify.ConfirmAnswer = false;
 
-        await h.ViewModel.CancelCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.CancelCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -43,11 +43,11 @@ public sealed class RcsViewModelSafetyGateTests
     {
         var h = ManualReplayHarness.Create();
         h.SeedHistoricalTask();
-        h.ViewModel.OperateTaskId = "LINE-A-MV-20260804120000-0001";
+        h.ViewModel.TaskBoard.OperateTaskId = "LINE-A-MV-20260804120000-0001";
         h.Notify.ConfirmAnswer = false;
         var sendBefore = h.Client.SendCount;
 
-        await h.ViewModel.RedoCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.RedoCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -60,10 +60,10 @@ public sealed class RcsViewModelSafetyGateTests
     public async Task 换架确认拒绝则不发起()
     {
         var h = ManualReplayHarness.Create();
-        h.ViewModel.ChangeFrameEquipmentId = "1";
+        h.ViewModel.ChangeFramePanel.ChangeFrameEquipmentId = "1";
         h.Notify.ConfirmAnswer = false;
 
-        await h.ViewModel.ChangeFrameCommand.ExecuteAsync(null);
+        await h.ViewModel.ChangeFramePanel.ChangeFrameCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -76,11 +76,11 @@ public sealed class RcsViewModelSafetyGateTests
     public async Task 空托盘回收确认拒绝则不下发()
     {
         var h = ManualReplayHarness.CreateForPalletReturn();
-        h.ViewModel.PalletReturnFromCode = TypedEndpointSeedShapes.PositionCell;
+        h.ViewModel.ChangeFramePanel.PalletReturnFromCode = TypedEndpointSeedShapes.PositionCell;
         h.Notify.ConfirmAnswer = false;
         var sendBefore = h.Client.SendCount;
 
-        await h.ViewModel.PalletReturnCommand.ExecuteAsync(null);
+        await h.ViewModel.ChangeFramePanel.PalletReturnCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {

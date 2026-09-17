@@ -865,8 +865,10 @@ internal sealed class ManualReplayHarness
     public required CallTrace Trace { get; init; }
     public required StubChangeFrame ChangeFrame { get; init; }
 
-    public static ManualReplayHarness Create(bool seedActiveRoute = true, bool schedulerEnabled = false)
-        => CreateCore(seedActiveRoute, seedTypedPalletReturn: false, palletReturnArea: "托盘回收区", schedulerEnabled);
+    public static ManualReplayHarness Create(bool seedActiveRoute = true, bool schedulerEnabled = false,
+        IRcsCallbackListener? callbackListener = null, IRcsCallbackNotifier? callbackNotifier = null)
+        => CreateCore(seedActiveRoute, seedTypedPalletReturn: false, palletReturnArea: "托盘回收区",
+            schedulerEnabled, callbackListener, callbackNotifier);
 
     /// <summary>空托盘回收 RED 夹具：类型化 AREA/FRAME/POSITION 种子 + 英文 PALLET_RETURN。</summary>
     public static ManualReplayHarness CreateForPalletReturn()
@@ -874,7 +876,8 @@ internal sealed class ManualReplayHarness
             palletReturnArea: TypedEndpointSeedShapes.LocPalletReturn);
 
     private static ManualReplayHarness CreateCore(
-        bool seedActiveRoute, bool seedTypedPalletReturn, string palletReturnArea, bool schedulerEnabled = false)
+        bool seedActiveRoute, bool seedTypedPalletReturn, string palletReturnArea, bool schedulerEnabled = false,
+        IRcsCallbackListener? callbackListener = null, IRcsCallbackNotifier? callbackNotifier = null)
     {
         var store = new MutableEquipmentRoutingStore();
         var loc = new FakeLocationMapForRouting();
@@ -957,11 +960,11 @@ internal sealed class ManualReplayHarness
             new StubWorkLines(),
             equipment,
             new StubFrames(),
-            new RcsCallbackNotifier(),
+            callbackNotifier ?? new RcsCallbackNotifier(),
             changeFrame,
             new StubConnConfig(),
             runtime,
-            new StubCallbackListener(),
+            callbackListener ?? new StubCallbackListener(),
             new StubScheduler(),
             new StubUser(),
             resolver,
@@ -1064,6 +1067,7 @@ internal sealed class ManualReplayHarness
         public event EventHandler<ChangeFrameProgressEvent>? ProgressChanged;
 #pragma warning restore CS0067
         public int CallCount { get; private set; }
+        public void RaiseProgress(ChangeFrameProgressEvent e) => ProgressChanged?.Invoke(this, e);
         public Task<string> ChangeFrameAsync(long equipmentId, FrameRole role, string author, CancellationToken ct = default)
         {
             CallCount++;
@@ -1114,12 +1118,22 @@ internal sealed class ManualReplayHarness
         };
     }
 
-    private sealed class StubCallbackListener : IRcsCallbackListener
+    internal sealed class StubCallbackListener : IRcsCallbackListener
     {
-        public bool IsListening => false;
-        public string BoundHost => "127.0.0.1";
-        public int BoundPort => 0;
-        public string? ListenError => null;
+        public bool IsListening { get; set; }
+        public string BoundHost { get; set; } = "127.0.0.1";
+        public int BoundPort { get; set; }
+        public string? ListenError { get; set; }
+        public RcsLocalCallbackProbeResult? NextProbe { get; set; }
+        public int ProbeCount { get; private set; }
+
+        public Task<RcsLocalCallbackProbeResult> ProbePushEndpointAsync(CancellationToken ct = default)
+        {
+            ProbeCount++;
+            if (NextProbe is not null)
+                return Task.FromResult(NextProbe);
+            return Task.FromResult(RcsLocalCallbackProbeResult.NotListening(ListenError));
+        }
     }
 
     private sealed class StubScheduler : IPositionScheduler

@@ -30,12 +30,12 @@ public sealed class DashboardViewModelReconciliationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(vm.ReconcileTitle, Is.EqualTo("启动对账失败，正在重试"));
-            Assert.That(vm.ReconcileSubText, Does.Contain("自动派工已锁定"));
-            Assert.That(vm.ReconcileSubText, Does.Contain("查询失败"));
-            Assert.That(vm.ReconcileBrushKey, Is.EqualTo("WarnBrush"));
-            Assert.That(vm.IsReconcileGateOpen, Is.False);
-            Assert.That(vm.ReconcileDetailToolTip, Is.Not.Null.And.Not.Empty);
+            Assert.That(vm.ReconcileBar.ReconcileTitle, Is.EqualTo("启动对账失败，正在重试"));
+            Assert.That(vm.ReconcileBar.ReconcileSubText, Does.Contain("自动派工已锁定"));
+            Assert.That(vm.ReconcileBar.ReconcileSubText, Does.Contain("查询失败"));
+            Assert.That(vm.ReconcileBar.ReconcileBrushKey, Is.EqualTo("WarnBrush"));
+            Assert.That(vm.ReconcileBar.IsReconcileGateOpen, Is.False);
+            Assert.That(vm.ReconcileBar.ReconcileDetailToolTip, Is.Not.Null.And.Not.Empty);
         });
     }
 
@@ -50,18 +50,18 @@ public sealed class DashboardViewModelReconciliationTests
         };
         using var vm = CreateVm(scheduler);
 
-        Assert.That(vm.ReconcileSubText, Does.Contain("旧失败"));
+        Assert.That(vm.ReconcileBar.ReconcileSubText, Does.Contain("旧失败"));
 
         scheduler.Publish(ReconciliationState.Succeeded, null, true);
 
         Assert.Multiple(() =>
         {
-            Assert.That(vm.ReconcileTitle, Is.EqualTo("启动对账完成"));
-            Assert.That(vm.ReconcileSubText, Is.EqualTo("自动派工已开启"));
-            Assert.That(vm.ReconcileBrushKey, Is.EqualTo("OkBrush"));
-            Assert.That(vm.IsReconcileGateOpen, Is.True);
-            Assert.That(vm.ReconcileDetailToolTip, Is.Null);
-            Assert.That(vm.ReconcileSubText, Does.Not.Contain("旧失败"));
+            Assert.That(vm.ReconcileBar.ReconcileTitle, Is.EqualTo("启动对账完成"));
+            Assert.That(vm.ReconcileBar.ReconcileSubText, Is.EqualTo("自动派工已开启"));
+            Assert.That(vm.ReconcileBar.ReconcileBrushKey, Is.EqualTo("OkBrush"));
+            Assert.That(vm.ReconcileBar.IsReconcileGateOpen, Is.True);
+            Assert.That(vm.ReconcileBar.ReconcileDetailToolTip, Is.Null);
+            Assert.That(vm.ReconcileBar.ReconcileSubText, Does.Not.Contain("旧失败"));
         });
     }
 
@@ -78,10 +78,10 @@ public sealed class DashboardViewModelReconciliationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(vm.ReconcileTitle, Is.EqualTo("调度器未启用"));
-            Assert.That(vm.ReconcileSubText, Does.Contain("SchedulerEnabled=false"));
-            Assert.That(vm.IsReconcileGateOpen, Is.False);
-            Assert.That(vm.ReconcileBrushKey, Is.EqualTo("IdleBrush"));
+            Assert.That(vm.ReconcileBar.ReconcileTitle, Is.EqualTo("调度器未启用"));
+            Assert.That(vm.ReconcileBar.ReconcileSubText, Does.Contain("SchedulerEnabled=false"));
+            Assert.That(vm.ReconcileBar.IsReconcileGateOpen, Is.False);
+            Assert.That(vm.ReconcileBar.ReconcileBrushKey, Is.EqualTo("IdleBrush"));
         });
     }
 
@@ -94,16 +94,16 @@ public sealed class DashboardViewModelReconciliationTests
             IsReconciled = false
         };
         var vm = CreateVm(scheduler);
-        Assert.That(vm.ReconcileTitle, Is.EqualTo("启动对账未开始"));
+        Assert.That(vm.ReconcileBar.ReconcileTitle, Is.EqualTo("启动对账未开始"));
 
         vm.Dispose();
         scheduler.Publish(ReconciliationState.WaitingForRetry, "阶段 One：不应更新", false);
 
         Assert.Multiple(() =>
         {
-            Assert.That(vm.ReconcileTitle, Is.EqualTo("启动对账未开始"));
-            Assert.That(vm.ReconcileSubText, Does.Not.Contain("不应更新"));
-            Assert.That(vm.IsReconcileGateOpen, Is.False);
+            Assert.That(vm.ReconcileBar.ReconcileTitle, Is.EqualTo("启动对账未开始"));
+            Assert.That(vm.ReconcileBar.ReconcileSubText, Does.Not.Contain("不应更新"));
+            Assert.That(vm.ReconcileBar.IsReconcileGateOpen, Is.False);
         });
     }
 

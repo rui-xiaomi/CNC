@@ -30,11 +30,11 @@ public sealed class RcsTaskListDisplayTests
     public void 点选任务后详情区可见()
     {
         var h = ManualReplayHarness.Create();
-        Assert.That(h.ViewModel.HasSelectedTask, Is.False);
+        Assert.That(h.ViewModel.TaskBoard.HasSelectedTask, Is.False);
 
-        h.ViewModel.SelectedTask = h.SeedHistoricalTask(error: "任务编号不一致");
+        h.ViewModel.TaskBoard.SelectedTask = h.SeedHistoricalTask(error: "任务编号不一致");
 
-        Assert.That(h.ViewModel.HasSelectedTask, Is.True);
+        Assert.That(h.ViewModel.TaskBoard.HasSelectedTask, Is.True);
     }
 
     [Test]
@@ -43,7 +43,7 @@ public sealed class RcsTaskListDisplayTests
         var h = ManualReplayHarness.Create();
         var row = h.SeedHistoricalTask(error: "任务编号不一致");
 
-        h.ViewModel.ShowTaskErrorCommand.Execute(row);
+        h.ViewModel.TaskBoard.ShowTaskErrorCommand.Execute(row);
 
         Assert.Multiple(() =>
         {
@@ -58,8 +58,8 @@ public sealed class RcsTaskListDisplayTests
         var h = ManualReplayHarness.Create();
         var row = h.SeedHistoricalTask(error: "");
 
-        h.ViewModel.ShowTaskErrorCommand.Execute(row);
-        h.ViewModel.ShowTaskErrorCommand.Execute(null);
+        h.ViewModel.TaskBoard.ShowTaskErrorCommand.Execute(row);
+        h.ViewModel.TaskBoard.ShowTaskErrorCommand.Execute(null);
 
         Assert.That(h.Notify.AlertCount, Is.Zero);
     }
@@ -71,14 +71,14 @@ public sealed class RcsTaskListDisplayTests
         var id = "LINE01-GR-20260914164312-0001";
         h.SeedHistoricalTask(taskId: id, state: RcsTaskState.Canceled);
 
-        h.ViewModel.TaskQuery = id;
-        await h.ViewModel.FindTaskCommand.ExecuteAsync(null);
+        h.ViewModel.TaskBoard.TaskQuery = id;
+        await h.ViewModel.TaskBoard.FindTaskCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
-            Assert.That(h.ViewModel.OperateTaskId, Is.EqualTo(id));
-            Assert.That(h.ViewModel.SelectedTask?.RcsTaskId, Is.EqualTo(id));
-            Assert.That(h.ViewModel.HasSelectedTask, Is.True);
+            Assert.That(h.ViewModel.TaskBoard.OperateTaskId, Is.EqualTo(id));
+            Assert.That(h.ViewModel.TaskBoard.SelectedTask?.RcsTaskId, Is.EqualTo(id));
+            Assert.That(h.ViewModel.TaskBoard.HasSelectedTask, Is.True);
         });
     }
 
@@ -89,7 +89,7 @@ public sealed class RcsTaskListDisplayTests
         var row = new RcsMsgRow(1, DateTime.UnixEpoch, "OUT", "transitTask", "T",
             "{}", "{}", 12, false, "UPLOAD_SLOT_OCCUPIED");
 
-        h.ViewModel.ShowMessageErrorCommand.Execute(row);
+        h.ViewModel.TaskBoard.ShowMessageErrorCommand.Execute(row);
 
         Assert.Multiple(() =>
         {

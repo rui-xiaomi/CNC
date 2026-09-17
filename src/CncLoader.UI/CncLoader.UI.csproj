@@ -23,4 +23,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="CncLoader.Core.Tests" />
+  </ItemGroup>
+
 </Project>

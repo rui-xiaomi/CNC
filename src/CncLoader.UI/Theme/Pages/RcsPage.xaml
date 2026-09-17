@@ -17,7 +17,7 @@
                 <TabControl SelectedIndex="0" Background="Transparent" BorderThickness="0" Padding="0">
                     <!-- 连接 & 下发 -->
                     <TabItem Header="任务列表">
-                        <DockPanel>
+                        <DockPanel DataContext="{Binding TaskBoard}">
                             <DockPanel DockPanel.Dock="Top" Height="40" LastChildFill="True"
                                        Background="{StaticResource Surface2Brush}">
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="0,0,12,0"
@@ -74,9 +74,18 @@
                                                      VerticalAlignment="Center"
                                                      AutomationProperties.Name="选中回包号"/>
                                             <TextBlock Grid.Column="4" Text="状态" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                            <TextBlock Grid.Column="5" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
-                                                       Foreground="{StaticResource FgBrush}"
-                                                       Text="{Binding SelectedTask.TaskState, Converter={StaticResource RcsStateZhConv}}"/>
+                                            <Border Grid.Column="5" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                    CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
+                                                    Background="{Binding SelectedTask.TaskState, Converter={StaticResource RcsStateVisualConv}, ConverterParameter=soft}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Path Width="10" Height="10" Stretch="Uniform" Margin="0,0,6,0"
+                                                          VerticalAlignment="Center"
+                                                          Data="{Binding SelectedTask.TaskState, Converter={StaticResource RcsStateVisualConv}, ConverterParameter=icon}"
+                                                          Fill="{Binding SelectedTask.TaskState, Converter={StaticResource RcsStateVisualConv}}"/>
+                                                    <TextBlock FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                               Text="{Binding SelectedTask.TaskState, Converter={StaticResource RcsStateZhConv}}"/>
+                                                </StackPanel>
+                                            </Border>
                                         </Grid>
                                         <DockPanel>
                                             <TextBlock DockPanel.Dock="Top" Text="错误" Style="{StaticResource MutedText}"
@@ -94,16 +103,16 @@
                                 </Grid>
                             </Border>
                             <DataGrid ItemsSource="{Binding Tasks}" SelectedItem="{Binding SelectedTask}"
-                                      Style="{StaticResource DataGridCompact}" RowHeight="26">
+                                      Style="{StaticResource DataGridCompact}" RowHeight="32">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="任务号" Binding="{Binding RcsTaskId}" Width="180" MinWidth="140">
+                                    <DataGridTextColumn Header="任务号" Binding="{Binding RcsTaskId}" Width="280" MinWidth="240">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
                                                 <Setter Property="ToolTip" Value="{Binding RcsTaskId}"/>
                                             </Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="160" MinWidth="120">
+                                    <DataGridTextColumn Header="回包号" Binding="{Binding RcsRemoteId}" Width="140" MinWidth="100">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsisMono}">
                                                 <Setter Property="ToolTip" Value="{Binding RcsRemoteId}"/>
@@ -111,18 +120,33 @@
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
                                     <DataGridTextColumn Header="种类" Binding="{Binding Kind, Converter={StaticResource RcsKindZhConv}}" Width="64" MinWidth="56"/>
-                                    <DataGridTextColumn Header="状态" Binding="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}" Width="88" MinWidth="80">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}">
-                                                <Setter Property="ToolTip" Value="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}"/>
-                                            </Style>
-                                        </DataGridTextColumn.ElementStyle>
-                                    </DataGridTextColumn>
+                                    <DataGridTemplateColumn Header="状态" Width="128" MinWidth="120"
+                                                            SortMemberPath="TaskState" CanUserSort="True">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="4" Padding="8,2" HorizontalAlignment="Left"
+                                                        Margin="6,0" VerticalAlignment="Center"
+                                                        Background="{Binding TaskState, Converter={StaticResource RcsStateVisualConv}, ConverterParameter=soft}"
+                                                        ToolTip="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Path Width="10" Height="10" Stretch="Uniform" Margin="0,0,6,0"
+                                                              VerticalAlignment="Center"
+                                                              Data="{Binding TaskState, Converter={StaticResource RcsStateVisualConv}, ConverterParameter=icon}"
+                                                              Fill="{Binding TaskState, Converter={StaticResource RcsStateVisualConv}}"/>
+                                                        <TextBlock Text="{Binding TaskState, Converter={StaticResource RcsStateZhConv}}"
+                                                                   FontSize="12" VerticalAlignment="Center"
+                                                                   TextWrapping="NoWrap" TextTrimming="None"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                     <DataGridTextColumn Header="优先级" Binding="{Binding Priority}" Width="56" MinWidth="48"/>
                                     <DataGridTextColumn Header="起点" Binding="{Binding FromCode}" Width="80" MinWidth="64"/>
                                     <DataGridTextColumn Header="终点" Binding="{Binding ToCode}" Width="80" MinWidth="64"/>
-                                    <DataGridTextColumn Header="重试次数" Binding="{Binding RedoCount}" Width="72" MinWidth="64"/>
-                                    <DataGridTextColumn Header="创建时间" Binding="{Binding SendTime, StringFormat=HH:mm:ss}" Width="80" MinWidth="72"/>
+                                    <DataGridTextColumn Header="重试次数" Binding="{Binding RedoCount}" Width="88" MinWidth="80"/>
+                                    <DataGridTextColumn Header="创建时间" Binding="{Binding SendTime, StringFormat=HH:mm:ss}" Width="110" MinWidth="100"/>
                                     <DataGridTemplateColumn Header="取消处理" Width="80" MinWidth="72">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
@@ -176,7 +200,7 @@
 
                     <!-- 报文流水 -->
                     <TabItem Header="报文流水">
-                        <DockPanel>
+                        <DockPanel DataContext="{Binding TaskBoard}">
                             <DockPanel DockPanel.Dock="Top" Background="{StaticResource Surface2Brush}" LastChildFill="False">
                                 <TextBlock Text="RCS 双向报文" Style="{StaticResource PanelTitle}" Margin="12,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
                                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="0,6,12,6">
@@ -322,25 +346,25 @@
                                                                    VerticalAlignment="Center"/>
                                                     </StackPanel>
                                                 </Border>
-                                                <Border Margin="8,0,0,0" BorderBrush="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                <Border Margin="8,0,0,0" BorderBrush="{Binding Connection.ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
                                                         BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
                                                         ToolTip="出站：客户端 → RCS">
                                                     <StackPanel Orientation="Horizontal">
                                                         <Ellipse Width="8" Height="8" Margin="0,0,6,0"
-                                                                 Fill="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"/>
-                                                        <TextBlock Text="{Binding ConnectionHealthText}" FontSize="11"
-                                                                   Foreground="{Binding ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                                 Fill="{Binding Connection.ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"/>
+                                                        <TextBlock Text="{Binding Connection.ConnectionHealthText}" FontSize="11"
+                                                                   Foreground="{Binding Connection.ConnectionHealthBrushKey, Converter={StaticResource BrushConv}}"
                                                                    VerticalAlignment="Center"/>
                                                     </StackPanel>
                                                 </Border>
-                                                <Border Margin="8,0,0,0" BorderBrush="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                <Border Margin="8,0,0,0" BorderBrush="{Binding Connection.CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
                                                         BorderThickness="1" CornerRadius="10" Padding="8,2" VerticalAlignment="Center"
                                                         ToolTip="仅测本机 Kestrel 回调口；不代表 RCS→工控机网络已通">
                                                     <StackPanel Orientation="Horizontal">
                                                         <Ellipse Width="8" Height="8" Margin="0,0,6,0"
-                                                                 Fill="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"/>
-                                                        <TextBlock Text="{Binding CallbackHealthText}" FontSize="11"
-                                                                   Foreground="{Binding CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
+                                                                 Fill="{Binding Connection.CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"/>
+                                                        <TextBlock Text="{Binding Connection.CallbackHealthText}" FontSize="11"
+                                                                   Foreground="{Binding Connection.CallbackHealthBrushKey, Converter={StaticResource BrushConv}}"
                                                                    VerticalAlignment="Center"/>
                                                     </StackPanel>
                                                 </Border>
@@ -348,21 +372,21 @@
                                             <DockPanel Margin="0,0,0,6" LastChildFill="True">
                                                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
                                                     <Button Content="测试连接" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" FontSize="12"
-                                                            Margin="0,0,8,0" Command="{Binding TestConnectionCommand}"
-                                                            IsEnabled="{Binding IsTestingConnection, Converter={StaticResource InverseConv}}"
+                                                            Margin="0,0,8,0"                                                             Command="{Binding Connection.TestConnectionCommand}"
+                                                            IsEnabled="{Binding Connection.IsTestingConnection, Converter={StaticResource InverseConv}}"
                                                             ToolTip="向 RCS 发 queryTask，验证出站连通"/>
                                                     <Button Content="测试本机监听" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" FontSize="12"
-                                                            Margin="0,0,8,0" Command="{Binding TestCallbackCommand}"
-                                                            IsEnabled="{Binding IsTestingCallback, Converter={StaticResource InverseConv}}"
+                                                            Margin="0,0,8,0"                                                             Command="{Binding Connection.TestCallbackCommand}"
+                                                            IsEnabled="{Binding Connection.IsTestingCallback, Converter={StaticResource InverseConv}}"
                                                             ToolTip="对本机回调口 POST 探针：只能证明本机 Kestrel 正常，不代表 RCS 服务器→工控机回调端口网络已打通"/>
                                                     <Button Content="保存" Style="{StaticResource PrimaryButton}" Height="26" Padding="14,0" FontSize="12"
-                                                            Command="{Binding SaveConnectionCommand}"
-                                                            IsEnabled="{Binding IsSavingConnection, Converter={StaticResource InverseConv}}"/>
+                                                            Command="{Binding Connection.SaveConnectionCommand}"
+                                                            IsEnabled="{Binding Connection.IsSavingConnection, Converter={StaticResource InverseConv}}"/>
                                                 </StackPanel>
                                                 <TextBlock FontSize="11" FontFamily="{StaticResource FontMono}" VerticalAlignment="Center"
                                                            Foreground="{Binding RcsModeBrushKey, Converter={StaticResource BrushConv}}"
                                                            TextWrapping="Wrap" Margin="0,0,10,0"
-                                                           Text="{Binding EffectiveBaseUrl, StringFormat=生效 BaseUrl：{0}}"/>
+                                                           Text="{Binding Connection.EffectiveBaseUrl, StringFormat=生效 BaseUrl：{0}}"/>
                                             </DockPanel>
                                             <Grid Margin="0,0,0,6">
                                                 <Grid.ColumnDefinitions>
@@ -370,10 +394,10 @@
                                                     <ColumnDefinition Width="72"/><ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Text="地址" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="1" Text="{Binding BaseUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="1" Text="{Binding Connection.BaseUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" Margin="0,0,10,0" ToolTip="RCS 出站基址，如 http://127.0.0.1:8090"/>
                                                 <TextBlock Grid.Column="2" Text="clientCode" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="3" Text="{Binding ClientCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="3" Text="{Binding Connection.ClientCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}"/>
                                             </Grid>
                                             <Grid Margin="0,0,0,4">
@@ -385,19 +409,19 @@
                                                     <ColumnDefinition Width="40"/><ColumnDefinition Width="64"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Text="回调" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="1" Text="{Binding CallbackHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="1" Text="{Binding Connection.CallbackHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" Margin="0,0,6,0" ToolTip="本机回调监听 IP"/>
                                                 <TextBlock Grid.Column="2" Text="端口" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="3" Text="{Binding CallbackPort, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="3" Text="{Binding Connection.CallbackPort, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" Margin="0,0,8,0"/>
                                                 <TextBlock Grid.Column="4" Text="超时" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="5" Text="{Binding RequestTimeoutMs, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="5" Text="{Binding Connection.RequestTimeoutMs, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" Margin="0,0,8,0" ToolTip="出站超时（毫秒）"/>
                                                 <TextBlock Grid.Column="6" Text="重试" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="7" Text="{Binding MaxRetries, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="7" Text="{Binding Connection.MaxRetries, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" Margin="0,0,8,0"/>
                                                 <TextBlock Grid.Column="8" Text="轮询" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="9" Text="{Binding PollIntervalMs, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Grid.Column="9" Text="{Binding Connection.PollIntervalMs, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" ToolTip="兜底轮询间隔（毫秒）"/>
                                             </Grid>
                                             <TextBlock Text="出站地址/超时/重试/轮询保存后立即生效；回调 Host/Port 变更需重启客户端。"
@@ -424,29 +448,29 @@
                                             <ColumnDefinition Width="56"/><ColumnDefinition Width="64"/>
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="类型" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                        <ComboBox Grid.Column="1" ItemsSource="{Binding KindOptions}" SelectedItem="{Binding SelectedKind}"
+                                        <ComboBox Grid.Column="1" ItemsSource="{Binding TaskBoard.KindOptions}" SelectedItem="{Binding TaskBoard.SelectedKind}"
                                                   Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}" Margin="0,0,10,0"/>
                                         <TextBlock Grid.Column="2" Text="优先级" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="3" Text="{Binding Priority, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                        <TextBox Grid.Column="3" Text="{Binding TaskBoard.Priority, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
                                                  ToolTip="协议范围 1～10，大者优先"/>
                                     </Grid>
                                     <Grid Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding FromLabelText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="1" Text="{Binding FromCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                        <TextBlock Text="{Binding TaskBoard.FromLabelText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <TextBox Grid.Column="1" Text="{Binding TaskBoard.FromCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
                                                  ToolTip="可直接填现场 RCS cell 编码；不强制 LOCATION_MAP"/>
                                     </Grid>
-                                    <Grid Margin="0,0,0,8" Visibility="{Binding ShowToCode, Converter={StaticResource BoolVisConv}}">
+                                    <Grid Margin="0,0,0,8" Visibility="{Binding TaskBoard.ShowToCode, Converter={StaticResource BoolVisConv}}">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding ToLabelText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="1" Text="{Binding ToCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                        <TextBlock Text="{Binding TaskBoard.ToLabelText}" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <TextBox Grid.Column="1" Text="{Binding TaskBoard.ToCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
                                                  ToolTip="可直接填现场 RCS cell 编码；不强制 LOCATION_MAP"/>
                                     </Grid>
 
                                     <!-- 抓取参数（仅抓取时显示） -->
                                     <Border Margin="0,0,0,8" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
                                             BorderThickness="1" CornerRadius="6" Padding="10,8"
-                                            Visibility="{Binding ShowGrabParams, Converter={StaticResource BoolVisConv}}">
+                                            Visibility="{Binding TaskBoard.ShowGrabParams, Converter={StaticResource BoolVisConv}}">
                                         <StackPanel>
                                             <TextBlock Text="抓取孔位" Style="{StaticResource MutedText}" FontSize="11" Margin="0,0,0,6"/>
                                             <Grid>
@@ -455,23 +479,23 @@
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
                                                     <TextBlock Text="源架号" Style="{StaticResource MutedText}" FontSize="10" Margin="0,0,0,2"/>
-                                                    <TextBox Text="{Binding SrcNo, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                                    <TextBox Text="{Binding TaskBoard.SrcNo, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="1" Margin="0,0,6,0">
                                                     <TextBlock Text="源孔位" Style="{StaticResource MutedText}" FontSize="10" Margin="0,0,0,2"/>
-                                                    <TextBox Text="{Binding SrcPos, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                                    <TextBox Text="{Binding TaskBoard.SrcPos, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="2" Margin="0,0,6,0">
                                                     <TextBlock Text="目标架" Style="{StaticResource MutedText}" FontSize="10" Margin="0,0,0,2"/>
-                                                    <TextBox Text="{Binding DstNo, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                                    <TextBox Text="{Binding TaskBoard.DstNo, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="3" Margin="0,0,6,0">
                                                     <TextBlock Text="目标孔" Style="{StaticResource MutedText}" FontSize="10" Margin="0,0,0,2"/>
-                                                    <TextBox Text="{Binding DstPos, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                                    <TextBox Text="{Binding TaskBoard.DstPos, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="4">
                                                     <TextBlock Text="电极码" Style="{StaticResource MutedText}" FontSize="10" Margin="0,0,0,2"/>
-                                                    <TextBox Text="{Binding GrabData, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                                    <TextBox Text="{Binding TaskBoard.GrabData, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
                                                 </StackPanel>
                                             </Grid>
                                         </StackPanel>
@@ -480,25 +504,25 @@
                                     <!-- 识别参数（仅识别时显示） -->
                                     <Border Margin="0,0,0,8" Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderBrush}"
                                             BorderThickness="1" CornerRadius="6" Padding="10,8"
-                                            Visibility="{Binding ShowIdentifyParams, Converter={StaticResource BoolVisConv}}">
+                                            Visibility="{Binding TaskBoard.ShowIdentifyParams, Converter={StaticResource BoolVisConv}}">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="72"/><ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="48"/><ColumnDefinition Width="72"/>
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Text="起始孔" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                            <TextBox Grid.Column="1" Text="{Binding PosStart, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                            <TextBox Grid.Column="1" Text="{Binding TaskBoard.PosStart, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
                                                      Margin="0,0,10,0" ToolTip="三位数孔位，如 101=1层1位"/>
                                             <TextBlock Grid.Column="2" Text="数量" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                            <TextBox Grid.Column="3" Text="{Binding IdentifyCount, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
+                                            <TextBox Grid.Column="3" Text="{Binding TaskBoard.IdentifyCount, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"/>
                                         </Grid>
                                     </Border>
 
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                        <Button Content="下发" Style="{StaticResource PrimaryButton}" Command="{Binding DispatchCommand}"
+                                        <Button Content="下发" Style="{StaticResource PrimaryButton}" Command="{Binding TaskBoard.DispatchCommand}"
                                                 IsEnabled="{Binding IsBusy, Converter={StaticResource InverseConv}}"
                                                 ToolTip="真实 RCS 须先测试连接；点到点手工任务不联动 PLC / 槽位账"/>
-                                        <Button Content="查询任务" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding QueryCommand}"/>
+                                        <Button Content="查询任务" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding TaskBoard.QueryCommand}"/>
                                     </StackPanel>
                                     <TextBlock Text="{Binding DispatchGateHint}" FontSize="11"
                                                Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
@@ -511,15 +535,15 @@
                                             <Grid Margin="0,0,0,8">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="56"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                                 <TextBlock Text="任务号" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="1" Text="{Binding OperateTaskId, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
+                                                <TextBox Grid.Column="1" Text="{Binding TaskBoard.OperateTaskId, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}"
                                                          ToolTip="可从任务列表点选回填"/>
                                             </Grid>
                                             <StackPanel Orientation="Horizontal">
-                                                <Button Content="重试" Style="{StaticResource GhostButton}" Command="{Binding RedoCommand}"
+                                                <Button Content="重试" Style="{StaticResource GhostButton}" Command="{Binding TaskBoard.RedoCommand}"
                                                         ToolTip="失败后同任务号重发（RCS redo）"/>
-                                                <Button Content="取消任务" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Command="{Binding CancelCommand}"/>
+                                                <Button Content="取消任务" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Command="{Binding TaskBoard.CancelCommand}"/>
                                                 <Button Content="确认取消已处理" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                                        Command="{Binding ConfirmCancelHandledCommand}" ToolTip="取消后人工处理完小车/容器，标记已处理"/>
+                                                        Command="{Binding TaskBoard.ConfirmCancelHandledCommand}" ToolTip="取消后人工处理完小车/容器，标记已处理"/>
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
@@ -538,22 +562,22 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Text="机台ID" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <TextBox Grid.Column="1" Text="{Binding ChangeFrameEquipmentId, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}" Margin="0,0,8,0"/>
+                                                <TextBox Grid.Column="1" Text="{Binding ChangeFramePanel.ChangeFrameEquipmentId, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}" FontFamily="{StaticResource FontMono}" Margin="0,0,8,0"/>
                                                 <TextBlock Grid.Column="2" Text="角色" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
-                                                <ComboBox Grid.Column="3" ItemsSource="{Binding ChangeFrameRoleOptions}" SelectedItem="{Binding ChangeFrameRole}"
+                                                <ComboBox Grid.Column="3" ItemsSource="{Binding ChangeFramePanel.ChangeFrameRoleOptions}" SelectedItem="{Binding ChangeFramePanel.ChangeFrameRole}"
                                                           Style="{StaticResource FormCombo}" Foreground="{StaticResource FgBrush}" Margin="0,0,8,0"/>
                                                 <StackPanel Grid.Column="4" Orientation="Horizontal">
-                                                    <Button Content="换架" Style="{StaticResource PrimaryButton}" Height="26" Padding="12,0" Command="{Binding ChangeFrameCommand}"/>
+                                                    <Button Content="换架" Style="{StaticResource PrimaryButton}" Height="26" Padding="12,0" Command="{Binding ChangeFramePanel.ChangeFrameCommand}"/>
                                                     <Button Content="新架到位" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" Margin="8,0,0,0"
-                                                            Command="{Binding ConfirmNewFrameInPlaceCommand}"
+                                                            Command="{Binding ChangeFramePanel.ConfirmNewFrameInPlaceCommand}"
                                                             ToolTip="换架第二发失败、站点空置后：人工送架到位再点此解锁该机台派工"/>
                                                 </StackPanel>
                                             </Grid>
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="回收点位" Style="{StaticResource MutedText}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                <TextBox Text="{Binding PalletReturnFromCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
+                                                <TextBox Text="{Binding ChangeFramePanel.PalletReturnFromCode, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormInput}"
                                                          FontFamily="{StaticResource FontMono}" Width="100" Margin="0,0,8,0"/>
-                                                <Button Content="空托回收" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" Command="{Binding PalletReturnCommand}"
+                                                <Button Content="空托回收" Style="{StaticResource GhostButton}" Height="26" Padding="12,0" Command="{Binding ChangeFramePanel.PalletReturnCommand}"
                                                         ToolTip="点位 → 托盘回收区"/>
                                             </StackPanel>
                                         </StackPanel>
@@ -561,7 +585,7 @@
 
                                     <!-- 换架事务 -->
                                     <TextBlock Text="换架事务" Style="{StaticResource MutedText}" FontSize="11" Margin="0,0,0,4"/>
-                                    <DataGrid ItemsSource="{Binding ChangeFrameTransactions}" Style="{StaticResource DataGridCompact}" RowHeight="26"
+                                    <DataGrid ItemsSource="{Binding ChangeFramePanel.ChangeFrameTransactions}" Style="{StaticResource DataGridCompact}" RowHeight="26"
                                               MaxHeight="140" IsReadOnly="True">
                                         <DataGrid.Columns>
                                             <DataGridTextColumn Header="事务号" Binding="{Binding TxnId}" Width="200" MinWidth="160">
@@ -592,12 +616,12 @@
                                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" LastChildFill="False">
                                     <TextBlock Text="调用终端" Style="{StaticResource MutedText}" VerticalAlignment="Center" DockPanel.Dock="Left"/>
                                     <Button Content="清空" Style="{StaticResource GhostButton}" Height="24" Padding="10,0" FontSize="11"
-                                            DockPanel.Dock="Right" Command="{Binding ClearTerminalCommand}"/>
+                                            DockPanel.Dock="Right" Command="{Binding Terminal.ClearTerminalCommand}"/>
                                 </DockPanel>
                                 <Border Background="{StaticResource TermBrush}" BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1" CornerRadius="6" Padding="10,8">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" conv:AutoScroll.ToEnd="True">
-                                        <ItemsControl ItemsSource="{Binding TerminalLines}">
+                                        <ItemsControl ItemsSource="{Binding Terminal.TerminalLines}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <TextBlock Text="{Binding}" FontFamily="{StaticResource FontMono}" FontSize="11" Foreground="{StaticResource ChromeFgBrush}" LineHeight="18"/>
@@ -612,7 +636,7 @@
 
                     <!-- 位置映射 -->
                     <TabItem Header="位置映射">
-                        <Grid Margin="12">
+                        <Grid Margin="12" DataContext="{Binding LocationMapPanel}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="2*" MinWidth="420"/>
                                 <ColumnDefinition Width="12"/>

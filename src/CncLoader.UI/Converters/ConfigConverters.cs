@@ -30,6 +30,27 @@ public sealed class RcsStateToZhConverter : IValueConverter
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
+/// <summary>RCS 任务态 → 徽标 brush/soft/icon。ConverterParameter：空=色，soft=底，icon=形。</summary>
+public sealed class RcsStateVisualConverter : IValueConverter
+{
+    private static readonly StateBadgeToBrushConverter Brush = new();
+    private static readonly StateBadgeToSoftBrushConverter Soft = new();
+    private static readonly StateBadgeToIconConverter Icon = new();
+
+    public object Convert(object? value, Type t, object? p, CultureInfo c)
+    {
+        var badge = RcsDisplayLabels.StateToBadge(value as string);
+        return (p as string) switch
+        {
+            "soft" => Soft.Convert(badge, t, p, c),
+            "icon" => Icon.Convert(badge, t, p, c),
+            _ => Brush.Convert(badge, t, p, c)
+        };
+    }
+
+    public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
 /// <summary>OUT/IN → 出站/入站。</summary>
 public sealed class RcsDirectionToZhConverter : IValueConverter
 {

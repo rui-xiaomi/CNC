@@ -8,12 +8,12 @@ public sealed class RcsViewModelManualInterlockTests
     public async Task 自动派工运行中_手动下发被拒_不校验路由不调用RCS()
     {
         var h = ManualReplayHarness.Create(schedulerEnabled: true);
-        h.ViewModel.SelectedKind = "搬运";
-        h.ViewModel.FromCode = ManualReplayRoutingCodes.FromCell;
-        h.ViewModel.ToCode = ManualReplayRoutingCodes.ToCell;
-        h.ViewModel.Priority = 5;
+        h.ViewModel.TaskBoard.SelectedKind = "搬运";
+        h.ViewModel.TaskBoard.FromCode = ManualReplayRoutingCodes.FromCell;
+        h.ViewModel.TaskBoard.ToCode = ManualReplayRoutingCodes.ToCell;
+        h.ViewModel.TaskBoard.Priority = 5;
 
-        await h.ViewModel.DispatchCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.DispatchCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -27,14 +27,14 @@ public sealed class RcsViewModelManualInterlockTests
     {
         var h = ManualReplayHarness.Create(schedulerEnabled: true);
         h.SeedHistoricalTask();
-        h.ViewModel.OperateTaskId = "LINE-A-MV-20260804120000-0001";
-        h.ViewModel.ChangeFrameEquipmentId = "1";
-        h.ViewModel.PalletReturnFromCode = ManualReplayRoutingCodes.FromCell;
+        h.ViewModel.TaskBoard.OperateTaskId = "LINE-A-MV-20260804120000-0001";
+        h.ViewModel.ChangeFramePanel.ChangeFrameEquipmentId = "1";
+        h.ViewModel.ChangeFramePanel.PalletReturnFromCode = ManualReplayRoutingCodes.FromCell;
         var sendBefore = h.Client.SendCount;
 
-        await h.ViewModel.RedoCommand.ExecuteAsync(null);
-        await h.ViewModel.ChangeFrameCommand.ExecuteAsync(null);
-        await h.ViewModel.PalletReturnCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.RedoCommand.ExecuteAsync(null);
+        await h.ViewModel.ChangeFramePanel.ChangeFrameCommand.ExecuteAsync(null);
+        await h.ViewModel.ChangeFramePanel.PalletReturnCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -50,10 +50,10 @@ public sealed class RcsViewModelManualInterlockTests
         var h = ManualReplayHarness.Create(schedulerEnabled: true);
         h.SeedHistoricalTask();
         h.ViewModel.PauseAutoDispatch = true;
-        h.ViewModel.OperateTaskId = "LINE-A-MV-20260804120000-0001";
+        h.ViewModel.TaskBoard.OperateTaskId = "LINE-A-MV-20260804120000-0001";
         h.Notify.ConfirmAnswer = false;
 
-        await h.ViewModel.RedoCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.RedoCommand.ExecuteAsync(null);
 
         Assert.That(h.Notify.ConfirmCount, Is.EqualTo(1), "暂停后互斥放行，进入危险操作确认");
     }
@@ -62,10 +62,10 @@ public sealed class RcsViewModelManualInterlockTests
     public async Task 自动派工运行中_取消任务不受互斥限制()
     {
         var h = ManualReplayHarness.Create(schedulerEnabled: true);
-        h.ViewModel.OperateTaskId = "TASK-CANCEL";
+        h.ViewModel.TaskBoard.OperateTaskId = "TASK-CANCEL";
         h.Notify.ConfirmAnswer = false;
 
-        await h.ViewModel.CancelCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.CancelCommand.ExecuteAsync(null);
 
         Assert.That(h.Notify.ConfirmCount, Is.EqualTo(1), "取消任务在自动派工运行中仍须可用");
     }

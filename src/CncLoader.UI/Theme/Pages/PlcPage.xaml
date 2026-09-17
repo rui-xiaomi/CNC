@@ -76,16 +76,17 @@
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                             <DataGridTextColumn Header="协议" Binding="{Binding Protocol}" Width="90"/>
-                            <DataGridTemplateColumn Header="状态" Width="100">
+                            <DataGridTemplateColumn Header="状态" Width="120" MinWidth="112">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                                CornerRadius="2" Padding="6,1" VerticalAlignment="Center"
-                                                HorizontalAlignment="Left" Margin="8,0">
+                                                CornerRadius="2" Padding="8,2" VerticalAlignment="Center"
+                                                HorizontalAlignment="Left" Margin="6,0">
                                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                                 <Ellipse Width="8" Height="8" Margin="0,0,6,0"
                                                          Fill="{Binding StatusBrushKey, Converter={StaticResource BrushConv}}"/>
-                                                <TextBlock Text="{Binding StatusText}" FontSize="12"/>
+                                                <TextBlock Text="{Binding StatusText}" FontSize="12"
+                                                           TextWrapping="NoWrap" TextTrimming="None"/>
                                             </StackPanel>
                                         </Border>
                                     </DataTemplate>

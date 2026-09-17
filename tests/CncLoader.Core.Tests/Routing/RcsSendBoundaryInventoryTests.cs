@@ -34,6 +34,7 @@ public sealed class RcsSendBoundaryInventoryTests
         ("Cancel", nameof(RcsViewModel) + "/" + nameof(PositionScheduler), nameof(IRcsTaskService.CancelAsync), false),
         ("queryTask/对账", nameof(RcsTaskTracker) + "/" + nameof(PositionScheduler), nameof(IRcsTaskService.QueryAsync), false),
         ("TestConnection", nameof(RcsViewModel), nameof(IRcsTaskService.ProbeQueryAsync), false),
+        ("TestCallback", nameof(RcsViewModel), nameof(IRcsCallbackListener.ProbePushEndpointAsync), false),
         ("ConfirmCancel", nameof(RcsViewModel), nameof(IRcsTaskService.ConfirmCancelHandledAsync), false),
     };
 
@@ -210,7 +211,12 @@ public sealed class RcsSendBoundaryInventoryTests
         var all = fields.Concat(props).Concat(ctorParams).ToList();
         Assert.That(all, Does.Not.Contain(typeof(IRcsClient)),
             "RcsViewModel 不得直接持有 IRcsClient");
+        Assert.That(all, Does.Not.Contain(typeof(System.Net.Http.HttpClient)),
+            "RcsViewModel 不得直连 HttpClient；本机监听探针须走 IRcsCallbackListener");
         Assert.That(all, Does.Contain(typeof(IRcsTaskService)));
+        Assert.That(all, Does.Contain(typeof(IRcsCallbackListener)));
+        Assert.That(typeof(IRcsCallbackListener).GetMethod(nameof(IRcsCallbackListener.ProbePushEndpointAsync)),
+            Is.Not.Null);
     }
 
     [Test]

@@ -13,7 +13,7 @@
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="700" HorizontalAlignment="Left">
+            <Border Grid.Row="0" Style="{StaticResource Panel}" MaxWidth="960" HorizontalAlignment="Stretch">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Height="34" Background="{StaticResource Surface2Brush}">
                         <StackPanel Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
@@ -67,7 +67,7 @@
                     </Grid>
                     <DataGrid ItemsSource="{Binding ScanRows}"
                               Style="{StaticResource DataGridCompact}" RowHeight="28"
-                              IsHitTestVisible="False" Margin="0">
+                              IsHitTestVisible="False" Margin="0" MinHeight="240">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="时间" Binding="{Binding Time}" Width="100">
                                 <DataGridTextColumn.ElementStyle>

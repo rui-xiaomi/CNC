@@ -59,6 +59,15 @@ public sealed class RcsCallbackHost : IHostedService, IRcsCallbackListener, IAsy
     public string BoundHost => _boundHost;
     public int BoundPort => _boundPort;
 
+    public Task<RcsLocalCallbackProbeResult> ProbePushEndpointAsync(CancellationToken ct = default)
+    {
+        if (!_isListening)
+            return Task.FromResult(RcsLocalCallbackProbeResult.NotListening(_listenError));
+
+        var host = CallbackLoopbackHost.Resolve(_boundHost);
+        return RcsLocalCallbackProber.PostPushAsync(host, _boundPort, ct);
+    }
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var host = _runtime.BootCallbackHost;

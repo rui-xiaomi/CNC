@@ -35,6 +35,7 @@
                                             ToolTip="将当前选中行标记为已处理"/>
                                     <Button Content="全部确认" Style="{StaticResource GhostButton}" Height="26" Padding="12,0"
                                             Margin="8,0,0,0" Command="{Binding MarkAllHandledCommand}"
+                                            IsEnabled="{Binding AlarmsEmpty, Converter={StaticResource InverseConv}}"
                                             ToolTip="确认库内全部未处理告警"/>
                                     <Button Content="全部删除" Style="{StaticResource DangerButton}" Height="26" Padding="12,0"
                                             Margin="8,0,0,0" Command="{Binding DeleteAllAlarmsCommand}"
@@ -43,7 +44,7 @@
                             </Grid>
                             <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
                             <Grid Margin="0,4,0,0">
-                                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}" FontSize="13"
+                                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource BodyText}" FontSize="13"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                            Visibility="{Binding AlarmsEmpty, Converter={StaticResource BoolVisConv}}"/>
                                 <DataGrid ItemsSource="{Binding Alarms}" SelectedItem="{Binding SelectedAlarm}"
@@ -133,7 +134,7 @@
                             </Grid>
                             <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource BorderBrush}"/>
                             <Grid Margin="0,4,0,0">
-                                <TextBlock Text="暂无应用日志" Style="{StaticResource MutedText}" FontSize="13"
+                                <TextBlock Text="暂无应用日志" Style="{StaticResource BodyText}" FontSize="13"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                            Visibility="{Binding LogsEmpty, Converter={StaticResource BoolVisConv}}"/>
                                 <DataGrid ItemsSource="{Binding LogLines}" Style="{StaticResource DataGridCompact}"

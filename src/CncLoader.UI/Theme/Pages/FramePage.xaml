@@ -48,9 +48,16 @@
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridCellEllipsis}"/>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
-                                <DataGridTextColumn Header="布局" Binding="{Binding LayoutText}" Width="56">
+                                <DataGridTextColumn Header="布局" Binding="{Binding LayoutText}" Width="80" MinWidth="72">
                                     <DataGridTextColumn.ElementStyle>
-                                        <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource FontMono}"/><Setter Property="HorizontalAlignment" Value="Right"/><Setter Property="Margin" Value="0,0,6,0"/></Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+                                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                                            <Setter Property="Margin" Value="0,0,8,0"/>
+                                            <Setter Property="TextWrapping" Value="NoWrap"/>
+                                            <Setter Property="TextTrimming" Value="None"/>
+                                            <Setter Property="ToolTip" Value="{Binding LayoutText}"/>
+                                        </Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>
                                 <DataGridTextColumn Header="占用" Binding="{Binding Occupied}" Width="60">

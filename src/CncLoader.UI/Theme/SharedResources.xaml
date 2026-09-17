@@ -32,6 +32,7 @@
     <conv:CancelFlagConverter x:Key="CancelFlagConv"/>
     <conv:RcsKindToZhConverter x:Key="RcsKindZhConv"/>
     <conv:RcsStateToZhConverter x:Key="RcsStateZhConv"/>
+    <conv:RcsStateVisualConverter x:Key="RcsStateVisualConv"/>
     <conv:RcsDirectionToZhConverter x:Key="RcsDirZhConv"/>
     <conv:RcsInterfaceToZhConverter x:Key="RcsIfaceZhConv"/>
     <conv:RcsResultToZhConverter x:Key="RcsResultZhConv"/>

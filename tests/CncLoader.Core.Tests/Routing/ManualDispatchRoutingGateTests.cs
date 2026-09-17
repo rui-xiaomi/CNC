@@ -82,10 +82,10 @@ public sealed class ManualDispatchRoutingGateTests
     {
         var h = ManualReplayHarness.Create();
         h.Store.SetEquipmentState(ManualReplayRoutingCodes.SrcEq, "1");
-        h.ViewModel.BaseUrl = "http://127.0.0.1:8090";
-        h.ViewModel.ClientCode = "CNC";
+        h.ViewModel.Connection.BaseUrl = "http://127.0.0.1:8090";
+        h.ViewModel.Connection.ClientCode = "CNC";
 
-        await h.ViewModel.TestConnectionCommand.ExecuteAsync(null);
+        await h.ViewModel.Connection.TestConnectionCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {
@@ -180,11 +180,11 @@ public sealed class ManualDispatchRoutingGateTests
 
     private static async Task DispatchManualAsync(ManualReplayHarness h, string from, string to)
     {
-        h.ViewModel.SelectedKind = "搬运";
-        h.ViewModel.FromCode = from;
-        h.ViewModel.ToCode = to;
-        h.ViewModel.Priority = 5;
-        await h.ViewModel.DispatchCommand.ExecuteAsync(null);
+        h.ViewModel.TaskBoard.SelectedKind = "搬运";
+        h.ViewModel.TaskBoard.FromCode = from;
+        h.ViewModel.TaskBoard.ToCode = to;
+        h.ViewModel.TaskBoard.Priority = 5;
+        await h.ViewModel.TaskBoard.DispatchCommand.ExecuteAsync(null);
     }
 
     private static void AssertRejectedManual(ManualReplayHarness h, string scenario)
@@ -221,6 +221,6 @@ public sealed class ManualDispatchRoutingGateTests
     private static string SafeText(ManualReplayHarness h)
         => string.Join('\n', new[] { h.ViewModel.StatusMessage }
             .Concat(h.Notify.All)
-            .Concat(h.ViewModel.TerminalLines)
+            .Concat(h.ViewModel.Terminal.TerminalLines)
             .Where(x => !string.IsNullOrWhiteSpace(x)));
 }

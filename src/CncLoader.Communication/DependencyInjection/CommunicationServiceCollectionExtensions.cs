@@ -49,14 +49,11 @@ public static class CommunicationServiceCollectionExtensions
         services.AddSingleton<IRcsRuntimeConfig, RcsRuntimeConfig>();
         // IRcsClient 刻意不进容器：受管派工门禁在 IRcsTaskService 内，容器里没有裸客户端可拿，
         // 「注入 IRcsClient 绕过门禁」在 UI/App/Data 里是编译错误（internal），在容器里也解析不到。
-        // 单例 HttpClient 复用连接池；PooledConnectionLifetime 让 BaseUrl 热更新后能重新解析 DNS
-        // （默认无生命周期的 Singleton HttpClient 会把首次解析的 IP 一直用到进程退出）。
+        // HttpClient 由 RcsOutboundHttpClientOwner 持有，与 IRcsTaskService 同生命周期，Host 停止时释放。
+        services.AddSingleton<RcsOutboundHttpClientOwner>();
         services.AddSingleton<IRcsTaskService>(sp => new RcsTaskService(
             new RcsClient(
-                new System.Net.Http.HttpClient(new System.Net.Http.SocketsHttpHandler
-                {
-                    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
-                }),
+                sp.GetRequiredService<RcsOutboundHttpClientOwner>().Client,
                 sp.GetRequiredService<IRcsRuntimeConfig>(),
                 sp.GetRequiredService<IRcsMessageLog>(),
                 sp.GetRequiredService<ILogger<RcsClient>>()),

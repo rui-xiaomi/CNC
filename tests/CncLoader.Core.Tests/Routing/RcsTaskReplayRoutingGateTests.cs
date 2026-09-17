@@ -55,9 +55,9 @@ public sealed class RcsTaskReplayRoutingGateTests
         var h = ManualReplayHarness.Create();
         var row = h.SeedHistoricalTask("LINE-A-MV-REDO-UI-1");
         h.Store.SetWorkLineState(ManualReplayRoutingCodes.LineId, "1");
-        h.ViewModel.OperateTaskId = row.RcsTaskId!;
+        h.ViewModel.TaskBoard.OperateTaskId = row.RcsTaskId!;
 
-        await h.ViewModel.RedoCommand.ExecuteAsync(null);
+        await h.ViewModel.TaskBoard.RedoCommand.ExecuteAsync(null);
 
         Assert.Multiple(() =>
         {

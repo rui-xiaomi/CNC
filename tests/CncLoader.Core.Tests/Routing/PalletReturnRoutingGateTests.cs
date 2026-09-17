@@ -25,9 +25,9 @@ public sealed class PalletReturnRoutingGateTests
         Assert.Multiple(() =>
         {
             // 1 UI RelayCommand
-            Assert.That(typeof(RcsViewModel).GetProperty("PalletReturnCommand"), Is.Not.Null);
+            Assert.That(typeof(RcsChangeFrameViewModel).GetProperty("PalletReturnCommand"), Is.Not.Null);
             // 2 From 绑定
-            Assert.That(typeof(RcsViewModel).GetProperty("PalletReturnFromCode"), Is.Not.Null);
+            Assert.That(typeof(RcsChangeFrameViewModel).GetProperty("PalletReturnFromCode"), Is.Not.Null);
             // 5 Skip 已删除（D12）
             Assert.That(typeof(TransitDispatchArgs).GetProperty("SkipManagedRouteGate",
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
@@ -304,8 +304,8 @@ public sealed class PalletReturnRoutingGateTests
 
     private async Task DispatchPalletReturnAsync(string fromCode)
     {
-        _h.ViewModel.PalletReturnFromCode = fromCode;
-        await _h.ViewModel.PalletReturnCommand.ExecuteAsync(null);
+        _h.ViewModel.ChangeFramePanel.PalletReturnFromCode = fromCode;
+        await _h.ViewModel.ChangeFramePanel.PalletReturnCommand.ExecuteAsync(null);
     }
 
     private void AssertRejected(string scenario)
