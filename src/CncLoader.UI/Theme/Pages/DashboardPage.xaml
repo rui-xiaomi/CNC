@@ -351,12 +351,13 @@
                                               VerticalAlignment="Stretch">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
-                                            <StackPanel/>
+                                            <UniformGrid Columns="1"/>
                                         </ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemContainerStyle>
                                         <Style TargetType="ContentPresenter">
                                             <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                            <Setter Property="VerticalAlignment" Value="Stretch"/>
                                             <Setter Property="Margin" Value="0,0,0,8"/>
                                         </Style>
                                     </ItemsControl.ItemContainerStyle>
@@ -449,20 +450,23 @@
                     </DataTemplate>
                 </Grid.Resources>
 
-                <!-- 左栏：机台卡按内容撑高，窗口不够时滚动，避免工位行被压扁裁字 -->
+                <!-- 左栏：机台卡均分拉满主区，末卡贴底与右栏对齐；窗口不够时再滚动 -->
                 <ScrollViewer Grid.Row="0" Grid.Column="0" Grid.RowSpan="3"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                               Margin="0,-6,0,0">
                     <ItemsControl ItemsSource="{Binding Surface.Machines}"
-                                  ItemTemplate="{StaticResource DashMachineCardTemplate}">
+                                  ItemTemplate="{StaticResource DashMachineCardTemplate}"
+                                  VerticalAlignment="Stretch"
+                                  MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <StackPanel/>
+                                <UniformGrid Columns="1"/>
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemContainerStyle>
                             <Style TargetType="ContentPresenter">
                                 <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                <Setter Property="VerticalAlignment" Value="Stretch"/>
                             </Style>
                         </ItemsControl.ItemContainerStyle>
                     </ItemsControl>
